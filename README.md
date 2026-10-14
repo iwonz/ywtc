@@ -143,6 +143,28 @@ npm run migrate -- \
 
 Не переносятся история, комментарии, пользователи, права и watchers. Данные в Confluence автоматически не удаляются. Runtime-данные, cache и отчёты находятся в `.states/` и не публикуются.
 
+## Релизы
+
+Версии следуют [Semantic Versioning](https://semver.org/). Release Please анализирует Conventional Commits в `master` и поддерживает один release PR.
+
+| Коммит | Следующая версия |
+| --- | --- |
+| `fix:`, `perf:`, `revert:` | Patch: `1.0.0 → 1.0.1` |
+| `feat:` | Minor: `1.0.0 → 1.1.0` |
+| `feat!:`, `fix!:` или footer `BREAKING CHANGE:` | Major: `1.0.0 → 2.0.0` |
+| `docs:`, `test:`, `build:`, `ci:`, `chore:` | Релиз не создаётся |
+
+Порядок публикации:
+
+1. Изменения проходят OpenSpec и `npm run check`, затем попадают в `master` с Conventional Commit message.
+2. Release Please создаёт или обновляет PR с `CHANGELOG.md`, `package.json`, lockfile и release manifest.
+3. Maintainer проверяет рассчитанную версию и changelog и сливает release PR.
+4. Workflow повторяет проверки, создаёт тег `vX.Y.Z` и GitHub Release, затем прикладывает `ywtc-X.Y.Z.tgz` и SHA-256 checksum.
+
+Для работы release PR в **Settings → Actions → General → Workflow permissions** включите **Read and write permissions** и **Allow GitHub Actions to create and approve pull requests**. Долгоживущий PAT не требуется: workflow использует ограниченный `GITHUB_TOKEN`.
+
+`v1.0.0` публикуется один раз проверенным tag workflow как исходная версия; дальнейшие ручные теги предназначены только для восстановления. Тег должен быть валидным возрастающим SemVer и совпадать с package, lockfile, manifest и changelog. Повторный запуск заменяет только архив и checksum существующего Release. npm registry не используется.
+
 ## Локальная разработка
 
 ```bash

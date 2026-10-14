@@ -1,0 +1,141 @@
+name: CI and Release
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: npm run release:validate -- "$GITHUB_REF_NAME"
+      - name: Run project checks
+        run: npm run check
+
+  release-please:
+    name: Propose or publish release
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          target-branch: master
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      - name: Check out released revision
+        if: steps.release.outputs.release_created
+        uses: actions/checkout@v4
+      - name: Set up Node.js for packaging
+        if: steps.release.outputs.release_created
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - name: Install release dependencies
+        if: steps.release.outputs.release_created
+        run: npm ci
+      - name: Build release artifacts
+        if: steps.release.outputs.release_created
+        shell: bash
+        run: |
+          release_dir="$RUNNER_TEMP/ywtc-release"
+          version="${{ steps.release.outputs.version }}"
+          mkdir -p "$release_dir"
+          npm pack --pack-destination "$release_dir"
+          (
+            cd "$release_dir"
+            shasum -a 256 "ywtc-$version.tgz" > "ywtc-$version.tgz.sha256"
+          )
+      - name: Attach release artifacts
+        if: steps.release.outputs.release_created
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release upload "${{ steps.release.outputs.tag_name }}"
+          "$RUNNER_TEMP/ywtc-release/ywtc-${{ steps.release.outputs.version }}.tgz"
+          "$RUNNER_TEMP/ywtc-release/ywtc-${{ steps.release.outputs.version }}.tgz.sha256"
+          --clobber
+
+  publish-tag:
+    name: Publish validated tag
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Revalidate release tag
+        run: npm run release:validate -- "$GITHUB_REF_NAME"
+      - name: Build release artifacts
+        shell: bash
+        run: |
+          release_dir="$RUNNER_TEMP/ywtc-release"
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p "$release_dir"
+          npm pack --pack-destination "$release_dir"
+          (
+            cd "$release_dir"
+            shasum -a 256 "ywtc-$version.tgz" > "ywtc-$version.tgz.sha256"
+          )
+      - name: Create or repair GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          archive="$RUNNER_TEMP/ywtc-release/ywtc-$version.tgz"
+          checksum="$archive.sha256"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$archive" "$checksum" --clobber
+            exit 0
+          fi
+          release_flags=(--verify-tag --title "$tag" --generate-notes)
+          if [[ "$version" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$tag" "$archive" "$checksum" "${release_flags[@]}"

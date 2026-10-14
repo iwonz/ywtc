@@ -15,6 +15,14 @@ Every project modification MUST follow the complete OpenSpec workflow. This incl
 
 If implementation reveals a contract or design change, update the OpenSpec artifacts and validate them again before continuing.
 
+## Commit and release discipline
+
+- Use Conventional Commit messages. `fix`, `perf`, and `revert` produce SemVer patches; `feat` produces a minor; `!` or a `BREAKING CHANGE` footer produces a major. Documentation, tests, build, CI, and chores do not release by themselves.
+- Complete and archive every underlying OpenSpec change before committing it. Do not mix substantive code, documentation, tooling, or specification changes into a generated Release Please pull request.
+- A Release Please pull request is publication metadata for already-audited changes. It may update only `CHANGELOG.md`, `package.json`, `package-lock.json`, and `.release-please-manifest.json`; review the calculated version before merging.
+- Do not create or move release tags manually during normal development. The validated manual-tag workflow exists only for the initial `v1.0.0` bootstrap and explicit release recovery.
+- GitHub is the release channel. Do not add npm publication or long-lived release credentials without a new validated OpenSpec change.
+
 ## Safety and repository hygiene
 
 - Never add tokens, authorization headers, populated secrets, internal organization names, migration-specific domains, user-home paths, downloaded attachments, state, cache, or generated reports to tracked files.

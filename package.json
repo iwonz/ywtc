@@ -28,6 +28,7 @@
     "dist",
     "docs/assets/readme-header.png",
     ".env.example",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md"
   ],
@@ -45,6 +46,7 @@
     "migrate": "tsx src/cli.ts",
     "prepack": "npm run release:check && npm run build",
     "release:check": "node scripts/release-check.mjs",
+    "release:validate": "node --import tsx scripts/validate-release-tag.ts",
     "spec:validate": "openspec validate --all --strict --no-interactive",
     "test": "vitest run",
     "test:watch": "vitest",

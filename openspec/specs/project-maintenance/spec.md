@@ -22,7 +22,7 @@ The project SHALL use Biome for linting and Knip for unused file, dependency, an
 - **THEN** release hygiene, typechecking, Biome, Knip, tests, build, and strict OpenSpec validation SHALL all run and fail the command on violations
 
 ### Requirement: Public repository documentation and metadata
-The project SHALL consistently identify itself as `ywtc`, SHALL identify its MIT license and public repository, and SHALL provide concise, neutral, non-repetitive, current-only documentation for purpose, supported vendor API and product versions, vendor-verified Yandex Wiki and Confluence token acquisition, quick local setup, complete CLI parameter usage, automatic and explicit state management, dry-run/live execution, reports, and local development.
+The project SHALL consistently identify itself as `ywtc`, SHALL identify its MIT license and public repository, and SHALL provide concise, neutral, non-repetitive, current-only documentation for purpose, supported vendor API and product versions, vendor-verified Yandex Wiki and Confluence token acquisition, quick local setup, complete CLI parameter usage, automatic and explicit state management, dry-run/live execution, reports, SemVer releases, and local development.
 
 #### Scenario: A new operator reads the README
 - **WHEN** the repository README is opened
@@ -51,6 +51,10 @@ The project SHALL consistently identify itself as `ywtc`, SHALL identify its MIT
 #### Scenario: Token setup is inspected
 - **WHEN** an operator follows the authentication sections
 - **THEN** the README SHALL distinguish Yandex OAuth and IAM organization/header settings, explain Confluence Data Center PAT creation and permission inheritance, map values to `.env`, and link to official vendor documentation without containing real credentials
+
+#### Scenario: Release process is inspected
+- **WHEN** a maintainer needs to prepare or diagnose a release
+- **THEN** the README SHALL explain the Conventional Commit to SemVer mapping, Release Please pull-request flow, required GitHub settings, quality gates, tags, artifacts, initial bootstrap, and the absence of npm registry publication
 
 #### Scenario: Package metadata is inspected
 - **WHEN** package metadata is consumed by development or publication tooling

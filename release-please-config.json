@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "719108775c600f9a234cd3a74d6f16124862abd6",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "ywtc",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true
+    }
+  }
+}
