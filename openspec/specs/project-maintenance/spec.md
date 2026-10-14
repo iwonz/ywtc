@@ -32,6 +32,18 @@ The project SHALL consistently identify itself as `ywtc` and the public npm pack
 - **WHEN** the repository README is opened
 - **THEN** it SHALL present a visually verified full-width dark technical header showing Yandex Wiki, the `ywtc` migration pipeline, and Confluence, without colored frames around the source panel, destination panel, or central pipeline, plus a short path to install, initialize, diagnose, dry-run, inspect, and migrate
 
+#### Scenario: Minimum migration flow is followed
+- **WHEN** an operator wants the shortest safe path from installation to migration
+- **THEN** the README SHALL provide a checklist containing workspace initialization, environment configuration, a dry run, and the corresponding live run without optional diagnostics or advanced state controls
+
+#### Scenario: Common command variants are needed
+- **WHEN** an operator needs a frequent workflow beyond the minimum
+- **THEN** the README SHALL provide a separate nearby examples section for diagnostics, a single page, URL inputs, a custom workdir, and a fresh run without duplicating the complete parameter reference
+
+#### Scenario: Migration coverage is reviewed
+- **WHEN** an operator evaluates what will and will not be migrated
+- **THEN** the README SHALL present supported content, transformations, degradation behavior, and exclusions in a compact table
+
 #### Scenario: README readability is reviewed
 - **WHEN** documentation repeats a rule, caveat, or operational instruction across sections
 - **THEN** the README SHALL keep one canonical explanation and use concise cross-references elsewhere without losing required information

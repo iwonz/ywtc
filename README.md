@@ -23,18 +23,51 @@ brew tap iwonz/ywtc https://github.com/iwonz/ywtc.git
 brew install ywtc
 ```
 
-Минимальный сценарий:
+### Минимальный сценарий
+
+- [ ] Инициализируйте рабочую директорию:
+
+  ```bash
+  ywtc init
+  ```
+
+- [ ] Заполните созданный файл `~/.ywtc/.env` по [таблице настроек](#переменные-окружения).
+
+- [ ] Проверьте план миграции без записи в Confluence:
+
+  ```bash
+  ywtc migrate --source "team/docs" --target "12345" --dry-run
+  ```
+
+- [ ] Если dry-run завершился без критических ошибок, запустите миграцию:
+
+  ```bash
+  ywtc migrate --source "team/docs" --target "12345"
+  ```
+
+### Частые примеры
 
 ```bash
-ywtc init
-# заполните ~/.ywtc/.env
-ywtc doctor
+# Проверить конфигурацию и доступ к конкретным страницам
 ywtc doctor --source "team/docs" --target "12345"
-ywtc migrate --source "team/docs" --target "12345" --dry-run
-ywtc migrate --source "team/docs" --target "12345"
+
+# Перенести только исходную страницу, без дочерних
+ywtc migrate --source "team/docs" --target "12345" --single-page --dry-run
+
+# Передать source и target полными URL
+ywtc migrate \
+  --source "https://wiki.yandex.ru/team/docs/" \
+  --target "https://confluence.example.com/confluence/pages/viewpage.action?pageId=12345" \
+  --dry-run
+
+# Использовать отдельную рабочую директорию
+ywtc migrate --source "team/docs" --target "12345" --workdir "./migration" --dry-run
+
+# Построить план без существующих mappings state
+ywtc migrate --source "team/docs" --target "12345" --fresh --dry-run
 ```
 
-`doctor` без страниц проверяет workspace и конфигурацию. С `--source` и `--target` он выполняет read-only API preflight; фактическое право записи окончательно подтверждается первой live-операцией.
+Live-запуск с `--fresh` может создать дубликаты; правила повторного запуска описаны в разделе [State, отчёты и повторный запуск](#state-отчёты-и-повторный-запуск).
 
 ## Совместимость
 
@@ -152,7 +185,16 @@ ywtc init --workdir .
 
 ## Что переносится
 
-Текущие версии страниц, вложенность, YFM-текст, headings, lists, code, notes, cuts, tabs, таблицы, ссылки, anchors, Wiki images/files и Grid как статическая таблица. Неподдерживаемый rich content получает читаемый fallback и warning. История, comments, users, permissions и watchers не переносятся.
+| Объект | Статус | Результат и ограничения |
+| --- | --- | --- |
+| Страницы и вложенность | Переносится | Текущая версия исходного дерева создаётся под выбранной target-страницей |
+| Текст и базовое форматирование | Переносится | YFM-текст, заголовки, абзацы, списки, цитаты, код и обычные таблицы преобразуются в Confluence Storage Format |
+| Notes, cuts и tabs | С преобразованием | Notes становятся `info`/`tip`/`warning`, cuts — `expand`, tabs — статическими секциями |
+| Ссылки и anchors | Переносится | Внутренние ссылки и якоря переписываются на созданные страницы; ссылки вне дерева остаются ведущими в Yandex Wiki |
+| Изображения и файлы Wiki | Переносится | Ресурсы загружаются как Confluence attachments; внешние изображения остаются внешними |
+| Grid | С преобразованием | Динамическая таблица становится статической таблицей без интерактивности |
+| Неподдерживаемый rich content | С деградацией | Формулы, диаграммы и интерактивные элементы получают читаемый fallback и warning с сохранением исходного текста, когда это возможно |
+| История, comments, users, permissions, watchers | Не переносится | Эти сущности не входят в текущую версию мигратора |
 
 ## Обновление
 
