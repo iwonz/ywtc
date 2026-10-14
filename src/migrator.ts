@@ -147,23 +147,13 @@ export class Migrator {
     logInfo(`Resolving source ${options.sourceSlug} and Confluence target`);
     const [root, target] = await Promise.all([
       yandex.getPageBySlug(options.sourceSlug),
-      confluence.resolveTarget(options.target),
+      (async () => {
+        await confluence.preflight?.();
+        return confluence.resolveTarget(options.target);
+      })(),
     ]);
     const spaceKey = target.space.key;
     if (!spaceKey) throw new Error('Confluence target response does not include a space key');
-    if (target.operations?.length) {
-      const reportsCreateChild = target.operations.some((operation) => (
-        operation.operation === 'create'
-        && ['page', 'content'].includes(operation.targetType)
-      ));
-      if (!reportsCreateChild) {
-        logger.warn(
-          `Confluence target ${target.id} does not advertise child-page creation in expanded content operations; `
-          + 'continuing because this field does not reliably expose space-level Add Pages permission',
-        );
-      }
-    }
-
     const stateLocation = resolveStateLocation({
       yandexApiUrl: config.yandex.apiUrl,
       yandexWebUrl: config.yandex.webUrl,
@@ -173,6 +163,8 @@ export class Migrator {
       confluenceBaseUrl: config.confluence.baseUrl,
       targetPageId: target.id,
       spaceKey,
+      confluenceDeployment: config.confluence.deployment,
+      ...(target.space.id !== undefined ? {confluenceSpaceId: String(target.space.id)} : {}),
     }, {
       ...(options.stateFilename !== undefined ? {stateFilename: options.stateFilename} : {}),
       ...(options.runtimeDirectory !== undefined ? {runtimeDirectory: options.runtimeDirectory} : {}),

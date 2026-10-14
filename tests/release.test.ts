@@ -60,10 +60,32 @@ describe('release validation', () => {
     expect(workflow).toContain('permissions:\n  contents: read');
     expect(workflow).toContain('googleapis/release-please-action@v4');
     expect(workflow).toContain('pull-requests: write');
+    expect(workflow).toContain('id-token: write');
     expect(workflow).toContain('npm run check');
     expect(workflow).toContain('npm pack');
+    expect(workflow).toContain('npm publish "$ARCHIVE" --access public --provenance');
     expect(workflow).toContain('gh release upload');
-    expect(workflow).toContain('gh release create');
-    expect(workflow).not.toContain('npm publish');
+    expect(workflow).toContain('brew audit --strict');
+    expect(workflow).toContain('chore(homebrew): update formula to v$RELEASE_VERSION');
+    expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN/);
+  });
+
+  it('publishes a public scoped package with the ywtc binary', async () => {
+    const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as Record<string, unknown>;
+    expect(packageJson).toMatchObject({
+      name: '@iwonz/ywtc',
+      license: 'MIT',
+      publishConfig: {access: 'public', provenance: true},
+      bin: {ywtc: './dist/cli.js'},
+    });
+    expect(packageJson).not.toHaveProperty('private');
+  });
+
+  it('includes all release-note sections while preserving product bump types', async () => {
+    const config = JSON.parse(await readFile('release-please-config.json', 'utf8')) as {
+      packages: Record<string, {"changelog-sections": Array<{type: string}>}>;
+    };
+    const types = config.packages['.']?.['changelog-sections'].map((entry) => entry.type);
+    expect(types).toEqual(expect.arrayContaining(['feat', 'fix', 'perf', 'revert', 'docs', 'refactor', 'test', 'build', 'ci', 'chore', 'style']));
   });
 });

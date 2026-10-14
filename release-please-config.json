@@ -4,10 +4,23 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "package-name": "ywtc",
+      "package-name": "@iwonz/ywtc",
       "changelog-path": "CHANGELOG.md",
       "include-component-in-tag": false,
-      "include-v-in-tag": true
+      "include-v-in-tag": true,
+      "changelog-sections": [
+        {"type": "feat", "section": "Features"},
+        {"type": "fix", "section": "Bug Fixes"},
+        {"type": "perf", "section": "Performance"},
+        {"type": "revert", "section": "Reverts"},
+        {"type": "refactor", "section": "Refactoring"},
+        {"type": "docs", "section": "Documentation"},
+        {"type": "test", "section": "Tests"},
+        {"type": "build", "section": "Build"},
+        {"type": "ci", "section": "Continuous Integration"},
+        {"type": "chore", "section": "Maintenance"},
+        {"type": "style", "section": "Style"}
+      ]
     }
   }
 }

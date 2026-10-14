@@ -87,6 +87,8 @@ describe('migration state', () => {
     expect(id).toMatch(/^[a-f0-9]{24}$/);
     expect(migrationStateId(equivalent)).toBe(id);
     expect(migrationStateId({...canonicalIdentity, targetPageId: '101'})).not.toBe(id);
+    expect(migrationStateId({...canonicalIdentity, confluenceDeployment: 'data-center'})).toBe(id);
+    expect(migrationStateId({...canonicalIdentity, confluenceDeployment: 'cloud', confluenceSpaceId: 'space-1'})).not.toBe(id);
     expect(JSON.stringify(resolveStateLocation(canonicalIdentity))).not.toContain('token');
 
     const location = resolveStateLocation(canonicalIdentity);

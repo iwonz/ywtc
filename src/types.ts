@@ -141,6 +141,13 @@ export interface ConfluenceAttachment {
   };
 }
 
+export interface ConfluencePlatformInfo {
+  deployment: 'data-center' | 'cloud';
+  product: string;
+  version?: string;
+  api: string;
+}
+
 export interface PagePlan {
   source: YandexPageDetails;
   parentSourceId?: number;
@@ -225,6 +232,7 @@ export interface YandexWikiApi {
 }
 
 export interface ConfluenceApi {
+  preflight?(): Promise<ConfluencePlatformInfo>;
   resolveTarget(input: string): Promise<ConfluencePage>;
   getPage(id: string): Promise<ConfluencePage>;
   findPageByTitle(spaceKey: string, title: string): Promise<ConfluencePage | undefined>;

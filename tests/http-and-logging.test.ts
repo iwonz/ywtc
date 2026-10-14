@@ -29,6 +29,19 @@ describe('HTTP retry and log safety', () => {
     expect(scope.isDone()).toBe(true);
   });
 
+  it.each([
+    [401, /authentication rejected/],
+    [403, /permission denied/],
+    [404, /resource or API route not found/],
+    [409, /destination conflict/],
+    [413, /payload too large/],
+    [429, /rate limited after bounded retries/],
+  ] as const)('adds corrective guidance for HTTP %s', async (status, message) => {
+    nock('https://errors.example.test').get(`/status-${status}`).reply(status, {message: 'vendor detail'});
+    const client = new RetryingHttpClient({baseURL: 'https://errors.example.test', timeoutMs: 5_000, maxRetries: 0});
+    await expect(client.request({method: 'GET', url: `/status-${status}`})).rejects.toThrow(message);
+  });
+
   it('redacts every occurrence of configured secrets', () => {
     expect(redact('token=secret and secret again', ['secret'])).toBe('token=[REDACTED] and [REDACTED] again');
   });

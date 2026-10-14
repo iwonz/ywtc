@@ -49,7 +49,20 @@ function safeErrorMessage(error: AxiosError): string {
     const body = payload as Record<string, unknown>;
     detail = String(body.debug_message ?? body.message ?? body.error_code ?? '').slice(0, 500);
   }
-  return [`HTTP request failed`, status ? `status=${status}` : undefined, detail || error.message]
+  const guidance = status === 401
+    ? 'authentication rejected; check token and auth type'
+    : status === 403
+      ? 'permission denied; check source visibility and destination page/attachment permissions'
+      : status === 404
+        ? 'resource or API route not found; check URL, page ID, deployment, and API compatibility'
+        : status === 409
+          ? 'destination conflict; retry with the same state after checking the current page version/title'
+          : status === 413
+            ? 'payload too large for the destination; check Confluence attachment limits'
+            : status === 429
+              ? 'rate limited after bounded retries; lower configured RPS/concurrency or retry later'
+              : undefined;
+  return [`HTTP request failed`, status ? `status=${status}` : undefined, guidance, detail || error.message]
     .filter(Boolean)
     .join(': ');
 }

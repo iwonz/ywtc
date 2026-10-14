@@ -4,15 +4,19 @@
 Maintain ywtc as a public, testable, documented, and release-safe TypeScript project with a mandatory OpenSpec change lifecycle.
 ## Requirements
 ### Requirement: Complete OpenSpec change lifecycle
-Repository agents MUST execute the complete OpenSpec lifecycle for every code, documentation, tooling, or specification change.
+Repository agents MUST synchronize a clean local `master` with `origin/master` before starting a change, execute the complete OpenSpec lifecycle for every code, documentation, tooling, or specification change, and repeat the remote comparison before commit and push.
 
-#### Scenario: An agent begins a change
-- **WHEN** an agent is asked to modify the project
-- **THEN** it MUST create and validate proposal, specification, design, and task artifacts before implementation
+#### Scenario: An agent begins a clean change
+- **WHEN** local `master` is clean and not diverged
+- **THEN** the agent MUST fetch and fast-forward pull `origin/master`, then create and validate proposal, specification, design, and task artifacts before implementation
+
+#### Scenario: Repository is dirty or diverged
+- **WHEN** synchronization detects uncommitted content, another branch, or diverged history
+- **THEN** the agent MUST stop, report the condition, and MUST NOT discard or rewrite existing work
 
 #### Scenario: An agent completes implementation
 - **WHEN** all implementation tasks and checks succeed
-- **THEN** it MUST update task status, sync delta specifications, archive the change, and run strict validation against all OpenSpec content
+- **THEN** it MUST update task status, sync delta specifications, archive the change, run strict validation, fetch and compare with `origin/master`, and only then commit and push without force
 
 ### Requirement: Static project quality gates
 The project SHALL use Biome for linting and Knip for unused file, dependency, and export analysis, and SHALL provide a single command that runs all release checks.
@@ -22,40 +26,50 @@ The project SHALL use Biome for linting and Knip for unused file, dependency, an
 - **THEN** release hygiene, typechecking, Biome, Knip, tests, build, and strict OpenSpec validation SHALL all run and fail the command on violations
 
 ### Requirement: Public repository documentation and metadata
-The project SHALL consistently identify itself as `ywtc`, SHALL identify its MIT license and public repository, and SHALL provide concise, neutral, non-repetitive, current-only documentation for purpose, supported vendor API and product versions, vendor-verified Yandex Wiki and Confluence token acquisition, quick local setup, complete CLI parameter usage, automatic and explicit state management, dry-run/live execution, reports, SemVer releases, and local development.
+The project SHALL consistently identify itself as `ywtc` and the public npm package `@iwonz/ywtc`, SHALL identify its MIT license and public repository, and SHALL provide concise, neutral, non-repetitive, current-only documentation for installation, supported vendor APIs/products, credentials, workdir initialization, commands, complete environment and CLI parameters, state, reports, updates, releases, breaking migration, and local development.
 
 #### Scenario: A new operator reads the README
 - **WHEN** the repository README is opened
-- **THEN** it SHALL identify the product as `ywtc`, present an original full-width thematic header that visibly identifies Yandex Wiki as the migration source and Confluence as the destination, plus a checklist sufficient to obtain least-privilege credentials, configure the environment, dry-run, inspect, and execute a migration
+- **THEN** it SHALL present a visually verified full-width dark technical header showing Yandex Wiki, the `ywtc` migration pipeline, and Confluence, plus a short path to install, initialize, diagnose, dry-run, inspect, and migrate
 
 #### Scenario: README readability is reviewed
 - **WHEN** documentation repeats a rule, caveat, or operational instruction across sections
-- **THEN** the README SHALL keep one canonical explanation and use concise cross-references or short summaries elsewhere without losing required information
+- **THEN** the README SHALL keep one canonical explanation and use concise cross-references elsewhere without losing required information
 
 #### Scenario: CLI help is opened
-- **WHEN** an operator runs `ywtc --help` or the equivalent npm command
-- **THEN** the heading SHALL lead with the `ywtc` product name and SHALL NOT present an obsolete project name
+- **WHEN** an operator runs `ywtc --help`, `ywtc <command> --help`, or `ywtc --version`
+- **THEN** the output SHALL identify `ywtc`, list the explicit v2 commands, and provide command-specific current usage without requiring configuration
 
 #### Scenario: Platform compatibility is inspected
-- **WHEN** an operator evaluates whether the migrator can work with a specific Yandex Wiki or Confluence installation
-- **THEN** the README SHALL identify the supported Yandex Wiki API generation, the documented Confluence Data Center version range and authentication requirement, unsupported Confluence product families, the review date, and the boundary between contract-based automated coverage and live-version certification
+- **WHEN** an operator evaluates a Yandex Wiki or Confluence target
+- **THEN** the README SHALL identify Public API v1, Data Center 7.9+ without an upper bound subject to capability preflight, Cloud API support, unsupported Server/auth profiles, the review date, and the boundary between contract tests and live certification
 
-#### Scenario: CLI parameters are inspected
-- **WHEN** an operator needs to construct or review a migration command
-- **THEN** the README SHALL provide one table covering every supported CLI option with its type, required status, concrete accepted values or URL formats, default, and description, including accepted and commonly rejected `--source` and `--target` examples without a duplicate reference section
-
-#### Scenario: State behavior is inspected
-- **WHEN** an operator plans repeated, parallel, explicit-state, or clean migrations
-- **THEN** the README SHALL explain `.states/` automatic paths, isolation between source-target pairs, the exact `--state` override, recoverable `--fresh` behavior, dry-run immutability, duplication risk, and state error recovery without documenting unpublished legacy layouts
+#### Scenario: Parameters are inspected
+- **WHEN** an operator constructs a command or configuration
+- **THEN** the README SHALL provide compact complete tables for commands, CLI options, and environment variables with type, requirement conditions, accepted values/formats, defaults, examples, and descriptions without a duplicated reference section
 
 #### Scenario: Token setup is inspected
-- **WHEN** an operator follows the authentication sections
-- **THEN** the README SHALL distinguish Yandex OAuth and IAM organization/header settings, explain Confluence Data Center PAT creation and permission inheritance, map values to `.env`, and link to official vendor documentation without containing real credentials
-
-#### Scenario: Release process is inspected
-- **WHEN** a maintainer needs to prepare or diagnose a release
-- **THEN** the README SHALL explain the Conventional Commit to SemVer mapping, Release Please pull-request flow, required GitHub settings, quality gates, tags, artifacts, initial bootstrap, and the absence of npm registry publication
+- **WHEN** an operator follows authentication instructions
+- **THEN** the README SHALL give short vendor-linked checklists for Yandex OAuth/IAM, Data Center PAT, and Cloud email/API token without real credentials
 
 #### Scenario: Package metadata is inspected
-- **WHEN** package metadata is consumed by development or publication tooling
-- **THEN** it SHALL name `ywtc`, reference `https://github.com/iwonz/ywtc`, declare the MIT license, and include only publishable project files
+- **WHEN** npm or release tooling consumes package metadata
+- **THEN** it SHALL name `@iwonz/ywtc`, expose binary `ywtc`, allow public scoped publication, require Node.js 22.12 or newer, reference the repository and MIT license, and include only intended publishable files
+
+### Requirement: Installable package verification
+The project SHALL verify the exact packed npm artifact in an isolated environment before publication.
+
+#### Scenario: Package acceptance
+- **WHEN** release validation packs the project
+- **THEN** it SHALL install that archive into an isolated prefix and successfully run `ywtc --version`, `ywtc --help`, and workspace initialization without relying on source-only files
+
+### Requirement: Conventional Commit enforcement
+The project SHALL validate every maintainer and automation commit subject against Conventional Commits and reject generic or work-in-progress subjects.
+
+#### Scenario: Commit range validation
+- **WHEN** CI evaluates a pull request or push
+- **THEN** Commitlint SHALL check every new commit in the relevant range, including bot commits
+
+#### Scenario: Generic subject
+- **WHEN** a subject is empty, generic, temporary, or marked WIP
+- **THEN** commit validation SHALL fail with a corrective Conventional Commit example

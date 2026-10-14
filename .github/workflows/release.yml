@@ -5,8 +5,12 @@ on:
     branches: [master]
   push:
     branches: [master]
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z release to verify or repair
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,8 +20,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  checks:
-    name: Quality gate
+  commitlint:
+    name: Conventional commits
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -27,25 +32,64 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 24
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Validate release tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: npm run release:validate -- "$GITHUB_REF_NAME"
+      - name: Validate pull request commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npx commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
+      - name: Validate pushed commits
+        if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          base="$BEFORE_SHA"
+          if [[ "$base" =~ ^0+$ ]]; then
+            base="$(git rev-list --max-parents=0 "$HEAD_SHA")"
+          fi
+          npx commitlint --from "$base" --to "$HEAD_SHA" --verbose
+
+  checks:
+    name: Node ${{ matrix.node }} quality gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.12.0, 24, current]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
       - name: Run project checks
         run: npm run check
 
   release-please:
-    name: Propose or publish release
-    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-    needs: checks
+    name: Propose or create release
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    needs: [commitlint, checks]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
       pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - name: Run Release Please
         id: release
@@ -55,87 +99,157 @@ jobs:
           target-branch: master
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-      - name: Check out released revision
-        if: steps.release.outputs.release_created
-        uses: actions/checkout@v4
-      - name: Set up Node.js for packaging
-        if: steps.release.outputs.release_created
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.12.0
-          cache: npm
-      - name: Install release dependencies
-        if: steps.release.outputs.release_created
-        run: npm ci
-      - name: Build release artifacts
-        if: steps.release.outputs.release_created
-        shell: bash
-        run: |
-          release_dir="$RUNNER_TEMP/ywtc-release"
-          version="${{ steps.release.outputs.version }}"
-          mkdir -p "$release_dir"
-          npm pack --pack-destination "$release_dir"
-          (
-            cd "$release_dir"
-            shasum -a 256 "ywtc-$version.tgz" > "ywtc-$version.tgz.sha256"
-          )
-      - name: Attach release artifacts
-        if: steps.release.outputs.release_created
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          gh release upload "${{ steps.release.outputs.tag_name }}"
-          "$RUNNER_TEMP/ywtc-release/ywtc-${{ steps.release.outputs.version }}.tgz"
-          "$RUNNER_TEMP/ywtc-release/ywtc-${{ steps.release.outputs.version }}.tgz.sha256"
-          --clobber
 
-  publish-tag:
-    name: Publish validated tag
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: checks
+  publish-npm:
+    name: Publish npm and GitHub artifacts
+    needs: [checks, release-please]
+    if: >-
+      always() && needs.checks.result == 'success' &&
+      (needs.release-please.outputs.release_created == 'true' ||
+       (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+    outputs:
+      tag_name: ${{ steps.context.outputs.tag }}
+      version: ${{ steps.context.outputs.version }}
     steps:
-      - name: Check out tagged revision
+      - name: Resolve release context
+        id: context
+        env:
+          AUTOMATIC_TAG: ${{ needs.release-please.outputs.tag_name }}
+          MANUAL_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          tag="${AUTOMATIC_TAG:-$MANUAL_TAG}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Check out released revision
         uses: actions/checkout@v4
         with:
+          ref: ${{ steps.context.outputs.tag }}
           fetch-depth: 0
-      - name: Set up Node.js
+      - name: Set up Node.js and npm trusted publishing
         uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 24
+          registry-url: https://registry.npmjs.org
           cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Revalidate release tag
-        run: npm run release:validate -- "$GITHUB_REF_NAME"
-      - name: Build release artifacts
+      - name: Install current npm
+        run: npm install --global npm@12.2.0
+      - name: Install and validate release
+        run: |
+          npm ci
+          npm run release:validate -- "${{ steps.context.outputs.tag }}"
+          npm run check
+      - name: Pack exact publication artifact
+        id: pack
+        env:
+          RELEASE_VERSION: ${{ steps.context.outputs.version }}
         shell: bash
         run: |
           release_dir="$RUNNER_TEMP/ywtc-release"
-          version="${GITHUB_REF_NAME#v}"
           mkdir -p "$release_dir"
-          npm pack --pack-destination "$release_dir"
-          (
-            cd "$release_dir"
-            shasum -a 256 "ywtc-$version.tgz" > "ywtc-$version.tgz.sha256"
-          )
-      - name: Create or repair GitHub Release
+          npm pack --ignore-scripts --json --pack-destination "$release_dir" > "$release_dir/pack.json"
+          archive_name="$(node -e "const p=require(process.argv[1]); process.stdout.write(p[0].filename)" "$release_dir/pack.json")"
+          archive="$release_dir/$archive_name"
+          shasum -a 256 "$archive" > "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
+      - name: Publish with OIDC provenance when absent
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.context.outputs.version }}
+          ARCHIVE: ${{ steps.pack.outputs.archive }}
         shell: bash
         run: |
-          tag="$GITHUB_REF_NAME"
-          version="${tag#v}"
-          archive="$RUNNER_TEMP/ywtc-release/ywtc-$version.tgz"
-          checksum="$archive.sha256"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$archive" "$checksum" --clobber
+          if npm view "@iwonz/ywtc@$RELEASE_VERSION" version >/dev/null 2>&1; then
+            echo "@iwonz/ywtc@$RELEASE_VERSION already exists; verifying idempotent rerun."
             exit 0
           fi
-          release_flags=(--verify-tag --title "$tag" --generate-notes)
-          if [[ "$version" == *-* ]]; then
-            release_flags+=(--prerelease)
+          npm publish "$ARCHIVE" --access public --provenance
+      - name: Attach verified artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.context.outputs.tag }}
+          ARCHIVE: ${{ steps.pack.outputs.archive }}
+        run: gh release upload "$RELEASE_TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
+      - name: Add verified installation notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.context.outputs.tag }}
+        shell: bash
+        run: |
+          body="$RUNNER_TEMP/release-body.md"
+          gh release view "$RELEASE_TAG" --json body --jq .body > "$body"
+          if ! grep -q '<!-- ywtc-installation -->' "$body"; then
+            {
+              printf '\n<!-- ywtc-installation -->\n## Installation\n\n'
+              printf '```bash\nnpm install -g @iwonz/ywtc@latest\nnpx @iwonz/ywtc@latest --version\nbrew tap iwonz/ywtc https://github.com/iwonz/ywtc.git\nbrew install ywtc\n```\n'
+            } >> "$body"
           fi
-          gh release create "$tag" "$archive" "$checksum" "${release_flags[@]}"
+          gh release edit "$RELEASE_TAG" --notes-file "$body"
+
+  homebrew:
+    name: Verify and publish Homebrew formula
+    needs: publish-npm
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out current master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Synchronize master
+        run: |
+          git fetch origin master
+          git pull --ff-only origin master
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Generate formula from npm registry archive
+        env:
+          RELEASE_VERSION: ${{ needs.publish-npm.outputs.version }}
+        shell: bash
+        run: |
+          npm ci
+          mkdir -p Formula
+          registry_url="$(npm view "@iwonz/ywtc@$RELEASE_VERSION" dist.tarball)"
+          archive="$RUNNER_TEMP/ywtc-$RELEASE_VERSION.tgz"
+          curl --fail --silent --show-error --location "$registry_url" --output "$archive"
+          sha256="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          node --import tsx scripts/homebrew-formula.ts "$RELEASE_VERSION" "$registry_url" "$sha256" Formula/ywtc.rb
+      - name: Verify formula
+        run: |
+          brew style Formula/ywtc.rb
+          brew audit --strict Formula/ywtc.rb
+          brew install --formula ./Formula/ywtc.rb
+          brew test ywtc
+          ywtc --version
+      - name: Commit formula to master
+        env:
+          RELEASE_VERSION: ${{ needs.publish-npm.outputs.version }}
+        shell: bash
+        run: |
+          git fetch origin master
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/master)" ]]; then
+            echo "origin/master moved during formula verification; rerun the job." >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/ywtc.rb
+          if git diff --cached --quiet; then
+            echo "Formula already current."
+            exit 0
+          fi
+          git commit -m "chore(homebrew): update formula to v$RELEASE_VERSION"
+          git push origin HEAD:master

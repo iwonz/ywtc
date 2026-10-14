@@ -18,6 +18,8 @@ export interface CanonicalMigrationIdentity {
   confluenceBaseUrl: string;
   targetPageId: string;
   spaceKey: string;
+  confluenceDeployment?: 'data-center' | 'cloud';
+  confluenceSpaceId?: string;
 }
 
 export interface StateLocation {
@@ -50,7 +52,7 @@ function normalizedUrl(value: string): string {
 }
 
 export function migrationStateId(identity: CanonicalMigrationIdentity): string {
-  const canonical = [
+  const dataCenterCanonical = [
     'ywtc-state-v1',
     normalizedUrl(identity.yandexApiUrl),
     normalizedUrl(identity.yandexWebUrl),
@@ -61,6 +63,9 @@ export function migrationStateId(identity: CanonicalMigrationIdentity): string {
     identity.spaceKey,
     identity.targetPageId,
   ];
+  const canonical = identity.confluenceDeployment === 'cloud'
+    ? [...dataCenterCanonical, 'cloud', identity.confluenceSpaceId ?? identity.spaceKey]
+    : dataCenterCanonical;
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 24);
 }
 

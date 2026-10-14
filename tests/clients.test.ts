@@ -53,6 +53,21 @@ describe('API clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
+  it('accepts additive Yandex fields and diagnoses missing required envelopes', async () => {
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages').query({slug: 'root', fields: 'breadcrumbs,redirect,attributes,content'})
+      .reply(200, {id: 1, slug: 'root', title: 'Root', page_type: 'page', future_field: {enabled: true}})
+      .get('/v1/pages/1/descendants').query({actuality: 'actual', include_self: false, page_size: 100})
+      .reply(200, {items: []});
+    const client = new YandexWikiClient({
+      token: 'wiki-token', authType: 'oauth', orgId: '42', orgType: 'yandex360',
+      apiUrl: 'https://api.wiki.yandex.net/v1', webUrl: 'https://wiki.yandex.ru',
+    }, 5_000);
+    await expect(client.getPageBySlug('root')).resolves.toMatchObject({id: 1, title: 'Root'});
+    await expect(client.getDescendants(1)).rejects.toThrow(/schema error.*results/i);
+    expect(api.isDone()).toBe(true);
+  });
+
   it('downloads Yandex attachments through the authenticated permanent-ID endpoint', async () => {
     const api = nock('https://api.wiki.yandex.net', {
       reqheaders: {authorization: 'OAuth wiki-token', 'x-org-id': '42'},
@@ -73,6 +88,23 @@ describe('API clients', () => {
     const result = await client.download(1, 10, filename);
     expect(result).toMatchObject({size: 5, mimeType: 'text/plain'});
     await expect(readFile(filename, 'utf8')).resolves.toBe('hello');
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('normalizes nullable and string-valued Grid metadata', async () => {
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/grids/grid-1').query({fields: 'attributes'}).reply(200, {
+        id: 'grid-1', title: 'Grid',
+        structure: {columns: [{slug: 'name', title: 'Name', width: '240', width_units: 'px'}]},
+        rows: [{id: 'row-1', row: ['Value'], pinned: null, color: null}],
+      });
+    const client = new YandexWikiClient({
+      token: 'wiki-token', authType: 'oauth', orgId: '42', orgType: 'yandex360',
+      apiUrl: 'https://api.wiki.yandex.net/v1', webUrl: 'https://wiki.yandex.ru',
+    }, 5_000);
+    await expect(client.getGrid('grid-1')).resolves.toMatchObject({
+      structure: {columns: [{width: 240}]}, rows: [{id: 'row-1'}],
+    });
     expect(api.isDone()).toBe(true);
   });
 

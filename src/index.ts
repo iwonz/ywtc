@@ -1,5 +1,9 @@
 export * from './config.js';
 export * from './cli-arguments.js';
+export * from './clients/confluence-cloud.js';
+export * from './clients/confluence-factory.js';
+export * from './clients/confluence.js';
+export * from './clients/yandex-wiki.js';
 export * from './conversion.js';
 export * from './input.js';
 export * from './migrator.js';
@@ -10,3 +14,6 @@ export * from './state.js';
 export * from './titles.js';
 export * from './tree.js';
 export * from './types.js';
+export * from './updater.js';
+export * from './version.js';
+export * from './workspace.js';

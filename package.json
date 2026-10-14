@@ -1,9 +1,8 @@
 {
-  "name": "ywtc",
+  "name": "@iwonz/ywtc",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
-  "description": "Organization-agnostic, resumable Yandex Wiki to Confluence Data Center migration CLI",
+  "description": "Resumable Yandex Wiki to Confluence Data Center and Cloud migration CLI",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -24,6 +23,10 @@
   "bin": {
     "ywtc": "./dist/cli.js"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "files": [
     "dist",
     "docs/assets/readme-header.png",
@@ -37,20 +40,24 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "npm run release:check && npm run typecheck && npm run lint && npm run knip && npm test && npm run build && npm run spec:validate",
+    "check": "npm run release:check && npm run typecheck && npm run lint && npm run knip && npm test && npm run build && npm run package:verify && npm run spec:validate",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "knip": "knip",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
-    "migrate": "tsx src/cli.ts",
+    "commitlint": "commitlint",
+    "migrate": "tsx src/cli.ts migrate",
+    "package:verify": "node --import tsx scripts/package-validation.ts",
     "prepack": "npm run release:check && npm run build",
     "release:check": "node scripts/release-check.mjs",
+    "release:bootstrap": "node --import tsx scripts/npm-bootstrap.ts",
     "release:validate": "node --import tsx scripts/validate-release-tag.ts",
     "spec:validate": "openspec validate --all --strict --no-interactive",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "workspace:init": "node --import tsx src/cli.ts init --workdir ."
   },
   "dependencies": {
     "@diplodoc/transform": "4.60.0",
@@ -64,6 +71,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
+    "@commitlint/cli": "21.2.3",
+    "@commitlint/config-conventional": "21.2.3",
     "@fission-ai/openspec": "1.5.0",
     "@types/node": "22.18.12",
     "knip": "6.41.0",

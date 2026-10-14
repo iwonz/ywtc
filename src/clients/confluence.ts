@@ -4,7 +4,7 @@ import pLimit, {type LimitFunction} from 'p-limit';
 import type {AppConfig, NetworkLimits} from '../config.js';
 import {HttpRequestError, RetryingHttpClient} from '../http.js';
 import {TokenBucketRateLimiter} from '../rate-limiter.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage} from '../types.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage, ConfluencePlatformInfo} from '../types.js';
 
 interface ConfluenceList<T> {
   results: T[];
@@ -23,14 +23,16 @@ function firstResult<T>(payload: T | ConfluenceList<T>): T {
   return payload as T;
 }
 
-export class ConfluenceClient implements ConfluenceApi {
+type DataCenterConfig = Pick<AppConfig['confluence'], 'baseUrl' | 'token'> & Partial<Pick<AppConfig['confluence'], 'deployment' | 'authType'>>;
+
+export class DataCenterConfluenceClient implements ConfluenceApi {
   private readonly http: RetryingHttpClient;
   private readonly readLimit: LimitFunction;
   private readonly writeLimit: LimitFunction;
   private readonly uploadLimit: LimitFunction;
 
   constructor(
-    private readonly config: AppConfig['confluence'],
+    private readonly config: DataCenterConfig,
     timeoutMs: number,
     limits: NetworkLimits['confluence'] = {
       readConcurrency: 4,
@@ -52,6 +54,39 @@ export class ConfluenceClient implements ConfluenceApi {
         Authorization: `Bearer ${config.token}`,
         Accept: 'application/json',
       },
+    });
+  }
+
+  async preflight(): Promise<ConfluencePlatformInfo> {
+    return this.readLimit(async () => {
+      let systemInfo: Record<string, unknown>;
+      try {
+        const response = await this.http.request<Record<string, unknown>>({
+          method: 'GET',
+          url: '/rest/api/settings/systemInfo',
+        });
+        systemInfo = response.data;
+      } catch (error) {
+        if (!(error instanceof HttpRequestError) || ![403, 404].includes(error.status ?? 0)) throw error;
+        await this.http.request<ConfluenceList<ConfluencePage>>({
+          method: 'GET',
+          url: '/rest/api/content',
+          params: {type: 'page', status: 'current', limit: 1, expand: 'space,version,body.storage'},
+        });
+        return {deployment: 'data-center', product: 'Confluence Data Center', api: '/rest/api'};
+      }
+      const version = typeof systemInfo.version === 'string'
+        ? systemInfo.version
+        : typeof systemInfo.versionNumber === 'string'
+          ? systemInfo.versionNumber
+          : undefined;
+      if (version) {
+        const [major = 0, minor = 0] = version.split('.').map(Number);
+        if (Number.isFinite(major) && (major < 7 || (major === 7 && minor < 9))) {
+          throw new Error(`Unsupported Confluence Data Center ${version}: ywtc requires 7.9+ with Personal Access Tokens.`);
+        }
+      }
+      return {deployment: 'data-center', product: 'Confluence Data Center', ...(version ? {version} : {}), api: '/rest/api'};
     });
   }
 
@@ -227,3 +262,6 @@ export class ConfluenceClient implements ConfluenceApi {
     return error instanceof HttpRequestError && error.status === 404;
   }
 }
+
+/** @deprecated Use DataCenterConfluenceClient or createConfluenceClient. */
+export class ConfluenceClient extends DataCenterConfluenceClient {}

@@ -29,7 +29,9 @@ const config: AppConfig = {
     apiUrl: 'https://api.wiki.yandex.net/v1',
     webUrl: 'https://wiki.yandex.ru',
   },
-  confluence: {baseUrl: 'https://conf.example.test/confluence', token: 'conf-secret'},
+  confluence: {
+    deployment: 'data-center', authType: 'pat', baseUrl: 'https://conf.example.test/confluence', token: 'conf-secret',
+  },
   timeoutMs: 5_000,
   concurrency: 2,
   networkLimits: {

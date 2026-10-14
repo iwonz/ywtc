@@ -65,7 +65,7 @@ async function scanText(filename) {
 
     for (const email of line.matchAll(/\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi)) {
       const domain = email[1]?.toLocaleLowerCase();
-      if (domain && !['example.com', 'example.org', 'example.test'].includes(domain)) {
+      if (domain && !['example.com', 'example.org', 'example.test', 'users.noreply.github.com'].includes(domain)) {
         add(filename, 'non-example email address', lineNumber);
       }
     }
