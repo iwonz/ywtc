@@ -30,7 +30,7 @@ The project SHALL consistently identify itself as `ywtc` and the public npm pack
 
 #### Scenario: A new operator reads the README
 - **WHEN** the repository README is opened
-- **THEN** it SHALL present a visually verified full-width dark technical header showing Yandex Wiki, the `ywtc` migration pipeline, and Confluence, plus a short path to install, initialize, diagnose, dry-run, inspect, and migrate
+- **THEN** it SHALL present a visually verified full-width dark technical header showing Yandex Wiki, the `ywtc` migration pipeline, and Confluence, without colored frames around the source panel, destination panel, or central pipeline, plus a short path to install, initialize, diagnose, dry-run, inspect, and migrate
 
 #### Scenario: README readability is reviewed
 - **WHEN** documentation repeats a rule, caveat, or operational instruction across sections
