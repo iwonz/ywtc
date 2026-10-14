@@ -1,0 +1,86 @@
+{
+  "name": "ywtc",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Organization-agnostic, resumable Yandex Wiki to Confluence Data Center migration CLI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iwonz/ywtc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iwonz/ywtc/issues"
+  },
+  "homepage": "https://github.com/iwonz/ywtc#readme",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "ywtc": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "docs/assets/readme-header.png",
+    ".env.example",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "npm run release:check && npm run typecheck && npm run lint && npm run knip && npm test && npm run build && npm run spec:validate",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "knip": "knip",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "migrate": "tsx src/cli.ts",
+    "prepack": "npm run release:check && npm run build",
+    "release:check": "node scripts/release-check.mjs",
+    "spec:validate": "openspec validate --all --strict --no-interactive",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@diplodoc/transform": "4.60.0",
+    "axios": "1.20.0",
+    "cheerio": "1.2.0",
+    "dotenv": "17.2.3",
+    "form-data": "4.0.6",
+    "linkify-it": "5.0.2",
+    "p-limit": "7.2.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@fission-ai/openspec": "1.5.0",
+    "@types/node": "22.18.12",
+    "knip": "6.41.0",
+    "nock": "14.0.10",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "5.0.4"
+  },
+  "overrides": {
+    "@diplodoc/cut-extension": "0.7.2",
+    "@diplodoc/file-extension": "0.2.1",
+    "@diplodoc/tabs-extension": "3.7.2",
+    "@diplodoc/utils": "2.1.0",
+    "lodash": "4.18.1",
+    "markdown-it": {
+      ".": "13.0.2",
+      "linkify-it": "5.0.2"
+    },
+    "markdownlint": "0.41.1",
+    "svgo": "3.3.5"
+  }
+}

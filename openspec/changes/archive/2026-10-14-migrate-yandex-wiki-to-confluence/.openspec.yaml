@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-14
+goal: Migrate hierarchy, current content, attachments, images, links, tables,
+  and dynamic table snapshots safely and idempotently.

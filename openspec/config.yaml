@@ -1,0 +1,18 @@
+schema: spec-driven
+
+context: |
+  Runtime: Node.js 22 and strict TypeScript.
+  Product: resumable CLI migration from Yandex Wiki Public API to Confluence Data Center 7.9+ REST API.
+  Authentication: Yandex OAuth or IAM user token; Confluence Personal Access Token via Bearer auth.
+  Safety: dry-run support, no automatic destination deletion, atomic resumable state, secrets never logged.
+  Testing: Vitest unit and mocked integration tests.
+
+rules:
+  proposal:
+    - State explicit non-goals and destructive-operation boundaries.
+  design:
+    - Document retry, resume, conflict, and content-degradation behavior.
+  specs:
+    - Use SHALL/MUST requirements and Given/When/Then scenarios.
+  tasks:
+    - Include validation and documentation work.
