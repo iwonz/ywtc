@@ -22,8 +22,18 @@ const reportListSchema = z.object({
     complete: z.number().nonnegative(),
     partial: z.number().nonnegative(),
     failed: z.number().nonnegative(),
-    warnings: z.number().nonnegative().optional(),
-    errors: z.number().nonnegative().optional(),
+    blocked: z.number().nonnegative(),
+    conflicts: z.number().nonnegative(),
+    unprocessedPages: z.number().nonnegative(),
+    resources: z.number().nonnegative(),
+    resourcesComplete: z.number().nonnegative(),
+    resourcesPartial: z.number().nonnegative(),
+    resourcesFailed: z.number().nonnegative(),
+    resourcesPlanned: z.number().nonnegative(),
+    inventoryComplete: z.boolean(),
+    degradations: z.number().nonnegative(),
+    warnings: z.number().nonnegative(),
+    errors: z.number().nonnegative(),
   }),
 });
 
@@ -39,6 +49,16 @@ export interface ReportCatalogEntry {
   complete: number;
   partial: number;
   failed: number;
+  blocked: number;
+  conflicts: number;
+  unprocessedPages: number;
+  resources: number;
+  resourcesComplete: number;
+  resourcesPartial: number;
+  resourcesFailed: number;
+  resourcesPlanned: number;
+  inventoryComplete: boolean;
+  degradations: number;
   warnings: number;
   errors: number;
   directory: string;
@@ -64,6 +84,17 @@ function timestamp(entry: ReportCatalogEntry): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function reportReadError(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    const first = error.issues[0];
+    if (!first) return 'invalid current report';
+    const location = first.path.length > 0 ? first.path.join('.') : 'report';
+    const remaining = error.issues.length - 1;
+    return `invalid current report at ${location}: ${first.message}${remaining > 0 ? ` (+${remaining} more issues)` : ''}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function readEntry(reportsDirectory: string, directoryName: string): Promise<ReportCatalogEntry> {
   if (!runIdPattern.test(directoryName)) throw new Error('directory name is not a canonical run ID');
   const directory = path.resolve(reportsDirectory, directoryName);
@@ -85,8 +116,18 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     complete: parsed.summary.complete,
     partial: parsed.summary.partial,
     failed: parsed.summary.failed,
-    warnings: parsed.summary.warnings ?? parsed.warnings.length,
-    errors: parsed.summary.errors ?? parsed.errors.length,
+    blocked: parsed.summary.blocked,
+    conflicts: parsed.summary.conflicts,
+    unprocessedPages: parsed.summary.unprocessedPages,
+    resources: parsed.summary.resources,
+    resourcesComplete: parsed.summary.resourcesComplete,
+    resourcesPartial: parsed.summary.resourcesPartial,
+    resourcesFailed: parsed.summary.resourcesFailed,
+    resourcesPlanned: parsed.summary.resourcesPlanned,
+    inventoryComplete: parsed.summary.inventoryComplete,
+    degradations: parsed.summary.degradations,
+    warnings: parsed.summary.warnings,
+    errors: parsed.summary.errors,
     directory,
     html,
     json,
@@ -109,7 +150,7 @@ export async function listReports(reportsDirectory: string): Promise<ReportCatal
     try {
       reports.push(await readEntry(reportsDirectory, entry.name));
     } catch (error) {
-      warnings.push(`Skipped report ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`Skipped report ${entry.name}: ${reportReadError(error)}`);
     }
   }
   reports.sort((left, right) => timestamp(right) - timestamp(left) || right.runId.localeCompare(left.runId));

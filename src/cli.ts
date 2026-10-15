@@ -129,9 +129,11 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   console.log(`  Status  ${result.status}`);
   console.log(`  State   ${result.stateFilename}`);
   await printAndMaybeOpenReport(result.reportPaths.html, command.openReport);
-  console.log(`  Pages   ${command.dryRun ? `${result.summary.complete}/${result.summary.pages} planned` : `${result.summary.complete}/${result.summary.pages} complete`} · ${result.summary.partial} partial · ${result.summary.failed} failed`);
-  console.log(`  Content ${result.summary.resources} files · ${result.summary.bytes} bytes · ${result.summary.links} links · ${result.summary.cycles} cycles`);
-  console.log(`  Issues  ${result.summary.warnings} warnings · ${result.summary.errors} errors`);
+  console.log(`  Source  ${result.summary.pages} pages · ${result.summary.resources} files · ${result.summary.sourceBytes} known bytes${result.summary.bytesUnknown ? ` · ${result.summary.bytesUnknown} sizes unknown` : ''}`);
+  console.log(`  Pages   ${result.summary.complete} complete · ${result.summary.partial} partial · ${result.summary.failed} failed · ${result.summary.blocked} blocked · ${result.summary.conflicts} conflicts · ${result.summary.unprocessedPages} unprocessed`);
+  console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesPlanned} planned · ${result.summary.bytes} transferred bytes`);
+  console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
+  console.log(`  Issues  ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.normalizations} safe normalizations`);
   if (result.output) console.log(`  Output  ${result.output}`);
   if (result.archive) console.log(`  Archive ${result.archive}`);
   if (result.hasErrors) console.log(`  Resume  ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope}`);
@@ -226,9 +228,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         return 0;
       }
       for (const report of catalog.reports) {
-        const issues = `${report.warnings} warnings · ${report.errors} errors`;
+        const issues = `${report.errors} errors · ${report.warnings} warnings · ${report.degradations} degradations`;
         console.log(`  ${report.runId}  ${report.finishedAt ?? report.startedAt}  ${report.status}`);
-        console.log(`    ${report.direction} · ${report.scope} · ${report.pages} pages · ${issues}`);
+        console.log(`    ${report.direction} · ${report.scope} · source ${report.pages} pages · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);
+        console.log(`    pages ${report.complete} complete · ${report.partial} partial · ${report.failed} failed · ${report.blocked} blocked · ${report.conflicts} conflicts · ${report.unprocessedPages} unprocessed`);
+        console.log(`    files ${report.resourcesComplete}/${report.resources} complete · ${report.resourcesPartial} partial · ${report.resourcesFailed} failed · ${report.resourcesPlanned} planned · ${issues}`);
         console.log(`    ${report.url}`);
       }
       return 0;

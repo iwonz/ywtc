@@ -267,7 +267,7 @@ Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json
 
 Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json` и печатает кликабельный `file://` URL. `--open-report` открывает отчёт после миграции; `ywtc reports list` показывает историю, а `ywtc reports open [run-id]` открывает выбранный или последний корректный отчёт.
 
-Отчёт содержит направление, профили, дерево и link graph, циклы, вложения, resource fallbacks, фактически проверенные размеры, raw snapshots и side-by-side preview прочитанного destination-контента. Safe normalizations, форматные деградации, retryable failures и финальные errors считаются отдельно и одинаково отображаются в терминале, HTML/JSON и `reports list`.
+Отчёт отдельно показывает доступный контент выбранного source scope и результат переноса. Количество страниц и файлов сверяется с исчерпывающими статусами; source bytes не смешиваются с подтверждёнными transferred bytes, а неизвестные размеры отмечаются явно. Ошибки, конфликты, retryable failures и деградации привязаны к конкретной странице и файлу, содержат причину и ссылку на дерево с resource-статусами и side-by-side preview. Safe normalizations, HTML/JSON, итог терминала и `reports list` используют одинаковые счётчики.
 
 Итоговый статус запуска: `completed`, `completed-with-warnings`, `partial`, `failed`, `cancelled` или `interrupted`. Provider-aware verification допускает безопасные различия сериализации, отмечает значимое упрощение оформления как `partial`, а потерю текста, ссылок, ячеек таблиц, кода, изображений, вложений или anchors — как ошибку. Технический статус `skeleton-created` уже содержит source-derived bootstrap, а не progress-placeholder.
 

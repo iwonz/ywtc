@@ -9,7 +9,8 @@ import type {DestinationAdapter, DestinationContainer, DestinationPage, SourceAd
 import type {Logger} from '../src/logger.js';
 import {HttpRequestError} from '../src/http.js';
 import type {RemoteLocator} from '../src/locators.js';
-import {Migrator} from '../src/migrator.js';
+import {MigrationRunError, Migrator} from '../src/migrator.js';
+import type {TransferReportData} from '../src/report.js';
 import type {TransferState} from '../src/state.js';
 
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 50, burst: 50};
@@ -148,7 +149,12 @@ describe('source-derived remote page safety', () => {
     const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
     const migrator = new Migrator(config, logger, factory);
 
-    await expect(migrator.run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true});
+    const first = await migrator.run(options);
+    expect(first).toMatchObject({
+      status: 'partial',
+      hasErrors: true,
+      summary: {pages: 1, partial: 1, resources: 1, resourcesFailed: 1, sourceBytes: 4, bytes: 0, inventoryComplete: true},
+    });
     expect(adapters.snapshot().current?.content).toContain('Important body');
     expect(adapters.snapshot().current?.content).toContain('https://wiki.example/download/manual.pdf');
     expect(adapters.snapshot().current?.content).not.toContain('ywtc transfer in progress');
@@ -158,7 +164,10 @@ describe('source-derived remote page safety', () => {
     expect(state.pages[root.canonicalId]?.resources[resource.id]?.status).toBe('failed');
 
     adapters.setFailUpload(false);
-    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
+    await expect(migrator.run(options)).resolves.toMatchObject({
+      status: 'completed', hasErrors: false,
+      summary: {pages: 1, complete: 1, resources: 1, resourcesComplete: 1, sourceBytes: 4, bytes: 4},
+    });
     expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 1});
     expect(adapters.snapshot().current?.content).toContain('ri:attachment');
   });
@@ -221,5 +230,62 @@ describe('source-derived remote page safety', () => {
     const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
     expect(state.pages[root.canonicalId]).toMatchObject({status: 'failed'});
     expect(adapters.snapshot().created).toBe(2);
+  });
+
+  it('reports current dry-run failures and planned resources instead of stale successful state', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5});
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed'});
+    adapters.setCurrentMissing();
+
+    const result = await migrator.run({...options, dryRun: true});
+    expect(result).toMatchObject({
+      status: 'partial',
+      hasErrors: true,
+      summary: {
+        pages: 1, complete: 0, partial: 0, failed: 1, blocked: 0, unprocessedPages: 0,
+        resources: 1, resourcesComplete: 0, resourcesFailed: 0, resourcesPlanned: 1,
+        sourceBytes: 4, bytes: 0,
+      },
+    });
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.pages[0]).toMatchObject({
+      status: 'failed',
+      transferredBytes: 0,
+      resourceItems: [{sourceId: resource.id, status: 'planned', sourceBytes: 4}],
+    });
+
+    const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
+    const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
+    expect(state.pages[root.canonicalId]).toMatchObject({status: 'complete', resources: {[resource.id]: {status: 'complete'}}});
+  });
+
+  it('keeps every discovered page visible when source inventory fails before mutation', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const brokenSource = {
+      ...adapters.source,
+      listResources: async () => { throw new Error('resource inventory unavailable'); },
+    } as SourceAdapter;
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? brokenSource : adapters.destination) as SourceAdapter & DestinationAdapter;
+    let failure: MigrationRunError | undefined;
+    try {
+      await new Migrator(config, logger, factory).run(options);
+    } catch (error) {
+      if (error instanceof MigrationRunError) failure = error;
+      else throw error;
+    }
+    expect(failure).toBeDefined();
+    const report = JSON.parse(await readFile(failure!.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.summary).toMatchObject({
+      pages: 1, complete: 0, failed: 1, resources: 0,
+      inventoryComplete: false, inventoriedPages: 0, inventoryFailedPages: 1,
+      pageStatuses: {failed: 1},
+    });
+    expect(report.pages[0]).toMatchObject({sourceTitle: 'Root', status: 'failed', inventoryStatus: 'failed'});
+    expect(report.issues[0]).toMatchObject({code: 'source-inventory-failed', pageTitle: 'Root', retryable: true});
+    expect(adapters.snapshot()).toMatchObject({created: 0, updated: 0, uploaded: 0});
   });
 });

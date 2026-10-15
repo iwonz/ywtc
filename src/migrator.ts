@@ -38,13 +38,21 @@ import {discoverPageGraph} from './graph.js';
 import type {Logger} from './logger.js';
 import type {DirectoryLocator, RemoteLocator, ResolvedLocator} from './locators.js';
 import {profileBaseUrl, sameRemoteInstance} from './locators.js';
-import {TransferReport, type MigrationReportPaths, type TransferReportPage} from './report.js';
+import {
+  TransferReport,
+  type MigrationReportPaths,
+  type ReportInventoryStatus,
+  type TransferReportPage,
+  type TransferReportSummary,
+} from './report.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
 import {
   resolveStateLocation,
   StateStore,
   type EndpointIdentity,
   type PageTransferState,
+  type PageTransferStatus,
+  type ResourceTransferState,
   type RunStatus,
   type TransferIdentity,
 } from './state.js';
@@ -74,18 +82,7 @@ export interface TransferResult {
   stateBackupFilename?: string;
   output?: string;
   archive?: string;
-  summary: {
-    pages: number;
-    complete: number;
-    partial: number;
-    failed: number;
-    resources: number;
-    bytes: number;
-    links: number;
-    cycles: number;
-    warnings: number;
-    errors: number;
-  };
+  summary: TransferReportSummary;
 }
 
 function sourceIdentity(locator: RemoteLocator, root: SourcePage): EndpointIdentity {
@@ -209,18 +206,38 @@ function destinationFromState(state: PageTransferState, adapter: DestinationAdap
 function reportPage(input: {
   page: SourcePage & {depth: number; projectedParentId?: string};
   destination?: DestinationPage;
-  status: string;
+  status: PageTransferStatus;
+  inventoryStatus?: ReportInventoryStatus;
   resources: SourceResource[];
   document: NormalizedDocument;
   resourceFallbacks?: Array<{name: string; error: string}>;
   warnings?: string[];
   normalizations?: string[];
-  resourceSizes?: Record<string, {size?: number}>;
+  resourceStates?: Record<string, ResourceTransferState>;
+  resourceStatusOverride?: ResourceTransferState['status'];
   error?: string;
 }): TransferReportPage {
-  const transferable = input.resources.filter((resource) => resource.kind !== 'grid');
-  const sizes = transferable.map((resource) => input.resourceSizes?.[resource.id]?.size ?? resource.size);
-  const knownBytes = sizes.reduce<number>((total, size) => total + (size ?? 0), 0);
+  const transferable = input.resources.filter(
+    (resource): resource is SourceResource & {kind: 'attachment' | 'image'} => resource.kind !== 'grid',
+  );
+  const resourceItems = transferable.map((resource) => {
+    const state = input.resourceStates?.[resource.id];
+    const sourceBytes = state?.size ?? resource.size;
+    const status = input.resourceStatusOverride ?? state?.status ?? 'planned';
+    return {
+      sourceId: resource.id,
+      sourceName: resource.name,
+      kind: resource.kind,
+      status,
+      ...(sourceBytes !== undefined ? {sourceBytes} : {}),
+      ...(status === 'complete' && sourceBytes !== undefined ? {transferredBytes: sourceBytes} : {}),
+      ...(state?.destinationId ? {destinationId: state.destinationId} : {}),
+      ...(state?.destinationName ? {destinationName: state.destinationName} : {}),
+      ...(state?.lastError ? {error: state.lastError} : {}),
+    };
+  });
+  const knownBytes = resourceItems.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
+  const transferredBytes = resourceItems.reduce((total, resource) => total + (resource.transferredBytes ?? 0), 0);
   return {
     sourceCanonicalId: input.page.canonicalId,
     sourceId: input.page.id,
@@ -234,12 +251,16 @@ function reportPage(input: {
     ...(input.page.projectedParentId ? {parentId: input.page.projectedParentId} : {}),
     depth: input.page.depth,
     status: input.status,
+    inventoryStatus: input.inventoryStatus ?? 'complete',
     resources: transferable.length,
-    ...(transferable.length === 0 || sizes.some((size) => size !== undefined) ? {bytes: knownBytes} : {}),
-    bytesUnknown: sizes.filter((size) => size === undefined).length,
+    resourceItems,
+    ...(transferable.length === 0 || resourceItems.some((resource) => resource.sourceBytes !== undefined) ? {sourceBytes: knownBytes} : {}),
+    transferredBytes,
+    bytesUnknown: resourceItems.filter((resource) => resource.sourceBytes === undefined).length,
     links: input.document.metrics.links,
     images: input.document.metrics.images,
     tables: input.document.metrics.tables,
+    grids: input.resources.filter((resource) => resource.kind === 'grid').length,
     codeBlocks: input.document.metrics.codeBlocks,
     degraded: input.document.degraded || (input.resourceFallbacks?.length ?? 0) > 0,
     resourceFallbacks: input.resourceFallbacks ?? [],
@@ -249,9 +270,13 @@ function reportPage(input: {
   };
 }
 
-function runStatus(errors: number, warnings: number): RunStatus {
+function runStatus(errors: number, warnings: number, degradations: number): RunStatus {
   if (errors > 0) return 'partial';
-  return warnings > 0 ? 'completed-with-warnings' : 'completed';
+  return warnings + degradations > 0 ? 'completed-with-warnings' : 'completed';
+}
+
+function attentionCount(summary: TransferReportSummary): number {
+  return summary.warnings + summary.degradations;
 }
 
 export class MigrationRunError extends Error {
@@ -338,6 +363,7 @@ export class Migrator {
         ...(store.loadInfo.backupFilename ? {backupPath: store.loadInfo.backupFilename} : {}),
       },
     });
+    report.registerPages([{...root, depth: 0}]);
 
     let graph: PageGraph;
     let sourceFingerprints: Map<string, string>;
@@ -350,6 +376,9 @@ export class Migrator {
         ...(options.signal ? {signal: options.signal} : {}),
         onProgress: (progress) => status(`Discovery: ${progress.pages} pages, ${progress.edges} links${progress.active ? ` · ${progress.active}` : ''}`),
       });
+      report.registerPages(graph.pages);
+      report.setEdges(graph.edges);
+      for (const warning of graph.warnings) report.warning(warning);
       if (
         container
         && options.destination.type === 'remote'
@@ -361,17 +390,23 @@ export class Migrator {
       status(`Caching source content for ${graph.pages.length} pages`);
       sourceFingerprints = await cacheDiscoveredPages(options.cacheDirectory, graph);
       await store.setGraph(graph.rootId, graph.edges);
-      report.setEdges(graph.edges);
-      for (const warning of graph.warnings) report.warning(warning);
     } catch (error) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
-      report.error(message);
+      report.updatePage(root.canonicalId, {status: 'failed', inventoryStatus: 'failed', error: message});
+      report.issue({
+        code: 'source-discovery-failed',
+        severity: 'error',
+        phase: 'discovery',
+        pageId: root.canonicalId,
+        retryable: true,
+        message,
+      });
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
         pages: 0,
-        warnings: report.data.summary.warnings,
+        warnings: attentionCount(report.data.summary),
         errors: report.data.summary.errors,
       });
       throw new MigrationRunError(message, reportPaths, stateLocation.filename, {cause: error});
@@ -402,11 +437,25 @@ export class Migrator {
         inventory.images += document.metrics.images;
         inventory.tables += document.metrics.tables;
         inventory.codeBlocks += document.metrics.codeBlocks;
+        report.addPage(reportPage({
+          page,
+          status: 'planned',
+          resources,
+          document,
+        }), undefined, false);
         status(`Inspected ${page.title} · ${resources.length} resources`);
       } catch (error) {
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         inventoryErrors.push(message);
-        report.error(message);
+        report.updatePage(page.canonicalId, {status: 'failed', inventoryStatus: 'failed', error: message});
+        report.issue({
+          code: 'source-inventory-failed',
+          severity: 'error',
+          phase: 'inventory',
+          pageId: page.canonicalId,
+          retryable: true,
+          message,
+        });
       }
     })));
     if (inventoryErrors.length > 0) {
@@ -415,7 +464,7 @@ export class Migrator {
       const reportPaths = await report.write(options.reportsDirectory);
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
         pages: graph.pages.length,
-        warnings: report.data.summary.warnings,
+        warnings: attentionCount(report.data.summary),
         errors: report.data.summary.errors,
       });
       throw new MigrationRunError('Resource preflight failed before destination mutation', reportPaths, stateLocation.filename);
@@ -450,15 +499,15 @@ export class Migrator {
         report.output('destination', container!.url);
       }
       report.finish('completed');
-      const finalStatus = runStatus(report.data.summary.errors, report.data.summary.warnings);
+      const finalStatus = runStatus(report.data.summary.errors, report.data.summary.warnings, report.data.summary.degradations);
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
         pages: graph.pages.length,
-        warnings: report.data.summary.warnings,
+        warnings: attentionCount(report.data.summary),
         errors: report.data.summary.errors,
       });
-      status(`${finalStatus}: ${graph.pages.length} pages · ${report.data.summary.errors} errors · ${report.data.summary.warnings} warnings`);
+      status(`${finalStatus}: source ${report.data.summary.pages} pages · ${report.data.summary.complete} complete · ${report.data.summary.partial} partial · ${report.data.summary.failed + report.data.summary.blocked} failed/blocked · files ${report.data.summary.resourcesComplete}/${report.data.summary.resources} complete · ${report.data.summary.errors} errors · ${report.data.summary.warnings} warnings · ${report.data.summary.degradations} degradations`);
       return {
         status: finalStatus,
         hasErrors: report.data.summary.errors > 0,
@@ -479,7 +528,7 @@ export class Migrator {
       const reportPaths = await report.write(options.reportsDirectory);
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
         pages: graph.pages.length,
-        warnings: report.data.summary.warnings,
+        warnings: attentionCount(report.data.summary),
         errors: report.data.summary.errors,
       });
       this.logger.error(`${message}. Report: ${reportPaths.html}`);
@@ -538,10 +587,11 @@ export class Migrator {
         destinationName: resource.name,
         ...(resource.sha256 ? {sha256: resource.sha256} : {}),
         ...(resource.size !== undefined ? {size: resource.size} : {}),
-        status: 'complete' as const,
+        status: options.dryRun ? 'planned' as const : 'complete' as const,
         updatedAt: new Date().toISOString(),
       }];
       }));
+      const pageStatus: PageTransferStatus = options.dryRun ? 'planned' : manifestPage?.degraded ? 'partial' : 'complete';
       await store.setPage({
         sourceId: page.id,
         sourceCanonicalId: page.canonicalId,
@@ -554,17 +604,18 @@ export class Migrator {
         destinationTitle: page.title,
         sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
         ...(manifestPage || previous?.destinationFingerprint ? {destinationFingerprint: manifestPage ? sha256(JSON.stringify(manifestPage)) : previous!.destinationFingerprint!} : {}),
-        status: options.dryRun ? 'planned' : manifestPage?.degraded ? 'partial' : 'complete',
+        status: pageStatus,
         resources,
         degradations: manifestPage?.warnings ?? [],
         updatedAt: new Date().toISOString(),
       });
       report.addPage(reportPage({
         page,
-        status: options.dryRun ? 'planned' : result.errors.length ? 'partial' : 'complete',
+        status: pageStatus,
         resources: sourceResources,
         document,
-        resourceSizes: resources,
+        resourceStates: resources,
+        ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
         ...(manifestPage?.warnings ? {warnings: manifestPage.warnings} : {}),
       }), {source: normalizedPreviewHtml(document), destination: normalizedPreviewHtml(document)});
     }
@@ -586,6 +637,7 @@ export class Migrator {
   }): Promise<void> {
     const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage} = input;
     const destinationPages = new Map<string, DestinationPage>();
+    const stagingFailures = new Map<string, {status: PageTransferStatus; message: string}>();
     const sourcePages = new Map(graph.pages.map((page) => [page.canonicalId, page]));
     const bootstrapBodies = new Map<string, RenderedDocument>();
     const totalResources = [...resourcesByPage.values()].reduce(
@@ -625,7 +677,16 @@ export class Migrator {
       const parent = page.projectedParentId ? destinationPages.get(page.projectedParentId) : container;
       if (!parent) {
         const message = `Destination parent is unavailable for ${page.title}`;
-        report.error(message);
+        stagingFailures.set(page.canonicalId, {status: 'blocked', message});
+        report.updatePage(page.canonicalId, {status: 'blocked', error: message});
+        report.issue({
+          code: 'destination-parent-unavailable',
+          severity: 'error',
+          phase: 'page',
+          pageId: page.canonicalId,
+          retryable: true,
+          message,
+        });
         progress.staged += 1;
         updateProgress(message);
         continue;
@@ -755,9 +816,19 @@ export class Migrator {
         options.onStatus?.(`${options.dryRun ? 'Planned' : 'Staged content for'} ${page.title}`);
       } catch (error) {
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
-        report.error(message);
+        const failureStatus: PageTransferStatus = /conflict/i.test(message) ? 'conflict' : 'failed';
+        stagingFailures.set(page.canonicalId, {status: failureStatus, message});
+        report.updatePage(page.canonicalId, {status: failureStatus, error: message});
+        report.issue({
+          code: failureStatus === 'conflict' ? 'destination-conflict' : 'destination-page-staging-failed',
+          severity: 'error',
+          phase: 'page',
+          pageId: page.canonicalId,
+          retryable: failureStatus !== 'conflict',
+          message,
+        });
         const savedState = store.value.pages[page.canonicalId];
-        if (savedState) await store.setPage({...savedState, status: /conflict/i.test(message) ? 'conflict' : 'failed', lastError: message, updatedAt: new Date().toISOString()});
+        if (savedState) await store.setPage({...savedState, status: failureStatus, lastError: message, updatedAt: new Date().toISOString()});
       } finally {
         progress.staged += 1;
         updateProgress(`content staged ${page.title}`);
@@ -772,13 +843,16 @@ export class Migrator {
       const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
       const resources = resourcesByPage.get(page.canonicalId) ?? [];
       if (!destinationPage) {
+        const currentFailure = stagingFailures.get(page.canonicalId);
         const failedState = store.value.pages[page.canonicalId];
         report.addPage(reportPage({
           page,
-          status: failedState?.status ?? 'blocked',
+          status: currentFailure?.status ?? 'blocked',
           resources,
           document,
-          error: failedState?.lastError ?? 'Destination page with source-derived content was not created',
+          ...(failedState?.resources ? {resourceStates: failedState.resources} : {}),
+          ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
+          error: currentFailure?.message ?? failedState?.lastError ?? 'Destination page with source-derived content was not created',
         }));
         progress.pages += 1;
         updateProgress(`blocked ${page.title}`);
@@ -1055,7 +1129,15 @@ export class Migrator {
           } catch (error) {
             const detail = `Raw source snapshot was not transferred: ${error instanceof Error ? error.message : String(error)}`;
             resourceProblems.push(detail);
-            report.error(`${page.title}: ${detail}`);
+            report.issue({
+              code: 'source-snapshot-transfer-failed',
+              severity: 'error',
+              phase: 'resource',
+              pageId: page.canonicalId,
+              resourceId: snapshotKey,
+              retryable: true,
+              message: `${page.title}: ${detail}`,
+            });
             state.resources[snapshotKey] = {
               sourceId: snapshotKey,
               sourceName: snapshotName,
@@ -1121,7 +1203,8 @@ export class Migrator {
           status: finalState.status,
           resources,
           document,
-          resourceSizes: finalState.resources,
+          resourceStates: finalState.resources,
+          ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
           resourceFallbacks: fallbackDetails,
           warnings: [...rendered.warnings, ...verificationDegradations],
           normalizations: rendered.normalizations,
@@ -1139,7 +1222,14 @@ export class Migrator {
             failureStatus = 'failed';
           }
         }
-        report.error(message);
+        report.issue({
+          code: failureStatus === 'conflict' ? 'destination-conflict' : 'page-transfer-failed',
+          severity: 'error',
+          phase: 'page',
+          pageId: page.canonicalId,
+          retryable: failureStatus !== 'conflict',
+          message,
+        });
         await store.setPage({
           ...state,
           ...(actual?.fingerprint ? {destinationFingerprint: actual.fingerprint} : {}),
@@ -1160,9 +1250,9 @@ export class Migrator {
             status: failureStatus,
             resources,
             document,
-            resourceSizes: state.resources,
+            resourceStates: state.resources,
+            ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
             resourceFallbacks: fallbackDetails,
-            warnings: resourceProblems,
             error: message,
           }),
           actual?.content ? {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(actual.content, destination.kind)} : undefined,

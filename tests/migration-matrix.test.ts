@@ -88,6 +88,10 @@ describe('four remote transfer directions', () => {
       });
       expect(result.status).toMatch(/completed/);
       expect(result.hasErrors).toBe(false);
+      expect(result.summary).toMatchObject({
+        pages: 1, complete: 0, partial: 0, failed: 0, unprocessedPages: 1,
+        resources: 0, resourcesPlanned: 0, inventoryComplete: true,
+      });
       expect(sourceMock.isDone()).toBe(true);
       expect(destinationMock.isDone()).toBe(true);
     });

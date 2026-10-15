@@ -21,7 +21,11 @@ async function reportBundle(root: string, runId: string, finishedAt: string): Pr
     direction: 'yandex-wiki → confluence',
     warnings: ['warning'],
     errors: ['error'],
-    summary: {pages: 3, complete: 2, partial: 1, failed: 0, warnings: 4, errors: 5},
+    summary: {
+      pages: 3, complete: 2, partial: 1, failed: 0, blocked: 0, conflicts: 0, unprocessedPages: 0,
+      resources: 4, resourcesComplete: 3, resourcesPartial: 0, resourcesFailed: 1, resourcesPlanned: 0,
+      inventoryComplete: true, degradations: 3, warnings: 4, errors: 5,
+    },
   }));
 }
 
@@ -33,9 +37,13 @@ describe('report catalog', () => {
     await mkdir(path.join(root, 'broken'));
     const catalog = await listReports(root);
     expect(catalog.reports.map((report) => report.runId)).toEqual([newer, older]);
-    expect(catalog.reports[0]).toMatchObject({pages: 3, warnings: 4, errors: 5});
+    expect(catalog.reports[0]).toMatchObject({
+      pages: 3, complete: 2, partial: 1, resources: 4, resourcesComplete: 3, resourcesFailed: 1,
+      inventoryComplete: true, degradations: 3, warnings: 4, errors: 5,
+    });
     expect(catalog.reports[0]?.url).toMatch(/^file:/);
     expect(catalog.warnings).toEqual([expect.stringContaining('Skipped report broken')]);
+    expect(catalog.warnings[0]).not.toContain('\n');
   });
 
   it('selects latest or explicit reports and rejects traversal and missing IDs', async () => {
