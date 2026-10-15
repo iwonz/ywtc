@@ -2,6 +2,19 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [3.2.0](https://github.com/iwonz/ywtc/compare/v3.1.0...v3.2.0) (2026-10-15)
+
+
+### Features
+
+* **migration:** guarantee page content and expose reports ([5be596e](https://github.com/iwonz/ywtc/commit/5be596e8281900a8105cf7b77002506aac16ac6d))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v3.1.0 ([0ab7a88](https://github.com/iwonz/ywtc/commit/0ab7a886cc2dac24a1315668c060fc094e51b221))
+* **release:** resume pipeline after commitlint rejection ([54a04f7](https://github.com/iwonz/ywtc/commit/54a04f73184e625262ebbbed925b0767a18cc72b))
+
 ## [3.1.0](https://github.com/iwonz/ywtc/compare/v3.0.0...v3.1.0) (2026-10-15)
 
 
