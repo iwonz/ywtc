@@ -92,6 +92,9 @@ describe('release validation', () => {
     expect(workflow).toContain('npm pack');
     expect(workflow).toContain('npm publish "$ARCHIVE" --access public --provenance');
     expect(workflow).toContain('gh release upload');
+    expect(workflow).toContain(
+      'brew tap iwonz/ywtc https://github.com/iwonz/ywtc.git\\nbrew trust --tap iwonz/ywtc\\nbrew install ywtc',
+    );
     expect(workflow).toContain("if: always() && needs.publish-npm.result == 'success'");
     expect(workflow).toContain('brew tap-new --no-git "$tap_name"');
     expect(workflow).toContain('tap_dir="$(brew --repository "$tap_name")"');
@@ -103,6 +106,14 @@ describe('release validation', () => {
     expect(workflow).not.toContain('brew install --formula ./Formula/ywtc.rb');
     expect(workflow).toContain('chore(homebrew): update formula to v$RELEASE_VERSION');
     expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN/);
+  });
+
+  it('documents the Homebrew third-party tap trust boundary', async () => {
+    const readme = await readFile('README.md', 'utf8');
+    expect(readme).toContain(
+      'brew tap iwonz/ywtc https://github.com/iwonz/ywtc.git\nbrew trust --tap iwonz/ywtc\nbrew install ywtc',
+    );
+    expect(readme).toContain('Homebrew 7');
   });
 
   it('publishes a public scoped package with the ywtc binary', async () => {

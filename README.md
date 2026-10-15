@@ -41,8 +41,11 @@ npx @iwonz/ywtc@latest --version
 
 # Homebrew
 brew tap iwonz/ywtc https://github.com/iwonz/ywtc.git
+brew trust --tap iwonz/ywtc
 brew install ywtc
 ```
+
+Homebrew 7 требует явно доверить сторонний tap. Команда `brew trust --tap iwonz/ywtc` разрешает загрузку формул только из этого репозитория; перед выполнением можно проверить его содержимое на GitHub.
 
 Проверить или установить обновление:
 

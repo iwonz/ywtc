@@ -219,7 +219,7 @@ jobs:
           if ! grep -q '<!-- ywtc-installation -->' "$body"; then
             {
               printf '\n<!-- ywtc-installation -->\n## Installation\n\n'
-              printf '```bash\nnpm install -g @iwonz/ywtc@latest\nnpx @iwonz/ywtc@latest --version\nbrew tap iwonz/ywtc https://github.com/iwonz/ywtc.git\nbrew install ywtc\n```\n'
+              printf '```bash\nnpm install -g @iwonz/ywtc@latest\nnpx @iwonz/ywtc@latest --version\nbrew tap iwonz/ywtc https://github.com/iwonz/ywtc.git\nbrew trust --tap iwonz/ywtc\nbrew install ywtc\n```\n'
             } >> "$body"
           fi
           gh release edit "$RELEASE_TAG" --notes-file "$body"

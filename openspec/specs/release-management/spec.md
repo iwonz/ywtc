@@ -124,6 +124,10 @@ The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywt
 - **WHEN** Homebrew installs the published npm artifact with its standard release-age protection
 - **THEN** every selected runtime dependency SHALL be old enough to satisfy that protection without disabling the cooldown or adding a persistent package exception
 
+#### Scenario: Third-party tap installation guidance
+- **WHEN** README or generated release notes show how to install ywtc with Homebrew
+- **THEN** the commands SHALL register `iwonz/ywtc`, explicitly trust that tap using Homebrew's tap-scoped trust command, and only then install `ywtc`
+
 #### Scenario: Formula publication
 - **WHEN** formula verification succeeds
 - **THEN** automation SHALL fast-forward current `master`, create commit `chore(homebrew): update formula to vX.Y.Z`, and push without force so `brew update` and `brew upgrade ywtc` discover it
