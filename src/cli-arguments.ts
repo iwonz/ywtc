@@ -5,7 +5,7 @@ import {packageVersion} from './version.js';
 export type CliCommand =
   | {command: 'help'; topic?: 'init' | 'doctor' | 'migrate' | 'update'}
   | {command: 'version'}
-  | {command: 'init'; workdir?: string}
+  | {command: 'init'; workdir?: string; interactive: boolean}
   | {
     command: 'doctor';
     workdir?: string;
@@ -55,11 +55,12 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .showSuggestionAfterError(true);
 
   program.command('init')
-    .description('Create or repair a workspace without overwriting data')
+    .description('Create a workspace or configure it with a guided terminal wizard')
     .option('--workdir <path>', 'workspace to initialize')
+    .option('--interactive', 'configure Yandex Wiki and Confluence in a TTY wizard', false)
     .action((options) => {
       const workdir = nonEmpty(options.workdir, '--workdir');
-      onCommand({command: 'init', ...(workdir ? {workdir} : {})});
+      onCommand({command: 'init', interactive: options.interactive, ...(workdir ? {workdir} : {})});
     });
 
   program.command('doctor')

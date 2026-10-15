@@ -51,15 +51,14 @@ ywtc update --install --via brew  # явно через Homebrew
 ## Минимальный сценарий
 
 - [ ] Установите CLI одним из способов выше.
-- [ ] Создайте рабочий каталог: `ywtc init`.
-- [ ] Заполните подключения и токены в `~/.ywtc/ywtc.config.yaml`.
-- [ ] Проверьте доступ: `ywtc doctor --source <source> --destination <destination>`.
-- [ ] Проверьте план: `ywtc migrate --source <source> --destination <destination> --dry-run`.
-- [ ] Запустите ту же команду без `--dry-run`.
+- [ ] Запустите `ywtc init --interactive` и настройте обязательные подключения Yandex Wiki и Confluence.
+- [ ] Дождитесь read-only проверки API и авторизации: конфиг сохраняется только после её успеха.
+- [ ] Выполните предложенную wizard команду первой миграции с `--dry-run`, заменив placeholders страниц.
+- [ ] Проверьте план и повторите команду без `--dry-run`.
 
 ## Конфигурация
 
-Для рабочих команд каталог выбирается в порядке: `--workdir` → текущий каталог, если непосредственно в нём есть `ywtc.config.yaml` → `~/.ywtc`. Поиск по родительским каталогам не выполняется. `ywtc init` без `--workdir` всегда использует `~/.ywtc`; `migrate` автоматически инициализирует отсутствующий workspace.
+Для рабочих команд каталог выбирается в порядке: `--workdir` → текущий каталог, если непосредственно в нём есть `ywtc.config.yaml` → `~/.ywtc`. Поиск по родительским каталогам не выполняется. `ywtc init --interactive` предлагает путь с default `~/.ywtc`; переданный `--workdir` становится редактируемым начальным значением. `migrate` автоматически инициализирует отсутствующий workspace.
 
 ```text
 ~/.ywtc/
@@ -67,7 +66,9 @@ ywtc update --install --via brew  # явно через Homebrew
 └── .states/                # state, cache и отчёты
 ```
 
-`ywtc init` создаёт безопасный шаблон. Полный пример с Yandex Wiki, Confluence Data Center, Confluence Cloud и сетевыми лимитами: [`ywtc.config.example.yaml`](ywtc.config.example.yaml).
+`ywtc init --interactive` требует TTY, проводит через обязательные настройки обоих провайдеров, скрывает токены и делает только read-only connection probes. Проверка подтверждает API и авторизацию, но не права конкретных страниц: они проверяются `doctor` или `migrate`. Для существующего workspace доступны изменение выбранных профилей, выход без изменений и настройка с нуля с backup прежнего YAML в `.states/backups/`; state не удаляется.
+
+Обычный `ywtc init` без wizard создаёт безопасный пустой шаблон для автоматизации или ручного управления. Полный пример с Yandex Wiki, Confluence Data Center, Confluence Cloud и сетевыми лимитами: [`ywtc.config.example.yaml`](ywtc.config.example.yaml).
 
 ### Поля профилей
 
@@ -146,7 +147,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 
 | Команда | Назначение |
 | --- | --- |
-| `ywtc init [--workdir <path>]` | Создать или дополнить workspace без перезаписи данных |
+| `ywtc init [--workdir <path>] [--interactive]` | Создать шаблон либо настроить и проверить подключения в TTY wizard |
 | `ywtc doctor [options]` | Проверить workspace; с source и destination выполнить read-only preflight |
 | `ywtc migrate --source <locator> --destination <locator\|directory> [options]` | Перенести или экспортировать выбранный граф страниц |
 | `ywtc update [--install] [--via npm\|brew]` | Проверить или установить обновление безопасным для текущего канала способом |
@@ -169,6 +170,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `--concurrency <n>` | `migrate` | `1..64`; иначе config default | Общая параллельность; профильные лимиты сохраняются |
 | `--state <path>` | `migrate` | внутри workspace | Явный state вместо автоматического |
 | `--workdir <path>` | `init`, `doctor`, `migrate` | config в CWD или `~/.ywtc` | Явно выбрать workspace; поддерживается `~/...` |
+| `--interactive` | `init` | требует stdin/stdout TTY | Обязательный wizard Yandex Wiki + Confluence; без частично сохранённого конфига |
 | `--install` | `update` | default `false` | Установить найденное обновление |
 | `--via <channel>` | `update` | `npm` или `brew` | Явно выбрать совместимый канал обновления |
 | `-h`, `--help` | CLI и команды | необязательно | Справка |
@@ -191,6 +193,12 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 ## Частые примеры
 
 ```bash
+# Wizard в отдельном workspace
+ywtc init --interactive --workdir ./migration
+
+# Неинтерактивная инициализация для ручного или автоматизированного заполнения YAML
+ywtc init --workdir ./migration
+
 # Yandex Wiki → Confluence: граф связанных страниц
 ywtc migrate --source https://wiki.example.com/team/start \
   --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
@@ -217,7 +225,7 @@ ywtc migrate --source-profile wiki-prod --source team/start \
   --destination ./exports/knowledge-base --format markdown --dry-run
 ```
 
-`doctor` принимает те же endpoints, profiles, `scope` и `format`. Без endpoints он проверяет workspace, конфигурацию и секреты; с обоими endpoints выполняет read-only capability-preflight.
+Wizard проверяет только доступность API и авторизацию без страниц и внешних записей. `doctor` принимает те же endpoints, profiles, `scope` и `format`: без endpoints он проверяет workspace, конфигурацию и секреты, а с обоими endpoints выполняет page-specific read-only capability-preflight.
 
 ## Файловый экспорт
 

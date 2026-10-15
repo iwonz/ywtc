@@ -20,6 +20,7 @@ export class HttpRequestError extends Error {
     public readonly status?: number,
     public readonly method?: string,
     public readonly url?: string,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = 'HttpRequestError';
@@ -110,6 +111,7 @@ export class RetryingHttpClient {
             error.response?.status,
             method,
             String(axiosConfig.url ?? ''),
+            error.code,
           );
         }
 

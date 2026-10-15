@@ -38,6 +38,15 @@ async function config(source = yaml) {
 }
 
 describe('CLI and named profiles', () => {
+  it('parses interactive initialization and documents the TTY contract', () => {
+    expect(parseCliArguments(['init', '--interactive', '--workdir', '~/guided'])).toEqual({
+      command: 'init', interactive: true, workdir: '~/guided',
+    });
+    expect(parseCliArguments(['init'])).toEqual({command: 'init', interactive: false});
+    expect(cliHelp('init')).toContain('--interactive');
+    expect(cliHelp('init')).toContain('TTY wizard');
+  });
+
   it('parses the universal migration surface', () => {
     expect(parseCliArguments([
       'migrate', '--source', '42', '--source-profile', 'wiki-main', '--destination', './site',

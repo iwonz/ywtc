@@ -13,6 +13,7 @@ import {RequestRateLimiter} from '../rate-limiter.js';
 import type {
   DownloadedFile,
   YandexAttachment,
+  YandexCurrentUser,
   YandexGrid,
   YandexGridSummary,
   YandexPageDetails,
@@ -26,6 +27,12 @@ interface CursorPage<T> {
 }
 
 const pageIdentitySchema = z.object({id: z.number().int(), slug: z.string().min(1)}).passthrough();
+const currentUserSchema = z.object({
+  username: z.string().min(1),
+  home_cluster: z.string().optional(),
+  identity: z.object({uid: z.string().optional(), cloud_uid: z.string().optional()}).passthrough(),
+  org: z.object({dir_id: z.string().optional(), collab_id: z.string().optional()}).passthrough(),
+}).passthrough();
 const breadcrumbSchema = z.object({
   id: z.number().int().optional(), slug: z.string(), title: z.string(), page_exists: z.boolean().optional(),
 }).passthrough();
@@ -120,6 +127,13 @@ export class YandexWikiClient implements YandexWikiApi {
         Accept: 'application/json',
       },
     });
+  }
+
+  async getCurrentUser(): Promise<YandexCurrentUser> {
+    return this.readQueue.add(async () => {
+      const response = await this.authenticated.request<YandexCurrentUser>({method: 'GET', url: '/users/me'});
+      return parseResponse(currentUserSchema, response.data, 'GET /users/me');
+    }) as Promise<YandexCurrentUser>;
   }
 
   async getPageBySlug(slug: string): Promise<YandexPageDetails> {

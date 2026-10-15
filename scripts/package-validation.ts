@@ -64,6 +64,26 @@ const version = await execFileAsync(executable, ['--version'], {encoding: 'utf8'
 const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {version: string};
 if (version.stdout.trim() !== packageJson.version) throw new Error('Installed ywtc version does not match package.json');
 await execFileAsync(executable, ['--help'], {encoding: 'utf8'});
+const initHelp = await execFileAsync(executable, ['init', '--help'], {encoding: 'utf8'});
+if (!initHelp.stdout.includes('--interactive') || !initHelp.stdout.includes('TTY wizard')) {
+  throw new Error('Installed ywtc init help does not document the interactive TTY wizard');
+}
+
+const rejectedInteractiveWorkspace = path.join(temporary, 'rejected-interactive-workspace');
+try {
+  await execFileAsync(executable, ['init', '--interactive', '--workdir', rejectedInteractiveWorkspace], {encoding: 'utf8'});
+  throw new Error('Interactive init unexpectedly accepted non-TTY input');
+} catch (error) {
+  const result = error as {code?: number; stderr?: string};
+  if (result.code !== 2 || !result.stderr?.includes('requires an interactive TTY')) {
+    throw new Error(`Interactive init non-TTY diagnosis is not actionable: ${result.stderr ?? String(error)}`);
+  }
+}
+await access(rejectedInteractiveWorkspace).then(
+  () => { throw new Error('Rejected interactive init modified the workspace'); },
+  () => undefined,
+);
+
 const workspace = path.join(temporary, 'initialized-workspace');
 await execFileAsync(executable, ['init', '--workdir', workspace], {encoding: 'utf8'});
 await Promise.all([

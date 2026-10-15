@@ -122,6 +122,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
   if (command.command === 'init') {
+    if (command.interactive) {
+      const [{assertInteractiveTerminal, runInteractiveInit}, {ClackInitPrompter}] = await Promise.all([
+        import('./interactive-init.js'),
+        import('./init-prompts.js'),
+      ]);
+      assertInteractiveTerminal(process.stdin.isTTY, process.stdout.isTTY);
+      const result = await runInteractiveInit({
+        ...(command.workdir ? {workdir: command.workdir} : {}),
+        prompter: new ClackInitPrompter(),
+      });
+      return result.code;
+    }
     const workspace = resolveInitWorkspace(command.workdir ? {explicit: command.workdir} : {});
     const result = await initializeWorkspace(workspace);
     heading('Workspace ready');

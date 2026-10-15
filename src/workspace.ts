@@ -58,6 +58,11 @@ export interface WorkspaceInitialization {
   existing: string[];
 }
 
+export interface WorkspaceDirectories {
+  created: string[];
+  existing: string[];
+}
+
 function expandHome(value: string, homeDirectory: string): string {
   if (value === '~') return homeDirectory;
   if (value.startsWith('~/') || value.startsWith('~\\')) return path.join(homeDirectory, value.slice(2));
@@ -125,12 +130,22 @@ export async function initializeWorkspace(workspace: Workspace): Promise<Workspa
   await mkdir(workspace.root, {recursive: true, mode: 0o700});
   const configCreated = await createExclusive(workspace.configFile, CONFIG_TEMPLATE, 0o600);
   (configCreated ? created : existing).push(workspace.configFile);
+  const directories = await ensureWorkspaceDirectories(workspace);
+  created.push(...directories.created);
+  existing.push(...directories.existing);
+  return {workspace, created, existing};
+}
+
+export async function ensureWorkspaceDirectories(workspace: Workspace): Promise<WorkspaceDirectories> {
+  const created: string[] = [];
+  const existing: string[] = [];
+  await mkdir(workspace.root, {recursive: true, mode: 0o700});
   for (const directory of [workspace.statesDirectory, workspace.cacheDirectory, workspace.reportsDirectory]) {
     const existed = await exists(directory);
     await mkdir(directory, {recursive: true, mode: 0o700});
     (existed ? existing : created).push(directory);
   }
-  return {workspace, created, existing};
+  return {created, existing};
 }
 
 export function resolveWorkspacePath(workspace: Workspace, value: string): string {

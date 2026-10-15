@@ -39,6 +39,13 @@ export interface YandexPageIdentity {
   slug: string;
 }
 
+export interface YandexCurrentUser {
+  username: string;
+  home_cluster?: string;
+  identity: {uid?: string; cloud_uid?: string};
+  org: {dir_id?: string; collab_id?: string};
+}
+
 export interface YandexAttachment {
   id: number;
   name: string;
@@ -166,6 +173,7 @@ export interface YandexWikiApi {
 }
 
 export interface ConfluenceApi {
+  getCurrentUser(): Promise<Record<string, unknown>>;
   preflight?(): Promise<ConfluencePlatformInfo>;
   resolveTarget(input: string): Promise<ConfluencePage>;
   getPage(id: string): Promise<ConfluencePage>;

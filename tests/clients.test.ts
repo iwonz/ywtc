@@ -22,6 +22,46 @@ const dc: ConfluenceConnectionProfile = {
 afterEach(() => nock.cleanAll());
 
 describe('provider clients', () => {
+  it('authenticates the current Yandex user with OAuth and IAM organization headers', async () => {
+    const oauth = nock('https://api.wiki.yandex.net', {reqheaders: {authorization: 'OAuth wiki-token', 'x-org-id': '42'}})
+      .get('/v1/users/me').reply(200, {username: 'operator', identity: {uid: '1'}, org: {dir_id: '42'}});
+    await expect(new YandexWikiClient(wiki, 5_000, limits).getCurrentUser()).resolves.toMatchObject({username: 'operator'});
+
+    const iamProfile: YandexConnectionProfile = {
+      ...wiki, name: 'cloud', authType: 'iam', token: 'iam-token', organization: {type: 'cloud', id: 'cloud-org'},
+    };
+    const iam = nock('https://api.wiki.yandex.net', {reqheaders: {authorization: 'Bearer iam-token', 'x-cloud-org-id': 'cloud-org'}})
+      .get('/v1/users/me').reply(200, {username: 'cloud-user', identity: {cloud_uid: '2'}, org: {collab_id: 'cloud-org'}});
+    await expect(new YandexWikiClient(iamProfile, 5_000, limits).getCurrentUser()).resolves.toMatchObject({username: 'cloud-user'});
+    expect(oauth.isDone()).toBe(true);
+    expect(iam.isDone()).toBe(true);
+  });
+
+  it('authenticates and identifies Confluence Data Center without writes', async () => {
+    const api = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
+      .get('/confluence/rest/api/user/current').reply(200, {username: 'operator'})
+      .get('/confluence/rest/api/settings/systemInfo').reply(200, {version: '9.5.2'});
+    const client = new DataCenterConfluenceClient(dc, 5_000, limits);
+    await expect(client.getCurrentUser()).resolves.toMatchObject({username: 'operator'});
+    await expect(client.preflight()).resolves.toMatchObject({deployment: 'data-center', version: '9.5.2'});
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('authenticates and identifies Confluence Cloud without writes', async () => {
+    const cloud: ConfluenceConnectionProfile = {
+      name: 'cloud', type: 'confluence', deployment: 'cloud', authType: 'api-token', baseUrl: 'https://example.atlassian.net',
+      token: 'token', email: 'person@example.com', limits,
+    };
+    const auth = `Basic ${Buffer.from('person@example.com:token').toString('base64')}`;
+    const api = nock('https://example.atlassian.net', {reqheaders: {authorization: auth}})
+      .get('/wiki/rest/api/user/current').reply(200, {accountId: 'abc'})
+      .get('/wiki/api/v2/spaces').query({limit: 1}).reply(200, {results: []});
+    const client = new CloudConfluenceClient(cloud, 5_000, limits);
+    await expect(client.getCurrentUser()).resolves.toMatchObject({accountId: 'abc'});
+    await expect(client.preflight()).resolves.toMatchObject({deployment: 'cloud'});
+    expect(api.isDone()).toBe(true);
+  });
+
   it('creates and updates Yandex pages with OAuth organization headers', async () => {
     const api = nock('https://api.wiki.yandex.net', {reqheaders: {authorization: 'OAuth wiki-token', 'x-org-id': '42'}})
       .post('/v1/pages', {slug: 'root/child', title: 'Child', content: 'Body', access_policy: {access_type: 'inherited'}})

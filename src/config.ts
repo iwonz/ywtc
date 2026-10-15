@@ -143,8 +143,8 @@ function issueFields(issue: z.core.$ZodIssue): string[] {
   return [issue.path.map(String).join('.') || 'configuration'];
 }
 
-export function readWorkspaceConfig(configFile: string): AppConfig {
-  const parsed = fileSchema.safeParse(readYaml(configFile));
+export function parseWorkspaceConfig(value: unknown, configFile: string): AppConfig {
+  const parsed = fileSchema.safeParse(value);
   if (!parsed.success) {
     const fields = [...new Set(parsed.error.issues.flatMap(issueFields))].sort();
     throw new ConfigurationError(fields, configFile);
@@ -182,6 +182,19 @@ export function readWorkspaceConfig(configFile: string): AppConfig {
     concurrency: parsed.data.defaults.concurrency ?? 4,
     configFile,
   };
+}
+
+export function parseWorkspaceConfigYaml(source: string, configFile: string): AppConfig {
+  try {
+    return parseWorkspaceConfig(parseYaml(source), configFile);
+  } catch (error) {
+    if (error instanceof ConfigurationError) throw error;
+    throw new Error(`Cannot parse workspace configuration: ${configFile}`, {cause: error});
+  }
+}
+
+export function readWorkspaceConfig(configFile: string): AppConfig {
+  return parseWorkspaceConfig(readYaml(configFile), configFile);
 }
 
 /** Validate only the profiles an operation will actually use. */

@@ -64,6 +64,7 @@
   },
   "dependencies": {
     "@archiver/archiver": "^0.3.0",
+    "@clack/prompts": "^1.8.1",
     "@commander-js/extra-typings": "^15.0.0",
     "@diplodoc/transform": "4.78.6",
     "axios": "1.20.0",

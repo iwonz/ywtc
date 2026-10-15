@@ -68,6 +68,16 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
     });
   }
 
+  async getCurrentUser(): Promise<Record<string, unknown>> {
+    return this.readLimit(async () => {
+      const response = await this.http.request<Record<string, unknown>>({
+        method: 'GET',
+        url: '/rest/api/user/current',
+      });
+      return response.data;
+    });
+  }
+
   async preflight(): Promise<ConfluencePlatformInfo> {
     return this.readLimit(async () => {
       let systemInfo: Record<string, unknown>;

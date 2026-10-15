@@ -104,6 +104,13 @@ const readmeHeadings = [...readme.matchAll(/^##[ \t]+(.+?)[ \t]*$/gm)].map((matc
 if (JSON.stringify(readmeHeadings) !== JSON.stringify(expectedReadmeHeadings)) {
   add(readmeFilename, `second-level headings must be exactly: ${expectedReadmeHeadings.join(' → ')}`);
 }
+for (const [needle, reason] of [
+  ['ywtc init --interactive', 'interactive initialization is not documented'],
+  ['Обычный `ywtc init`', 'non-interactive initialization is not documented'],
+  ['не права конкретных страниц', 'connection-only verification boundary is not documented'],
+]) {
+  if (!readme.includes(needle)) add(readmeFilename, reason);
+}
 
 await walk(root);
 

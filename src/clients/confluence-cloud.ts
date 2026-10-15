@@ -88,6 +88,13 @@ export class CloudConfluenceClient implements ConfluenceApi {
     });
   }
 
+  async getCurrentUser(): Promise<Record<string, unknown>> {
+    return this.readLimit(async () => {
+      const response = await this.http.request<Record<string, unknown>>({method: 'GET', url: '/rest/api/user/current'});
+      return response.data;
+    });
+  }
+
   async preflight(): Promise<ConfluencePlatformInfo> {
     await this.readLimit(async () => {
       await this.http.request<CloudList<CloudSpace>>({method: 'GET', url: '/api/v2/spaces', params: {limit: 1}});
