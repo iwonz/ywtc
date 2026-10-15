@@ -2,6 +2,29 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [3.0.0](https://github.com/iwonz/ywtc/compare/v2.0.3...v3.0.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **workspace:** consolidate runtime configuration
+
+### Features
+
+* **workspace:** consolidate runtime configuration ([123f13b](https://github.com/iwonz/ywtc/commit/123f13ba2883de034b9b8f458fd01ad02576be70))
+
+
+### Documentation
+
+* **readme:** depict universal transfer paths ([1c7d01f](https://github.com/iwonz/ywtc/commit/1c7d01f907205bed8a44a8dc7819717a84130316))
+* **readme:** stabilize information architecture ([03eb3e3](https://github.com/iwonz/ywtc/commit/03eb3e3ee8aefb76a00237aec7e2561184b214f5))
+
+
+### Maintenance
+
+* **ci:** resume release after commit validation ([1540b51](https://github.com/iwonz/ywtc/commit/1540b51727e6ca58816a1099b2add73a3eacf7cf))
+* **homebrew:** update formula to v2.0.3 ([63262bb](https://github.com/iwonz/ywtc/commit/63262bb13e5765aa2f3a15f04e6f98a0379f247e))
+
 ## [2.0.3](https://github.com/iwonz/ywtc/compare/v2.0.2...v2.0.3) (2026-10-15)
 
 
