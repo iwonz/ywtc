@@ -245,6 +245,16 @@ npm run check
 
 `npm run check` запускает release/hygiene checks, аудит production-зависимостей (high/critical), TypeScript, Biome, Knip, тесты, сборку, проверку устанавливаемого tarball и строгую OpenSpec-валидацию. Изменения оформляются полным OpenSpec-циклом согласно [`AGENTS.md`](AGENTS.md).
 
-Release Please формирует SemVer-релизы из Conventional Commits; breaking change выпускается как major. GitHub Actions публикует `@iwonz/ywtc` с provenance, GitHub Release и обновлённую Homebrew-формулу.
+## Первый релиз (для сопровождающего)
+
+Обычные релизы формирует Release Please из Conventional Commits. До первого релиза один раз:
+
+- [ ] Установите npm `>=11.15`, выполните `npm login` и проверьте владельца: `npm whoami` должен вернуть `iwonz`.
+- [ ] Опубликуйте минимальный пакет с интерактивной 2FA: `npm run release:bootstrap`. OTP не записывайте в команду, файл или CI.
+- [ ] Свяжите пакет с workflow: `npm trust github @iwonz/ywtc --file release.yml --repo iwonz/ywtc --allow-publish`.
+- [ ] В GitHub откройте **Settings → Actions → General → Workflow permissions** и включите **Allow GitHub Actions to create and approve pull requests**. Настройка действует на workflows репозитория; фактические возможности всё равно ограничены `permissions` каждого job.
+- [ ] Перезапустите `CI and Release`, проверьте Release Please PR для `2.0.0` и слейте его. Workflow опубликует npm-пакет с provenance, GitHub Release и проверенную Homebrew-формулу.
+
+Требования и синтаксис: [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) и [`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust/). Версии `package.json`, lock-файла и changelog вручную не меняются.
 
 Лицензия: [MIT](LICENSE).

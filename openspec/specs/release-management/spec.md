@@ -91,6 +91,10 @@ The repository SHALL document and support a one-time interactive owner publicati
 - **WHEN** the bootstrap package exists and the release workflow is present on `master`
 - **THEN** the owner SHALL bind `iwonz/ywtc` and `release.yml` with `--allow-publish` and complete the first OIDC release within the trust-command validity window
 
+#### Scenario: Maintainer follows the public checklist
+- **WHEN** a maintainer prepares the first release
+- **THEN** README SHALL state the npm CLI prerequisite, interactive bootstrap command, exact trusted publisher command, GitHub Actions PR setting and its permission boundary, and the Release Please merge sequence without exposing credentials
+
 ### Requirement: Same-repository Homebrew distribution
 The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywtc` from the published npm archive so macOS operators can use an explicit same-repository tap.
 
