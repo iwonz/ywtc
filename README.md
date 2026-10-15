@@ -4,31 +4,24 @@
 
 # ywtc
 
-`ywtc` — CLI для контролируемого переноса страниц между Yandex Wiki и Confluence, а также экспорта в Markdown или автономный HTML. Утилита сохраняет структуру, ссылки и вложения, отмечает деградации, проверяет результат и продолжает прерванную операцию по state-файлу. Исходные данные и страницы назначения автоматически не удаляются.
+## Описание
 
-Требуются Node.js `>=24` и npm `>=11.5.1`.
+`ywtc` — CLI для переноса страниц между Yandex Wiki и Confluence и экспорта в Markdown или автономный HTML. Утилита сохраняет структуру, ссылки и вложения, явно отмечает деградации и продолжает прерванные операции по state-файлу. Исходные данные и страницы назначения автоматически не удаляются.
+
+Требуются Node.js `>=24` и npm `>=11.5.1`. Лицензия — [MIT](LICENSE).
 
 ## Возможности
 
 | Что переносится | Результат |
 | --- | --- |
 | Страницы и иерархия | Одна страница, структурное поддерево или граф связанных страниц |
-| Заголовки, текст, списки, цитаты, код, таблицы | Нативная разметка назначения, насколько это допускает формат |
+| Заголовки, текст, списки, цитаты, код и таблицы | Нативная разметка назначения, насколько это допускает формат |
 | Внутренние ссылки и якоря | Переписываются на перенесённые страницы; внешние остаются внешними |
 | Изображения и вложения | Потоковая передача с проверкой имени, размера и SHA-256 |
 | Yandex notes, cuts, tabs и Grid | Ближайший нативный эквивалент; Grid становится статической таблицей |
-| Confluence macros и resource identifiers | Сохраняются напрямую для same-vendor transfer либо преобразуются |
-| Неподдерживаемые vendor-конструкции | Читаемый fallback и raw snapshot: attachment или файл в `_source/` |
-| История, комментарии, пользователи, права, watchers | Не переносятся |
-
-## Минимальный сценарий
-
-- [ ] Установите CLI: `npm install -g @iwonz/ywtc`.
-- [ ] Создайте workspace: `ywtc init`.
-- [ ] Заполните `~/.ywtc/ywtc.config.yaml` и секреты в `~/.ywtc/.env`.
-- [ ] Проверьте доступ: `ywtc doctor --source <source> --destination <destination>`.
-- [ ] Выполните dry-run: `ywtc migrate --source <source> --destination <destination> --dry-run`.
-- [ ] Повторите команду без `--dry-run`.
+| Confluence macros и resource identifiers | Сохраняются напрямую при переносе между Confluence либо преобразуются |
+| Неподдерживаемые vendor-конструкции | Читаемый fallback и raw snapshot в attachment или `_source/` |
+| История, комментарии, пользователи, права и watchers | Не переносятся |
 
 ## Установка
 
@@ -36,7 +29,7 @@
 # npm
 npm install -g @iwonz/ywtc
 
-# без глобальной установки
+# npx без глобальной установки
 npx @iwonz/ywtc@latest --version
 
 # Homebrew
@@ -45,196 +38,225 @@ brew trust --tap iwonz/ywtc
 brew install ywtc
 ```
 
-Homebrew 7 требует явно доверить сторонний tap. Команда `brew trust --tap iwonz/ywtc` разрешает загрузку формул только из этого репозитория; перед выполнением можно проверить его содержимое на GitHub.
+Homebrew 7 требует доверить сторонний tap; команда `brew trust` относится только к `iwonz/ywtc`.
 
-Проверить или установить обновление:
+Обновление:
 
 ```bash
-ywtc update
-ywtc update --install             # только global npm или Homebrew
-ywtc update --install --via brew
+ywtc update                       # только проверка
+ywtc update --install             # канал текущей установки
+ywtc update --install --via brew  # явно через Homebrew
 ```
 
-## Профили и workspace
+## Минимальный сценарий
 
-Workspace выбирается в порядке `--workdir` → текущий каталог с `.ywtc-workspace.json` → `~/.ywtc`. Команда `init` идемпотентна и не перезаписывает существующие файлы:
+- [ ] Установите CLI одним из способов выше.
+- [ ] Создайте рабочий каталог: `ywtc init`.
+- [ ] Заполните `~/.ywtc/ywtc.config.yaml` и секреты в `~/.ywtc/.env`.
+- [ ] Проверьте доступ: `ywtc doctor --source <source> --destination <destination>`.
+- [ ] Проверьте план: `ywtc migrate --source <source> --destination <destination> --dry-run`.
+- [ ] Запустите ту же команду без `--dry-run`.
+
+## Конфигурация
+
+Рабочий каталог выбирается в порядке: `--workdir` → текущий каталог с `.ywtc-workspace.json` → `~/.ywtc`. `ywtc init` создаёт недостающие файлы и не перезаписывает существующие; `migrate` также автоматически инициализирует отсутствующий workspace.
 
 ```text
 ~/.ywtc/
 ├── .ywtc-workspace.json
-├── .env                    # только секреты, mode 0600
-├── ywtc.config.yaml        # подключения без секретов
-└── .states/                # state, cache и HTML-отчёты
+├── .env                    # секреты, mode 0600
+├── ywtc.config.yaml        # именованные подключения без секретов
+└── .states/                # state, cache и отчёты
 ```
 
-Минимальная конфигурация двух подключений:
+`ywtc init` создаёт безопасный шаблон. Полный пример с Yandex Wiki, Confluence Data Center, Confluence Cloud и сетевыми лимитами: [`ywtc.config.example.yaml`](ywtc.config.example.yaml).
 
-```yaml
-schemaVersion: 2
-defaults:
-  timeoutMs: 30000
-  concurrency: 4
+### Поля профилей
 
-connections:
-  wiki-prod:
-    type: yandex-wiki
-    apiUrl: https://api.wiki.yandex.net/v1
-    webUrl: https://wiki.example.ru
-    authType: oauth
-    tokenEnv: YANDEX_WIKI_TOKEN
-    organization: {type: yandex360, id: organization-id}
+| Поле | Для кого | Обязательность / значения | Назначение |
+| --- | --- | --- | --- |
+| `schemaVersion` | файл | обязательно: `2` | Версия схемы конфигурации |
+| `defaults.timeoutMs` | файл | `1000..300000`, default `30000` | Таймаут HTTP-запроса |
+| `defaults.concurrency` | файл | `1..64`, default `4` | Общая параллельность операции |
+| `connections.<name>` | файл | минимум один; имя `[a-z0-9._-]+` | Именованное подключение |
+| `type` | все профили | `yandex-wiki` или `confluence` | Тип провайдера |
+| `tokenEnv` | все профили | имя env-переменной | Где хранится токен |
+| `apiUrl` | Yandex Wiki | URL Public API v1 | API endpoint |
+| `webUrl` | Yandex Wiki | URL | Базовый адрес Wiki для ссылок и выбора профиля |
+| `authType` | Yandex Wiki | `oauth` (default) или `iam` | Схема авторизации |
+| `organization.type` | Yandex Wiki | `yandex360` (default) или `cloud` | Заголовок `X-Org-Id` или `X-Cloud-Org-Id` |
+| `organization.id` | Yandex Wiki | непустая строка | ID организации |
+| `deployment` | Confluence | `data-center` или `cloud` | Тип развёртывания |
+| `baseUrl` | Confluence | URL | Адрес инстанса, включая context path |
+| `authType` | Confluence | `pat` для Data Center; `api-token` для Cloud | Схема авторизации |
+| `emailEnv` | Confluence Cloud | обязательно | Env-переменная с email Atlassian-аккаунта |
+| `limits.readConcurrency` | все профили | `1..64`, default `4` | Параллельные чтения |
+| `limits.writeConcurrency` | все профили | `1..32`, default `2` | Параллельные записи |
+| `limits.downloadConcurrency` | все профили | `1..32`, default `2` | Параллельные скачивания |
+| `limits.uploadConcurrency` | все профили | `1..32`, default `2` | Параллельные загрузки |
+| `limits.requestsPerSecond` | все профили | `1..1000`, default `8` | Средняя частота запросов |
+| `limits.burst` | все профили | `1..1000`, default `8` | Допустимый кратковременный burst |
 
-  confluence-prod:
-    type: confluence
-    deployment: data-center
-    baseUrl: https://confluence.example.ru/confluence
-    authType: pat
-    tokenEnv: CONFLUENCE_TOKEN
-```
+### Секреты и overrides
 
 ```dotenv
 YANDEX_WIKI_TOKEN=
 CONFLUENCE_TOKEN=
-# Для Confluence Cloud:
 CONFLUENCE_EMAIL=
+HTTP_TIMEOUT_MS=30000
+MIGRATION_CONCURRENCY=4
 ```
 
-Полный шаблон с сетевыми лимитами находится в [`ywtc.config.example.yaml`](ywtc.config.example.yaml). Значения process environment имеют приоритет над `.env`. Секреты проверяются только для профилей, участвующих в текущей операции.
-
-## Как получить токены
-
-### Yandex Wiki
-
-- [ ] Создайте приложение в [Яндекс OAuth](https://oauth.yandex.ru/) для доступа к API.
-- [ ] Выдайте приложению права Wiki на чтение; для destination также нужны права записи.
-- [ ] Получите OAuth-токен пользователя, имеющего доступ к нужным страницам. Для федеративного пользователя Yandex Cloud можно использовать IAM-токен и `authType: iam`.
-- [ ] Найдите ID организации в **Yandex Tracker → Администрирование → Организации**.
-- [ ] Укажите `organization.type: yandex360` для Яндекс 360 либо `cloud` для Cloud Organization.
-- [ ] Сохраните токен в env-переменной, указанной в `tokenEnv`.
-
-### Confluence Data Center
-
-- [ ] Откройте **Avatar → Settings → Personal access tokens → Create token**.
-- [ ] Создайте PAT и сохраните его в env-переменной из `tokenEnv`.
-- [ ] Используйте `deployment: data-center` и `authType: pat`.
-- [ ] Убедитесь, что пользователь может читать source и создавать/изменять страницы и вложения destination.
-
-### Confluence Cloud
-
-- [ ] Создайте [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens).
-- [ ] Используйте `deployment: cloud`, `authType: api-token`, `tokenEnv` и `emailEnv`.
-- [ ] Сохраните API token и email Atlassian-аккаунта в соответствующих env-переменных.
-- [ ] Проверьте доступ аккаунта к source/destination space.
+Имена секретных переменных задаются через `tokenEnv` и `emailEnv`. Значения process environment имеют приоритет над `<workdir>/.env`; проверяются только профили текущей операции.
 
 ## Направления и совместимость
 
 | Source | Destination | Поддержка |
 | --- | --- | --- |
 | Yandex Wiki | Confluence | Да |
-| Yandex Wiki | Yandex Wiki | Да, включая другой профиль/инстанс |
+| Yandex Wiki | Yandex Wiki | Да, включая другой профиль или инстанс |
 | Confluence | Yandex Wiki | Да |
-| Confluence | Confluence | Да, включая другой профиль/инстанс |
+| Confluence | Confluence | Да, включая другой профиль или инстанс |
 | Yandex Wiki или Confluence | Markdown | Да |
 | Yandex Wiki или Confluence | статический HTML | Да |
 
-| Система | Поддерживаемый контракт | Авторизация |
+| Система | Контракт | Авторизация |
 | --- | --- | --- |
-| Yandex Wiki | Public API v1; tolerant parsing новых необязательных полей | OAuth или пользовательский IAM; `X-Org-Id`/`X-Cloud-Org-Id` |
-| Confluence Data Center | 7.9+ без искусственной верхней границы; capabilities проверяются до записи | Bearer PAT |
-| Confluence Cloud | Текущий публичный REST v2 для страниц и v1 для attachments | Email + API token |
+| Yandex Wiki | Public API v1; новые необязательные поля принимаются | OAuth или пользовательский IAM; `X-Org-Id`/`X-Cloud-Org-Id` |
+| Confluence Data Center | 7.9+ без верхней границы; capabilities проверяются до записи | Bearer PAT |
+| Confluence Cloud | REST v2 для страниц и REST v1 для attachments | Email + API token |
 
-Confluence Server, Data Center Basic Auth и OAuth app-flow пока не поддерживаются. Совместимость определяется preflight-проверкой используемых API/capabilities, а не обещанием для каждой patch-версии.
+Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерживаются. Совместимость определяется preflight-проверкой необходимых API/capabilities, а не сертификацией каждой patch-версии.
 
-## Параметры `migrate`
+## Как получить токены
 
-```text
-ywtc migrate --source <locator> --destination <locator|directory> [options]
-```
+### Yandex Wiki
 
-| Параметр | Обязателен | Значения / default | Назначение |
+- [ ] Создайте приложение в [Яндекс OAuth](https://oauth.yandex.ru/).
+- [ ] Выдайте права Wiki на чтение; для destination также нужны права записи.
+- [ ] Получите OAuth-токен пользователя с доступом к страницам. Для федеративного пользователя Yandex Cloud допустим IAM-токен и `authType: iam`.
+- [ ] Найдите ID организации в **Yandex Tracker → Администрирование → Организации**.
+- [ ] Укажите `organization.type: yandex360` для Яндекс 360 или `cloud` для Cloud Organization.
+- [ ] Сохраните токен в переменной из `tokenEnv`.
+
+### Confluence Data Center
+
+- [ ] Откройте **Avatar → Settings → Personal access tokens → Create token**.
+- [ ] Создайте PAT и сохраните его в переменной из `tokenEnv`.
+- [ ] Используйте `deployment: data-center` и `authType: pat`.
+- [ ] Проверьте права на чтение source и создание/изменение страниц и вложений destination.
+
+### Confluence Cloud
+
+- [ ] Создайте [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens).
+- [ ] Используйте `deployment: cloud`, `authType: api-token`, `tokenEnv` и `emailEnv`.
+- [ ] Сохраните API token и email аккаунта в соответствующих env-переменных.
+- [ ] Проверьте доступ аккаунта к source и destination spaces.
+
+## Параметры
+
+### Команды
+
+| Команда | Назначение |
+| --- | --- |
+| `ywtc init [--workdir <path>]` | Создать или дополнить workspace без перезаписи данных |
+| `ywtc doctor [options]` | Проверить workspace; с source и destination выполнить read-only preflight |
+| `ywtc migrate --source <locator> --destination <locator\|directory> [options]` | Перенести или экспортировать выбранный граф страниц |
+| `ywtc update [--install] [--via npm\|brew]` | Проверить или установить обновление безопасным для текущего канала способом |
+| `ywtc --help`, `ywtc <command> --help` | Показать общую или командную справку |
+| `ywtc --version` | Показать версию |
+
+### Опции
+
+| Опция | Команды | Обязательность / значения | Назначение |
 | --- | --- | --- | --- |
-| `--source <value>` | Да | URL, page ID или slug | Исходная страница |
-| `--destination <value>` | Да | URL, page ID, slug или каталог | Родительская страница либо каталог экспорта |
-| `--source-profile <name>` | Иногда | имя из `connections` | Нужен для неоднозначного короткого ID/slug |
-| `--destination-profile <name>` | Иногда | имя из `connections` | То же для удалённой destination |
-| `--scope <mode>` | Нет | `page`, `subtree` (default), `linked` | Граница выбора страниц |
-| `--format <format>` | Для каталога | `markdown`, `html` | Однозначно включает файловый экспорт |
-| `--archive` | Нет | только с `--format` | Оставляет каталог и создаёт ZIP рядом |
-| `--dry-run` | Нет | `false` | Полный discovery/план без destination writes |
-| `--workdir <path>` | Нет | marker CWD или `~/.ywtc` | Выбирает workspace |
-| `--state <path>` | Нет | `.states/<automatic-id>.json` | Явный state внутри workspace |
-| `--fresh` | Нет | `false` | Не использует mappings; live-run сохраняет backup state |
-| `--concurrency <n>` | Нет | `1..64`, config default `4` | Параллельность оркестрации; профильные лимиты действуют отдельно |
+| `--source <value>` | `doctor`, `migrate` | обязательно для `migrate`; в `doctor` вместе с destination | URL, page ID или Yandex slug |
+| `--destination <value>` | `doctor`, `migrate` | обязательно для `migrate`; в `doctor` вместе с source | Родительская страница или каталог экспорта |
+| `--source-profile <name>` | `doctor`, `migrate` | при неоднозначном коротком locator | Профиль source из `connections` |
+| `--destination-profile <name>` | `doctor`, `migrate` | при неоднозначном remote locator | Профиль destination; несовместим с файловым экспортом |
+| `--scope <mode>` | `doctor`, `migrate` | `page`, `subtree` (default), `linked` | Граница выбора страниц |
+| `--format <format>` | `doctor`, `migrate` | `markdown` или `html` | Делает destination файловым каталогом |
+| `--archive` | `migrate` | только вместе с `--format` | Дополнительно создать ZIP рядом с каталогом |
+| `--dry-run` | `migrate` | default `false` | Discovery и план без записи в destination |
+| `--fresh` | `migrate` | default `false` | Игнорировать mappings текущего state |
+| `--concurrency <n>` | `migrate` | `1..64`; иначе config default | Общая параллельность; профильные лимиты сохраняются |
+| `--state <path>` | `migrate` | внутри workspace | Явный state вместо автоматического |
+| `--workdir <path>` | `init`, `doctor`, `migrate` | marker CWD или `~/.ywtc` | Явно выбрать workspace; поддерживается `~/...` |
+| `--install` | `update` | default `false` | Установить найденное обновление |
+| `--via <channel>` | `update` | `npm` или `brew` | Явно выбрать совместимый канал обновления |
+| `-h`, `--help` | CLI и команды | необязательно | Справка |
+| `-v`, `--version` | CLI | необязательно | Версия |
 
-Полный URL автоматически сопоставляется с профилем по нормализованному base URL. Для короткого ID/slug профиль выбирается автоматически только при единственном подходящем подключении; иначе CLI перечисляет допустимые имена. Каталог считается файловой destination только вместе с `--format`.
+### Локаторы
+
+- Yandex Wiki: полный URL, числовой page ID или slug, например `team/start`.
+- Confluence: числовой page ID, URL с `pageId=<id>` либо URL с `/pages/<id>` или `/content/<id>`.
+- Полный URL автоматически выбирает профиль по нормализованному base URL.
+- Короткий ID/slug выбирается автоматически только при единственном подходящем профиле; иначе нужен `--source-profile` или `--destination-profile`.
+- Каталог является файловой destination только вместе с `--format`.
 
 ### Scope
 
 - `page` — только исходная страница.
-- `subtree` — страница и все структурные потомки; режим по умолчанию.
-- `linked` — детерминированный BFS по внутренним ссылкам и page/include references до фиксированной точки. Циклы безопасно завершаются, страница обрабатывается один раз. Внешние и недоступные ссылки не обходятся и отражаются в отчёте.
+- `subtree` — страница и все структурные потомки; default.
+- `linked` — детерминированный BFS по внутренним ссылкам и page/include references до фиксированной точки. Циклы завершаются безопасно, каждая страница обрабатывается один раз; внешние и недоступные ссылки не обходятся и попадают в отчёт.
 
 ## Частые примеры
 
 ```bash
-# Связанные страницы Yandex Wiki → Confluence
-ywtc migrate \
-  --source https://wiki.example.ru/team/start \
-  --destination https://confluence.example.ru/pages/viewpage.action?pageId=123 \
+# Yandex Wiki → Confluence: граф связанных страниц
+ywtc migrate --source https://wiki.example.com/team/start \
+  --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
   --scope linked
 
-# Confluence → Yandex Wiki по коротким идентификаторам
-ywtc migrate \
-  --source-profile confluence-prod --source 123456 \
-  --destination-profile wiki-prod --destination team/archive \
-  --scope subtree
+# Confluence → Yandex Wiki
+ywtc migrate --source-profile confluence-prod --source 123456 \
+  --destination-profile wiki-prod --destination team/archive
 
-# Одна страница без потомков
+# Yandex Wiki → Yandex Wiki: одна страница
 ywtc migrate --source-profile wiki-prod --source team/start \
-  --destination-profile confluence-prod --destination 123 --scope page
+  --destination-profile wiki-archive --destination archive/start --scope page
 
-# Автономный HTML-сайт и ZIP
+# Confluence → Confluence: новый state в отдельном workspace
+ywtc migrate --workdir ./migration --source-profile confluence-prod --source 123456 \
+  --destination-profile confluence-archive --destination 654321 --fresh
+
+# Автономный HTML и ZIP
 ywtc migrate --source-profile confluence-prod --source 123456 \
   --destination ./exports/knowledge-base --format html --scope linked --archive
 
-# Markdown-экспорт в отдельном workspace
-ywtc migrate --workdir ./migration --source-profile wiki-prod --source team/start \
-  --destination ./export --format markdown --dry-run
+# Markdown dry-run
+ywtc migrate --source-profile wiki-prod --source team/start \
+  --destination ./exports/knowledge-base --format markdown --dry-run
 ```
 
-`doctor` принимает те же `source`, `destination`, profile, `scope` и `format`; с endpoints выполняет только read-only capability-preflight. Без endpoints проверяет workspace, конфигурацию и все секреты.
+`doctor` принимает те же endpoints, profiles, `scope` и `format`. Без endpoints он проверяет workspace, конфигурацию и секреты; с обоими endpoints выполняет read-only capability-preflight.
 
 ## Файловый экспорт
 
-Markdown создаёт `index.md`, `pages/`, `attachments/`, manifest `.ywtc-export.json` и, при деградациях, `_source/`. HTML создаёт автономный адаптивный сайт с теми же данными и локальным `assets/site.css`; он работает через `file://` и на обычном static hosting без CDN/runtime.
+Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json` и, при деградациях, `_source/`. HTML создаёт автономный адаптивный сайт с локальным `assets/site.css`; он работает через `file://` и на static hosting без CDN или внешнего runtime.
 
-Экспорт строится в staging-каталоге. Существующий каталог заменяется только при совпадающем ywtc manifest; предыдущая версия сохраняется как timestamped backup. ZIP не перезаписывает уже существующий архив.
+Экспорт сначала строится в staging-каталоге. Существующий каталог заменяется только при совместимом ywtc manifest, а предыдущая версия сохраняется как timestamped backup. `--archive` оставляет каталог и создаёт новый ZIP, не перезаписывая существующий архив.
 
-## State, отчёты и повторный запуск
+## State
 
-Автоматический state ID строится из канонических профилей и ID source/destination; форма URL/slug/ID и `scope` на него не влияют. Поэтому одна и та же пара endpoints возобновляет один state, а разные пары получают разные файлы.
+По умолчанию state хранится в `<workdir>/.states/<automatic-id>.json`. ID строится из канонических профилей и ID source/destination, а для файлового экспорта также из формата; форма locator и `scope` на ID не влияют. Относительный `--state` разрешается внутри workspace, выход за его границы запрещён.
 
-- Повторный запуск обновляет только сопоставленные объекты и не создаёт дубликаты.
+### Повторные запуски
+
+- Одинаковые source и destination автоматически подхватывают один state независимо от формы URL/ID/slug.
+- Уже сопоставленные страницы и вложения обновляются без создания дубликатов.
 - Страница, изменённая вручную после прошлого запуска, получает `conflict` и не перезаписывается.
-- `--fresh` начинает с чистых mappings; live-run сохраняет прежний state как backup и может создать новые страницы.
-- State schema v1 не мигрируется автоматически и остаётся нетронутой.
-- SIGINT/SIGTERM останавливает постановку новых задач, сохраняет state/report и возвращает `130`/`143`.
-- Каждый запуск создаёт `.states/reports/<run-id>/index.html` и `report.json`: направление, дерево, link graph, циклы, вложения, размеры, деградации, ошибки и side-by-side preview.
+- `--fresh` игнорирует mappings; перед live-run прежний state сохраняется как backup, а destination может получить новые объекты.
+- Удалённые из source объекты автоматически не удаляются из destination.
 
-Коды выхода: `0` — завершено; `1` — partial/ошибка verification; `2` — usage/config/preflight; `130`/`143` — остановка сигналом.
+При SIGINT/SIGTERM новые задачи не ставятся, активные безопасные операции завершаются, state и отчёт сохраняются. Коды выхода: `0` — completed; `1` — partial или verification failure; `2` — usage/config/preflight; `130`/`143` — остановка сигналом.
 
-## Переход на 2.0
+## Отчёты
 
-Обратной совместимости с предварительным CLI и state v1 нет:
+Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json`. Отчёт содержит направление, профили, дерево и link graph, циклы, вложения, размеры, деградации, raw snapshots, ошибки и side-by-side preview страниц; JSON доступен для автоматической обработки.
 
-| Было | Стало |
-| --- | --- |
-| `--target <value>` | `--destination <value>` |
-| `--single-page` | `--scope page` |
-| Один набор env-подключений | Именованные подключения в `ywtc.config.yaml`; `.env` содержит только секреты |
-| State schema v1 | Новый автоматический provider-neutral state v2 |
-
-Старые флаги отклоняются с точной подсказкой. Для переноса создайте новый workspace или сохраните старые state-файлы отдельно и выполните `ywtc init`.
+Итоговый статус запуска: `completed`, `completed-with-warnings`, `partial`, `failed`, `cancelled` или `interrupted`. Для страниц фиксируются `discovered`, `planned`, `skeleton-created`, `complete`, `partial`, `conflict`, `failed` и `blocked`.
 
 ## Разработка
 
@@ -246,27 +268,6 @@ npm run workspace:init
 npm run check
 ```
 
-`npm run check` запускает release/hygiene checks, аудит production-зависимостей (high/critical), TypeScript, Biome, Knip, тесты, сборку, проверку устанавливаемого tarball и строгую OpenSpec-валидацию. Изменения оформляются полным OpenSpec-циклом согласно [`AGENTS.md`](AGENTS.md).
+`npm run check` запускает проверку репозитория и секретов, production audit уровня high/critical, TypeScript, Biome, Knip, тесты, сборку, проверку npm-пакета и строгую OpenSpec-валидацию. Любое изменение проходит полный OpenSpec-цикл из [`AGENTS.md`](AGENTS.md).
 
-## Релизы (для сопровождающего)
-
-Release Please формирует PR из Conventional Commits. После его проверки и merge workflow повторяет полный quality gate, создаёт GitHub Release, публикует npm-пакет с OIDC provenance и обновляет проверенную Homebrew-формулу. Версии `package.json`, lock-файла и changelog вручную не меняются; регулярные релизы не требуют npm OTP или `NPM_TOKEN`.
-
-Если GitHub Release уже создан, а публикация остановилась, повторите существующий тег идемпотентным recovery:
-
-```bash
-gh workflow run release.yml --repo iwonz/ywtc -f release_tag=vX.Y.Z
-```
-
-Recovery проверяет неизменённый tag актуальным trusted validator, не перезаписывает существующую npm-версию и восстанавливает только недостающие artifacts, release notes и Homebrew-формулу.
-
-Одноразовая инициализация нового npm-пакета выполняется так:
-
-- [ ] Установить npm `>=11.15`, выполнить `npm login` и проверить владельца через `npm whoami`.
-- [ ] Опубликовать placeholder с интерактивной 2FA: `npm run release:bootstrap`; не передавать OTP в файлах, командах или CI.
-- [ ] Выполнить `npm trust github @iwonz/ywtc --file release.yml --repo iwonz/ywtc --allow-publish`.
-- [ ] В **Settings → Actions → General → Workflow permissions** включить **Allow GitHub Actions to create and approve pull requests**; возможности каждого job дополнительно ограничены его `permissions`.
-
-Для `@iwonz/ywtc` эта инициализация уже выполнена. Подробности: [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) и [`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
-
-Лицензия: [MIT](LICENSE).
+Release Please рассчитывает SemVer из Conventional Commits. После merge release PR GitHub Actions проверяет релиз, публикует GitHub Release и npm-пакет через OIDC provenance, затем обновляет и проверяет Homebrew-формулу. Версии и changelog вручную не изменяются.

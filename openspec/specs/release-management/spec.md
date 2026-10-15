@@ -93,7 +93,7 @@ Release workflows SHALL use scoped GitHub Actions permissions, npm trusted publi
 - **THEN** only the trusted Homebrew job SHALL receive `contents: write` to commit the generated formula to current `master`
 
 ### Requirement: Initial release bootstrap
-The repository SHALL document and support a one-time interactive owner publication of `@iwonz/ywtc@0.0.0` under the `bootstrap` dist-tag followed by `npm trust github` binding before the first OIDC release.
+The repository SHALL support a one-time interactive owner publication of `@iwonz/ywtc@0.0.0` under the `bootstrap` dist-tag followed by `npm trust github` binding, while the public README SHALL omit this completed setup procedure once trusted publishing is operational.
 
 #### Scenario: Package does not exist
 - **WHEN** the scoped package has not yet been created in npm
@@ -104,8 +104,12 @@ The repository SHALL document and support a one-time interactive owner publicati
 - **THEN** the owner SHALL bind `iwonz/ywtc` and `release.yml` with `--allow-publish` and complete the first OIDC release within the trust-command validity window
 
 #### Scenario: Maintainer follows the public checklist
-- **WHEN** a maintainer prepares the first release
-- **THEN** README SHALL state the npm CLI prerequisite, interactive bootstrap command, exact trusted publisher command, GitHub Actions PR setting and its permission boundary, and the Release Please merge sequence without exposing credentials
+- **WHEN** a maintainer must bootstrap a new package identity before trusted publishing is operational
+- **THEN** they SHALL use the validated release tooling and current npm trusted-publishing documentation for the interactive publish, trust binding, permission boundary, and first release sequence without exposing credentials
+
+#### Scenario: Trusted publishing is operational
+- **WHEN** the npm package has been bootstrapped and repository-bound trusted publishing succeeds
+- **THEN** the README SHALL document only the current automated release model under Development and SHALL NOT retain the one-time bootstrap checklist
 
 ### Requirement: Same-repository Homebrew distribution
 The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywtc` from the published npm archive so macOS operators can use an explicit same-repository tap. Formula processing SHALL follow every successful npm/GitHub publication job, including authorized manual recovery, and use Homebrew's supported Node/npm installation contract.

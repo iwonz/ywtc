@@ -14,6 +14,21 @@ const forbiddenExtensions = new Set(['.key', '.p12', '.pem', '.pfx']);
 const textExtensions = new Set([
   '', '.cjs', '.css', '.env', '.example', '.html', '.js', '.json', '.jsonc', '.md', '.mjs', '.ts', '.yaml', '.yml',
 ]);
+const expectedReadmeHeadings = [
+  'Описание',
+  'Возможности',
+  'Установка',
+  'Минимальный сценарий',
+  'Конфигурация',
+  'Направления и совместимость',
+  'Как получить токены',
+  'Параметры',
+  'Частые примеры',
+  'Файловый экспорт',
+  'State',
+  'Отчёты',
+  'Разработка',
+];
 const findings = [];
 
 function relative(filename) {
@@ -92,6 +107,13 @@ async function scanText(filename) {
 const gitignore = await readFile(path.join(root, '.gitignore'), 'utf8');
 for (const required of ['.env', '.env.*', 'ywtc.config.yaml', '.states/', 'dist/']) {
   if (!gitignore.split(/\r?\n/).includes(required)) add(path.join(root, '.gitignore'), `missing required ignore rule: ${required}`);
+}
+
+const readmeFilename = path.join(root, 'README.md');
+const readme = await readFile(readmeFilename, 'utf8');
+const readmeHeadings = [...readme.matchAll(/^##[ \t]+(.+?)[ \t]*$/gm)].map((match) => match[1]);
+if (JSON.stringify(readmeHeadings) !== JSON.stringify(expectedReadmeHeadings)) {
+  add(readmeFilename, `second-level headings must be exactly: ${expectedReadmeHeadings.join(' → ')}`);
 }
 
 await walk(root);
