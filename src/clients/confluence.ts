@@ -1,10 +1,16 @@
+import {createHash} from 'node:crypto';
+import {createWriteStream} from 'node:fs';
+import {mkdir} from 'node:fs/promises';
+import path from 'node:path';
 import type {Readable} from 'node:stream';
+import {Transform} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
 import FormData from 'form-data';
-import pLimit, {type LimitFunction} from 'p-limit';
-import type {AppConfig, NetworkLimits} from '../config.js';
+import PQueue from 'p-queue';
+import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {HttpRequestError, RetryingHttpClient} from '../http.js';
-import {TokenBucketRateLimiter} from '../rate-limiter.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage, ConfluencePlatformInfo} from '../types.js';
+import {RequestRateLimiter} from '../rate-limiter.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
 
 interface ConfluenceList<T> {
   results: T[];
@@ -23,29 +29,34 @@ function firstResult<T>(payload: T | ConfluenceList<T>): T {
   return payload as T;
 }
 
-type DataCenterConfig = Pick<AppConfig['confluence'], 'baseUrl' | 'token'> & Partial<Pick<AppConfig['confluence'], 'deployment' | 'authType'>>;
+type DataCenterConfig = Pick<ConfluenceConnectionProfile, 'baseUrl' | 'token'> & Partial<Pick<ConfluenceConnectionProfile, 'deployment' | 'authType' | 'name'>>;
+type QueueRunner = <T>(task: () => Promise<T>) => Promise<T>;
 
 export class DataCenterConfluenceClient implements ConfluenceApi {
   private readonly http: RetryingHttpClient;
-  private readonly readLimit: LimitFunction;
-  private readonly writeLimit: LimitFunction;
-  private readonly uploadLimit: LimitFunction;
+  private readonly readLimit: QueueRunner;
+  private readonly writeLimit: QueueRunner;
+  private readonly uploadLimit: QueueRunner;
 
   constructor(
     private readonly config: DataCenterConfig,
     timeoutMs: number,
-    limits: NetworkLimits['confluence'] = {
+    limits: NetworkLimits = {
       readConcurrency: 4,
       writeConcurrency: 2,
+      downloadConcurrency: 2,
       uploadConcurrency: 2,
       requestsPerSecond: 8,
       burst: 10,
     },
   ) {
-    const rateLimiter = new TokenBucketRateLimiter(limits);
-    this.readLimit = pLimit(limits.readConcurrency);
-    this.writeLimit = pLimit(limits.writeConcurrency);
-    this.uploadLimit = pLimit(limits.uploadConcurrency);
+    const rateLimiter = new RequestRateLimiter(limits);
+    const readQueue = new PQueue({concurrency: limits.readConcurrency});
+    const writeQueue = new PQueue({concurrency: limits.writeConcurrency});
+    const uploadQueue = new PQueue({concurrency: limits.uploadConcurrency});
+    this.readLimit = <T>(task: () => Promise<T>) => readQueue.add(task) as Promise<T>;
+    this.writeLimit = <T>(task: () => Promise<T>) => writeQueue.add(task) as Promise<T>;
+    this.uploadLimit = <T>(task: () => Promise<T>) => uploadQueue.add(task) as Promise<T>;
     this.http = new RetryingHttpClient({
       baseURL: config.baseUrl,
       timeoutMs,
@@ -106,7 +117,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const response = await this.http.request<ConfluenceList<ConfluencePage>>({
         method: 'GET',
         url: '/rest/api/content',
-        params: {type: 'page', status: 'current', spaceKey, title, expand: 'space,version', limit: 2},
+        params: {type: 'page', status: 'current', spaceKey, title, expand: 'space,version,ancestors', limit: 2},
       });
       return response.data.results[0];
     });
@@ -120,7 +131,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
     try {
       url = new URL(trimmed);
     } catch {
-      throw new Error('Confluence target must be a numeric page ID or an absolute page URL');
+      throw new Error('Confluence page locator must be a numeric page ID or an absolute page URL');
     }
     const base = new URL(this.config.baseUrl);
     if (url.origin !== base.origin) throw new Error(`Confluence target host must match ${base.origin}`);
@@ -140,7 +151,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       throw new Error(`Confluence target page not found: ${spaceKey}/${title}`);
     }
 
-    throw new Error('Could not extract a Confluence page ID or display URL from --target');
+    throw new Error('Could not extract a Confluence page ID or display URL from --destination/--source');
   }
 
   async createPage(input: {spaceKey: string; parentId: string; title: string; storage: string}): Promise<ConfluencePage> {
@@ -176,7 +187,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
           version: {
             number: current.version.number + 1,
             minorEdit: true,
-            message: 'Migrated from Yandex Wiki',
+            message: 'Transferred by ywtc',
           },
           body: {storage: {value: input.storage, representation: 'storage'}},
         },
@@ -212,7 +223,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         ...(input.contentLength !== undefined ? {knownLength: input.contentLength} : {}),
       });
       form.append('minorEdit', 'true');
-      form.append('comment', 'Migrated from Yandex Wiki');
+      form.append('comment', 'Transferred by ywtc');
       const pageId = encodeURIComponent(input.pageId);
       const url = input.existingAttachmentId
         ? `/rest/api/content/${pageId}/child/attachment/${encodeURIComponent(input.existingAttachmentId)}/data`
@@ -253,6 +264,46 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
     });
   }
 
+  async getDescendants(pageId: string): Promise<ConfluencePage[]> {
+    return this.readLimit(async () => {
+      const results: ConfluencePage[] = [];
+      let start = 0;
+      while (true) {
+        const response = await this.http.request<ConfluenceList<ConfluencePage>>({
+          method: 'GET',
+          url: `/rest/api/content/${encodeURIComponent(pageId)}/descendant/page`,
+          params: {start, limit: 100, expand: 'space,version,ancestors,body.storage,body.view'},
+        });
+        results.push(...response.data.results);
+        const size = response.data.size ?? response.data.results.length;
+        if (!response.data._links?.next || size === 0) break;
+        start += size;
+      }
+      return results;
+    });
+  }
+
+  async downloadAttachment(pageId: string, attachment: ConfluenceAttachment, destination: string): Promise<DownloadedFile> {
+    return this.readLimit(async () => {
+      const link = attachment._links?.download ?? `/download/attachments/${encodeURIComponent(pageId)}/${encodeURIComponent(attachment.title)}`;
+      const url = /^https?:\/\//i.test(link)
+        ? link
+        : link.startsWith('/download/') ? `${this.config.baseUrl}${link}` : new URL(link, `${this.config.baseUrl}/`).toString();
+      const response = await this.http.request<Readable>({method: 'GET', url, responseType: 'stream'});
+      await mkdir(path.dirname(destination), {recursive: true});
+      const hash = createHash('sha256');
+      let size = 0;
+      const meter = new Transform({transform(chunk: Buffer, _encoding, callback) {
+        hash.update(chunk);
+        size += chunk.length;
+        callback(null, chunk);
+      }});
+      await pipeline(response.data, meter, createWriteStream(destination, {mode: 0o600}));
+      const contentType = response.headers['content-type'];
+      return {path: destination, size, sha256: hash.digest('hex'), ...(typeof contentType === 'string' ? {mimeType: contentType} : {})};
+    });
+  }
+
   pageWebUrl(page: ConfluencePage): string {
     if (page._links?.webui) return new URL(page._links.webui, `${this.config.baseUrl}/`).toString();
     return `${this.config.baseUrl}/pages/viewpage.action?pageId=${encodeURIComponent(page.id)}`;
@@ -262,6 +313,3 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
     return error instanceof HttpRequestError && error.status === 404;
   }
 }
-
-/** @deprecated Use DataCenterConfluenceClient or createConfluenceClient. */
-export class ConfluenceClient extends DataCenterConfluenceClient {}

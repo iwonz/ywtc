@@ -139,6 +139,10 @@ export interface ConfluenceAttachment {
   extensions?: {
     fileSize?: number;
   };
+  _links?: {
+    download?: string;
+    webui?: string;
+  };
 }
 
 export interface ConfluencePlatformInfo {
@@ -146,79 +150,6 @@ export interface ConfluencePlatformInfo {
   product: string;
   version?: string;
   api: string;
-}
-
-export interface PagePlan {
-  source: YandexPageDetails;
-  parentSourceId?: number;
-  depth: number;
-  destinationTitle: string;
-  destinationId?: string;
-}
-
-export interface AttachmentPlan {
-  source: YandexAttachment;
-  destinationName: string;
-}
-
-export interface PageState {
-  sourceId: number;
-  sourceSlug: string;
-  sourceTitle: string;
-  parentSourceId?: number;
-  destinationId: string;
-  destinationTitle: string;
-  status: 'created' | 'complete' | 'failed';
-  lastError?: string;
-  attachments: Record<string, AttachmentState>;
-  updatedAt: string;
-}
-
-export interface AttachmentState {
-  sourceId: number;
-  sourceName: string;
-  destinationId?: string;
-  destinationName: string;
-  sha256?: string;
-  size?: number;
-  status: 'complete' | 'failed';
-  lastError?: string;
-  updatedAt: string;
-}
-
-export interface MigrationState {
-  version: 1;
-  sourceRootSlug: string;
-  targetPageId: string;
-  spaceKey: string;
-  startedAt: string;
-  updatedAt: string;
-  pages: Record<string, PageState>;
-}
-
-export interface MigrationPlanSummary {
-  pages: number;
-  descendants: number;
-  pagesToCreate: number;
-  pagesToUpdate: number;
-  attachments: number;
-  attachmentBytes: number;
-  dynamicTables: number;
-  dynamicTableRows: number;
-  renamedPages: number;
-  warnings: number;
-  links: {
-    internal: number;
-    external: number;
-    attachments: number;
-    anchors: number;
-  };
-  images: {
-    attached: number;
-    external: number;
-  };
-  staticTables: number;
-  codeBlocks: number;
 }
 
 export interface YandexWikiApi {
@@ -229,6 +160,9 @@ export interface YandexWikiApi {
   getPageGrids(pageId: number): Promise<YandexGridSummary[]>;
   getGrid(id: string): Promise<YandexGrid>;
   download(pageId: number, attachmentId: number, destination: string): Promise<DownloadedFile>;
+  createPage(input: {slug: string; title: string; content: string}): Promise<YandexPageDetails>;
+  updatePage(input: {id: number; title: string; content: string}): Promise<YandexPageDetails>;
+  uploadAttachment(input: {pageId: number; filename: string; path: string; size: number}): Promise<YandexAttachment>;
 }
 
 export interface ConfluenceApi {
@@ -257,5 +191,7 @@ export interface ConfluenceApi {
     existingAttachmentId?: string;
   }): Promise<ConfluenceAttachment>;
   listAttachments(pageId: string): Promise<ConfluenceAttachment[]>;
+  getDescendants(pageId: string): Promise<ConfluencePage[]>;
+  downloadAttachment(pageId: string, attachment: ConfluenceAttachment, destination: string): Promise<DownloadedFile>;
   pageWebUrl(page: ConfluencePage): string;
 }

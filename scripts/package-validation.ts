@@ -44,14 +44,21 @@ await execFileAsync(executable, ['init', '--workdir', workspace], {encoding: 'ut
 await Promise.all([
   stat(path.join(workspace, '.ywtc-workspace.json')),
   stat(path.join(workspace, '.env')),
+  stat(path.join(workspace, 'ywtc.config.yaml')),
   stat(path.join(workspace, '.states')),
+  stat(path.join(workspace, '.states', 'cache')),
+  stat(path.join(workspace, '.states', 'reports')),
 ]);
 try {
-  await execFileAsync(executable, ['migrate', '--workdir', workspace, '--source', 'docs', '--target', '123'], {encoding: 'utf8'});
+  await execFileAsync(executable, [
+    'migrate', '--workdir', workspace,
+    '--source-profile', 'yandex', '--source', 'docs',
+    '--destination-profile', 'confluence', '--destination', '123',
+  ], {encoding: 'utf8'});
   throw new Error('Migration unexpectedly accepted an unconfigured workspace');
 } catch (error) {
   const stderr = (error as {stderr?: string}).stderr ?? '';
-  if (!stderr.includes(path.join(workspace, '.env')) || !stderr.includes('YANDEX_WIKI_TOKEN')) {
+  if (!stderr.includes(path.join(workspace, 'ywtc.config.yaml')) || !stderr.includes('connections.yandex.organization.id')) {
     throw new Error(`Unconfigured workspace error is not actionable: ${stderr}`);
   }
 }

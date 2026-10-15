@@ -1,10 +1,16 @@
+import {createHash} from 'node:crypto';
+import {createWriteStream} from 'node:fs';
+import {mkdir} from 'node:fs/promises';
+import path from 'node:path';
 import type {Readable} from 'node:stream';
+import {Transform} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
 import FormData from 'form-data';
-import pLimit, {type LimitFunction} from 'p-limit';
-import type {AppConfig, NetworkLimits} from '../config.js';
+import PQueue from 'p-queue';
+import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {RetryingHttpClient} from '../http.js';
-import {TokenBucketRateLimiter} from '../rate-limiter.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage, ConfluencePlatformInfo} from '../types.js';
+import {RequestRateLimiter} from '../rate-limiter.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
 
 interface CloudList<T> {
   results: T[];
@@ -51,23 +57,26 @@ function firstAttachment(payload: ConfluenceAttachment | CloudList<ConfluenceAtt
 export class CloudConfluenceClient implements ConfluenceApi {
   private readonly baseUrl: string;
   private readonly http: RetryingHttpClient;
-  private readonly readLimit: LimitFunction;
-  private readonly writeLimit: LimitFunction;
-  private readonly uploadLimit: LimitFunction;
+  private readonly readLimit: <T>(task: () => Promise<T>) => Promise<T>;
+  private readonly writeLimit: <T>(task: () => Promise<T>) => Promise<T>;
+  private readonly uploadLimit: <T>(task: () => Promise<T>) => Promise<T>;
   private readonly spacesByKey = new Map<string, CloudSpace>();
   private readonly spacesById = new Map<string, CloudSpace>();
 
   constructor(
-    config: AppConfig['confluence'],
+    config: ConfluenceConnectionProfile,
     timeoutMs: number,
-    limits: NetworkLimits['confluence'],
+    limits: NetworkLimits,
   ) {
     if (!config.email) throw new Error('CONFLUENCE_EMAIL is required for Confluence Cloud');
     this.baseUrl = cloudRoot(config.baseUrl);
-    const rateLimiter = new TokenBucketRateLimiter(limits);
-    this.readLimit = pLimit(limits.readConcurrency);
-    this.writeLimit = pLimit(limits.writeConcurrency);
-    this.uploadLimit = pLimit(limits.uploadConcurrency);
+    const rateLimiter = new RequestRateLimiter(limits);
+    const readQueue = new PQueue({concurrency: limits.readConcurrency});
+    const writeQueue = new PQueue({concurrency: limits.writeConcurrency});
+    const uploadQueue = new PQueue({concurrency: limits.uploadConcurrency});
+    this.readLimit = <T>(task: () => Promise<T>) => readQueue.add(task) as Promise<T>;
+    this.writeLimit = <T>(task: () => Promise<T>) => writeQueue.add(task) as Promise<T>;
+    this.uploadLimit = <T>(task: () => Promise<T>) => uploadQueue.add(task) as Promise<T>;
     this.http = new RetryingHttpClient({
       baseURL: this.baseUrl,
       timeoutMs,
@@ -160,7 +169,7 @@ export class CloudConfluenceClient implements ConfluenceApi {
     try {
       url = new URL(trimmed);
     } catch {
-      throw new Error('Confluence Cloud target must be a numeric page ID or an absolute page URL');
+      throw new Error('Confluence Cloud page locator must be a numeric page ID or an absolute page URL');
     }
     const base = new URL(this.baseUrl);
     if (url.origin !== base.origin) throw new Error(`Confluence target host must match ${base.origin}`);
@@ -168,7 +177,7 @@ export class CloudConfluenceClient implements ConfluenceApi {
     if (queryId && /^\d+$/.test(queryId)) return this.getPage(queryId);
     const match = url.pathname.match(/\/(?:pages|content)\/(\d+)(?:\/|$)/);
     if (match?.[1]) return this.getPage(match[1]);
-    throw new Error('Could not extract a Confluence Cloud page ID from --target');
+    throw new Error('Could not extract a Confluence Cloud page ID from --destination/--source');
   }
 
   async createPage(input: {spaceKey: string; parentId: string; title: string; storage: string}): Promise<ConfluencePage> {
@@ -192,7 +201,7 @@ export class CloudConfluenceClient implements ConfluenceApi {
       data: {
         id: input.pageId, status: 'current', title: input.title,
         body: {representation: 'storage', value: input.storage},
-        version: {number: versionNumber + 1, message: 'Migrated from Yandex Wiki'},
+        version: {number: versionNumber + 1, message: 'Transferred by ywtc'},
       },
     }));
     return this.normalizePage(response.data);
@@ -243,6 +252,44 @@ export class CloudConfluenceClient implements ConfluenceApi {
       start += size;
     }
     return results;
+  }
+
+  async getDescendants(pageId: string): Promise<ConfluencePage[]> {
+    const results: ConfluencePage[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await this.readLimit(() => this.http.request<CloudList<CloudPage>>({
+        method: 'GET',
+        url: `/api/v2/pages/${encodeURIComponent(pageId)}/descendants`,
+        params: {limit: 100, depth: 'all', ...(cursor ? {cursor} : {})},
+      }));
+      for (const page of response.data.results) results.push(await this.normalizePage(page));
+      const next = response.data._links?.next;
+      cursor = next ? new URL(next, `${this.baseUrl}/`).searchParams.get('cursor') ?? undefined : undefined;
+    } while (cursor);
+    return results;
+  }
+
+  async downloadAttachment(pageId: string, attachment: ConfluenceAttachment, destination: string): Promise<DownloadedFile> {
+    return this.readLimit(async () => {
+      const link = attachment._links?.download ?? `/download/attachments/${encodeURIComponent(pageId)}/${encodeURIComponent(attachment.title)}`;
+      const base = new URL(this.baseUrl);
+      const url = /^https?:\/\//i.test(link)
+        ? link
+        : link.startsWith('/download/') ? `${this.baseUrl}${link}` : new URL(link, base.origin).toString();
+      const response = await this.http.request<Readable>({method: 'GET', url, responseType: 'stream'});
+      await mkdir(path.dirname(destination), {recursive: true});
+      const hash = createHash('sha256');
+      let size = 0;
+      const meter = new Transform({transform(chunk: Buffer, _encoding, callback) {
+        hash.update(chunk);
+        size += chunk.length;
+        callback(null, chunk);
+      }});
+      await pipeline(response.data, meter, createWriteStream(destination, {mode: 0o600}));
+      const contentType = response.headers['content-type'];
+      return {path: destination, size, sha256: hash.digest('hex'), ...(typeof contentType === 'string' ? {mimeType: contentType} : {})};
+    });
   }
 
   pageWebUrl(page: ConfluencePage): string {

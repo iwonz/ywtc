@@ -1,12 +1,12 @@
 import axios, {type AxiosError, type AxiosInstance, type AxiosRequestConfig, type AxiosResponse} from 'axios';
-import type {TokenBucketRateLimiter} from './rate-limiter.js';
+import type {RequestRateLimiter} from './rate-limiter.js';
 
 export interface RetryingHttpClientOptions {
   baseURL?: string;
   timeoutMs: number;
   headers?: Record<string, string>;
   maxRetries?: number;
-  rateLimiter?: TokenBucketRateLimiter;
+  rateLimiter?: RequestRateLimiter;
 }
 
 export type RetryingRequestConfig = AxiosRequestConfig & {
@@ -70,7 +70,7 @@ function safeErrorMessage(error: AxiosError): string {
 export class RetryingHttpClient {
   private readonly client: AxiosInstance;
   private readonly maxRetries: number;
-  private readonly rateLimiter: TokenBucketRateLimiter | undefined;
+  private readonly rateLimiter: RequestRateLimiter | undefined;
 
   constructor(options: RetryingHttpClientOptions) {
     this.client = axios.create({

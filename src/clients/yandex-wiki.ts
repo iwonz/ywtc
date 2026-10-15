@@ -1,14 +1,15 @@
 import {createHash} from 'node:crypto';
 import {createWriteStream} from 'node:fs';
+import {open} from 'node:fs/promises';
 import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {Transform, type Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
-import pLimit, {type LimitFunction} from 'p-limit';
+import PQueue from 'p-queue';
 import {z} from 'zod';
-import type {AppConfig, NetworkLimits} from '../config.js';
+import type {NetworkLimits, YandexConnectionProfile} from '../config.js';
 import {RetryingHttpClient} from '../http.js';
-import {TokenBucketRateLimiter} from '../rate-limiter.js';
+import {RequestRateLimiter} from '../rate-limiter.js';
 import type {
   DownloadedFile,
   YandexAttachment,
@@ -85,56 +86,62 @@ function parseResponse<T>(schema: z.ZodType<T>, payload: unknown, operation: str
 
 export class YandexWikiClient implements YandexWikiApi {
   private readonly authenticated: RetryingHttpClient;
-  private readonly apiLimit: LimitFunction;
-  private readonly downloadLimit: LimitFunction;
+  private readonly readQueue: PQueue;
+  private readonly writeQueue: PQueue;
+  private readonly downloadQueue: PQueue;
+  private readonly uploadQueue: PQueue;
 
   constructor(
-    config: AppConfig['yandex'],
+    public readonly config: YandexConnectionProfile,
     timeoutMs: number,
-    limits: NetworkLimits['yandex'] = {
-      apiConcurrency: 4,
+    limits: NetworkLimits = {
+      readConcurrency: 4,
+      writeConcurrency: 2,
       downloadConcurrency: 2,
+      uploadConcurrency: 2,
       requestsPerSecond: 8,
       burst: 8,
     },
   ) {
     const authorization = config.authType === 'oauth' ? `OAuth ${config.token}` : `Bearer ${config.token}`;
-    const orgHeader = config.orgType === 'yandex360' ? 'X-Org-Id' : 'X-Cloud-Org-Id';
-    const rateLimiter = new TokenBucketRateLimiter(limits);
-    this.apiLimit = pLimit(limits.apiConcurrency);
-    this.downloadLimit = pLimit(limits.downloadConcurrency);
+    const orgHeader = config.organization.type === 'yandex360' ? 'X-Org-Id' : 'X-Cloud-Org-Id';
+    const rateLimiter = new RequestRateLimiter(limits);
+    this.readQueue = new PQueue({concurrency: limits.readConcurrency});
+    this.writeQueue = new PQueue({concurrency: limits.writeConcurrency});
+    this.downloadQueue = new PQueue({concurrency: limits.downloadConcurrency});
+    this.uploadQueue = new PQueue({concurrency: limits.uploadConcurrency});
     this.authenticated = new RetryingHttpClient({
       baseURL: config.apiUrl,
       timeoutMs,
       rateLimiter,
       headers: {
         Authorization: authorization,
-        [orgHeader]: config.orgId,
+        [orgHeader]: config.organization.id,
         Accept: 'application/json',
       },
     });
   }
 
   async getPageBySlug(slug: string): Promise<YandexPageDetails> {
-    return this.apiLimit(async () => {
+    return this.readQueue.add(async () => {
       const response = await this.authenticated.request<YandexPageDetails>({
         method: 'GET',
         url: '/pages',
         params: {slug, fields: 'breadcrumbs,redirect,attributes,content'},
       });
       return parseResponse(pageSchema, response.data, 'GET /pages by slug') as YandexPageDetails;
-    });
+    }) as Promise<YandexPageDetails>;
   }
 
   async getPageById(id: number): Promise<YandexPageDetails> {
-    return this.apiLimit(async () => {
+    return this.readQueue.add(async () => {
       const response = await this.authenticated.request<YandexPageDetails>({
         method: 'GET',
         url: `/pages/${id}`,
         params: {fields: 'breadcrumbs,redirect,attributes,content'},
       });
       return parseResponse(pageSchema, response.data, `GET /pages/${id}`) as YandexPageDetails;
-    });
+    }) as Promise<YandexPageDetails>;
   }
 
   private async paginate<T>(url: string, schema: z.ZodType<unknown>, params: Record<string, unknown> = {}): Promise<T[]> {
@@ -158,33 +165,33 @@ export class YandexWikiClient implements YandexWikiApi {
   }
 
   getDescendants(id: number): Promise<YandexPageIdentity[]> {
-    return this.apiLimit(() => this.paginate<YandexPageIdentity>(`/pages/${id}/descendants`, pageIdentitySchema, {
+    return this.readQueue.add(() => this.paginate<YandexPageIdentity>(`/pages/${id}/descendants`, pageIdentitySchema, {
       actuality: 'actual',
       include_self: false,
-    }));
+    })) as Promise<YandexPageIdentity[]>;
   }
 
   getAttachments(pageId: number): Promise<YandexAttachment[]> {
-    return this.apiLimit(() => this.paginate<YandexAttachment>(`/pages/${pageId}/attachments`, attachmentSchema, {order_by: 'name'}));
+    return this.readQueue.add(() => this.paginate<YandexAttachment>(`/pages/${pageId}/attachments`, attachmentSchema, {order_by: 'name'})) as Promise<YandexAttachment[]>;
   }
 
   getPageGrids(pageId: number): Promise<YandexGridSummary[]> {
-    return this.apiLimit(() => this.paginate<YandexGridSummary>(`/pages/${pageId}/grids`, gridSummarySchema, {order_by: 'created_at'}));
+    return this.readQueue.add(() => this.paginate<YandexGridSummary>(`/pages/${pageId}/grids`, gridSummarySchema, {order_by: 'created_at'})) as Promise<YandexGridSummary[]>;
   }
 
   async getGrid(id: string): Promise<YandexGrid> {
-    return this.apiLimit(async () => {
+    return this.readQueue.add(async () => {
       const response = await this.authenticated.request<YandexGrid>({
         method: 'GET',
         url: `/grids/${encodeURIComponent(id)}`,
         params: {fields: 'attributes'},
       });
       return parseResponse(gridSchema, response.data, `GET /grids/${id}`) as YandexGrid;
-    });
+    }) as Promise<YandexGrid>;
   }
 
   async download(pageId: number, attachmentId: number, destination: string): Promise<DownloadedFile> {
-    return this.downloadLimit(async () => {
+    return this.downloadQueue.add(async () => {
       const response = await this.authenticated.request<Readable>({
         method: 'GET',
         url: `/pages/${pageId}/attachments/${attachmentId}/download`,
@@ -209,6 +216,72 @@ export class YandexWikiClient implements YandexWikiApi {
         sha256: hash.digest('hex'),
         ...(typeof contentType === 'string' ? {mimeType: contentType} : {}),
       };
-    });
+    }) as Promise<DownloadedFile>;
+  }
+
+  async createPage(input: {slug: string; title: string; content: string}): Promise<YandexPageDetails> {
+    return this.writeQueue.add(async () => {
+      const response = await this.authenticated.request<YandexPageDetails>({
+        method: 'POST',
+        url: '/pages',
+        params: {is_silent: true, fields: 'breadcrumbs,redirect,attributes,content'},
+        headers: {'Content-Type': 'application/json'},
+        data: {slug: input.slug, title: input.title, content: input.content, access_policy: {access_type: 'inherited'}},
+        retryMode: 'never',
+      });
+      return parseResponse(pageSchema, response.data, 'POST /pages') as YandexPageDetails;
+    }) as Promise<YandexPageDetails>;
+  }
+
+  async updatePage(input: {id: number; title: string; content: string}): Promise<YandexPageDetails> {
+    return this.writeQueue.add(async () => {
+      const response = await this.authenticated.request<YandexPageDetails>({
+        method: 'POST',
+        url: `/pages/${input.id}`,
+        params: {allow_merge: false, is_silent: true, fields: 'breadcrumbs,redirect,attributes,content'},
+        headers: {'Content-Type': 'application/json'},
+        data: {title: input.title, content: input.content},
+        retryMode: 'never',
+      });
+      return parseResponse(pageSchema, response.data, `POST /pages/${input.id}`) as YandexPageDetails;
+    }) as Promise<YandexPageDetails>;
+  }
+
+  async uploadAttachment(input: {pageId: number; filename: string; path: string; size: number}): Promise<YandexAttachment> {
+    return this.uploadQueue.add(async () => {
+      const session = await this.authenticated.request<{session_id: string}>({
+        method: 'POST', url: '/upload_sessions', headers: {'Content-Type': 'application/json'},
+        data: {file_name: input.filename, file_size: input.size}, retryMode: 'never',
+      });
+      if (!session.data.session_id) throw new Error('Yandex Wiki upload session response is missing session_id');
+      const handle = await open(input.path, 'r');
+      try {
+        const chunkSize = 5 * 1_024 * 1_024;
+        let partNumber = 1;
+        for await (const chunk of handle.createReadStream({highWaterMark: chunkSize})) {
+          await this.authenticated.request({
+            method: 'PUT',
+            url: `/upload_sessions/${encodeURIComponent(session.data.session_id)}/upload_part`,
+            params: {part_number: partNumber},
+            headers: {'Content-Type': 'application/octet-stream'},
+            data: chunk,
+            retryMode: 'always',
+            maxBodyLength: chunkSize,
+          });
+          partNumber += 1;
+        }
+      } finally {
+        await handle.close();
+      }
+      await this.authenticated.request({
+        method: 'POST', url: `/upload_sessions/${encodeURIComponent(session.data.session_id)}/finish`, retryMode: 'never',
+      });
+      const attached = await this.authenticated.request<{results: unknown[]}>({
+        method: 'POST', url: `/pages/${input.pageId}/attachments`, headers: {'Content-Type': 'application/json'},
+        data: {upload_sessions: [session.data.session_id]}, retryMode: 'never',
+      });
+      const attachment = attached.data.results?.[0];
+      return parseResponse(attachmentSchema, attachment, `POST /pages/${input.pageId}/attachments`) as YandexAttachment;
+    }) as Promise<YandexAttachment>;
   }
 }

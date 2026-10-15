@@ -2,43 +2,57 @@
 
 ## Purpose
 Provide an organization-agnostic, resumable migration library and CLI for moving accessible Yandex Wiki subtrees into operator-selected Confluence Data Center instances without embedding migration-specific data or credentials.
+
 ## Requirements
+
 ### Requirement: CLI configuration and preflight
-The system SHALL expose migration through `ywtc migrate`, accept a source Wiki slug or URL and a target Confluence page ID or supported URL, validate the workdir configuration and supported deployment/authentication pair, and complete read-only capability preflight checks before creating destination content.
+The system SHALL expose transfer through `ywtc migrate`, accept `--source` and `--destination`, resolve provider profiles or a filesystem format, validate option combinations, and complete required read-only discovery and capability checks before destination mutation.
 
 #### Scenario: Valid dry-run
-- **WHEN** the operator supplies valid credentials, source, target, and `--dry-run`
-- **THEN** the system SHALL discover and analyze the selected scope without issuing Confluence mutation requests
+- **WHEN** the operator supplies valid endpoints and `--dry-run`
+- **THEN** the system SHALL discover, normalize, render, and verify the plan without issuing remote mutation requests or replacing filesystem destinations
+
+#### Scenario: Invalid or legacy invocation
+- **WHEN** configuration, locators, profiles, option combinations, `--target`, `--single-page`, or direct invocation without `migrate` is supplied
+- **THEN** the system SHALL exit before mutation with redacted actionable guidance for the current command and options
 
 #### Scenario: Invalid configuration
-- **WHEN** a required credential, organization identifier, URL, deployment, authentication type, source, or target is invalid
+- **WHEN** a required credential, organization identifier, profile URL, deployment, authentication type, source, destination, scope, or format is invalid
 - **THEN** the system SHALL exit non-zero before vendor API mutations, identify the invalid fields and corrective action, and SHALL NOT reveal secrets
 
 #### Scenario: Legacy direct invocation
-- **WHEN** source or target flags are passed without the `migrate` subcommand
-- **THEN** the system SHALL reject the invocation with v2 command guidance
+- **WHEN** source or destination flags are passed without the `migrate` subcommand
+- **THEN** the system SHALL reject the invocation with the current v2 command guidance
 
 ### Requirement: Hierarchical page migration
-The system SHALL create the source root below the selected target and preserve the accessible parent-child hierarchy for all migrated descendants.
+The system SHALL create the source root below the selected remote destination, preserve a selected source parent when available, and attach a selected linked page without a selected parent directly below the migrated root.
+
+#### Scenario: Mixed structural and linked pages
+- **WHEN** selected pages contain descendants and links to pages whose source parent is not selected
+- **THEN** structural descendants SHALL retain their selected parent and linked orphans SHALL become children of the migrated root
 
 #### Scenario: Nested subtree
-- **WHEN** a source section contains multiple page levels
-- **THEN** every migrated page SHALL have the corresponding migrated parent in Confluence
+- **WHEN** a selected subtree contains multiple page levels
+- **THEN** every transferred page SHALL retain its corresponding selected parent under the destination root
 
 ### Requirement: Content and resource fidelity
-The system SHALL convert current YFM content to valid Confluence storage format and migrate downloadable attachments, embedded Wiki images, internal links, tables, and static snapshots of dynamic grids.
+The system SHALL preserve supported headings, paragraphs, lists, quotes, code, tables, grids, notes, cuts, tabs, links, anchors, images, and streamed attachments through the closest safe destination representation.
 
-#### Scenario: Internal links and attachments
-- **WHEN** a page references another page in the selected subtree and a downloadable attachment
-- **THEN** the final Confluence body SHALL reference the migrated page and uploaded attachment rather than the original internal resource
-
-#### Scenario: Legacy inline formatting and implicit links
-- **WHEN** source content contains a bare HTTP(S) URL, legacy Wiki text color, checklist item, explicit anchor, ordered-list start, or image dimensions
-- **THEN** the final Confluence body SHALL use the closest native clickable or formatted Storage Format representation and SHALL NOT expose supported markup tokens as literal text
+#### Scenario: Internal references and resources
+- **WHEN** a page references another selected page, anchor, image, or downloadable attachment
+- **THEN** the rendered destination SHALL use the resolved destination page, anchor, and resource location rather than a stale source-internal reference
 
 #### Scenario: Unsupported rich content
-- **WHEN** a YFM construct has no standard Confluence equivalent
-- **THEN** the system SHALL preserve a readable static or source-text fallback and record a degradation warning
+- **WHEN** a construct cannot be represented natively
+- **THEN** the system SHALL provide a readable fallback, retain raw source for that page, and record the degradation
+
+#### Scenario: Internal links and attachments
+- **WHEN** a page references another selected page and a downloadable attachment
+- **THEN** the final body SHALL reference the transferred page and copied attachment rather than a stale source-internal resource
+
+#### Scenario: Legacy inline formatting and implicit links
+- **WHEN** source content contains a bare HTTP(S) URL, vendor text color, checklist item, explicit anchor, ordered-list start, or image dimensions
+- **THEN** the final destination SHALL use the closest safe clickable or formatted representation and SHALL NOT expose supported markup tokens as literal text
 
 ### Requirement: Safe conflicts and reruns
 The system SHALL use stable title suffixes for collisions, SHALL automatically select isolated resumable state under the selected workdir's `.states/` for each canonical source-target pair unless explicitly overridden, and SHALL persist enough state to resume or rerun without duplicating previously mapped content.
@@ -80,15 +94,15 @@ The system SHALL use stable title suffixes for collisions, SHALL automatically s
 - **THEN** the system SHALL exit before destination mutations and identify the affected path plus safe recovery actions without revealing credentials
 
 ### Requirement: Reliability and auditability
-The system SHALL apply bounded retries to transient API failures, atomically persist state after mutations, verify destination objects, and produce a per-run HTML and JSON report bundle.
-
-#### Scenario: Transient API error
-- **WHEN** an API returns 429, 5xx, or a retriable network error
-- **THEN** the system SHALL retry within configured bounds and respect Retry-After when supplied
+The system SHALL apply bounded retries, stream large resources, atomically checkpoint every successful mutation, verify destination objects, and produce provider-neutral HTML and JSON reports.
 
 #### Scenario: Partial failure
-- **WHEN** one page or resource cannot be migrated
-- **THEN** the system SHALL record the failure in report metadata and the HTML status interface, continue independent work where safe, and exit non-zero
+- **WHEN** one page, resource, render, or verification step fails
+- **THEN** independent work MAY continue, the object and run SHALL be marked partial or failed, and the process SHALL exit non-zero with resume guidance
+
+#### Scenario: Transient API error
+- **WHEN** an API returns 429, 5xx, Retry-After, or a retriable network error
+- **THEN** the system SHALL retry within configured bounds and respect the service cooldown before safe retries continue
 
 ### Requirement: Configurable network guardrails
 The system SHALL enforce independent Yandex Wiki and Confluence request-rate buckets and operation-specific concurrency limits configured through environment variables.
@@ -102,15 +116,19 @@ The system SHALL enforce independent Yandex Wiki and Confluence request-rate buc
 - **THEN** all requests to that service SHALL pause for Retry-After when supplied, with a minimum cooldown, before safe retries continue
 
 ### Requirement: Observable migration progress
-The CLI SHALL show a pre-mutation transfer plan and continuously report overall completion with the specific page or attachment processed.
+The CLI SHALL show live discovery totals, an exact post-discovery transfer plan, object/byte progress, and one consistent terminal summary for TTY and non-TTY environments.
+
+#### Scenario: Discovery and completion
+- **WHEN** a transfer runs
+- **THEN** output SHALL identify the active phase and object, selected pages and graph edges, content/resources completed or failed, final status, result paths or URLs, state/report paths, and any required next action
 
 #### Scenario: Preflight completes
-- **WHEN** the source tree and resources have been inspected
-- **THEN** the CLI and report SHALL include measurable page, attachment, byte, link, image, table, grid-row, code-block, rename, and warning counts
+- **WHEN** the source graph and resources have been inspected
+- **THEN** the CLI and report SHALL include measurable page, attachment, byte, link, image, table, grid-row, code-block, degradation, and warning counts
 
 #### Scenario: Migration is running
-- **WHEN** a page skeleton, attachment, or final page body completes, fails, is reused, or is skipped
-- **THEN** the CLI SHALL update the overall percentage and identify the affected object and outcome
+- **WHEN** a page skeleton, resource, or final page body completes, fails, conflicts, is reused, or is skipped
+- **THEN** the CLI SHALL update overall progress and identify the affected object and outcome
 
 ### Requirement: Non-destructive behavior
 The system MUST NOT delete destination content, adopt unrelated pages implicitly, or store credentials in state and reports.
@@ -127,50 +145,66 @@ The repository and package SHALL contain only organization-neutral source, examp
 - **THEN** it SHALL permit ignored local workspaces but fail when runtime data is tracked, required ignore rules are absent, or publishable files contain private keys, filled credential variables, literal authorization credentials, non-example emails, internal domains, or absolute user-home paths
 
 ### Requirement: Detailed local migration report
-The system SHALL create one ignored report directory per run containing a self-contained HTML report and downloadable JSON metadata, without credentials or authorization headers, and SHALL keep report placement stable inside the current runtime state root.
+The system SHALL create a self-contained provider-neutral HTML report and downloadable JSON metadata for every run.
+
+#### Scenario: Graph and comparison inspection
+- **WHEN** an operator opens the report
+- **THEN** it SHALL show source/destination profiles and direction, hierarchy and graph edges, cycles, inaccessible/broken links, per-page previews, resources, sizes, degradations, snapshots, conflicts, errors, and output locations without secrets or embedded JSON page bodies
 
 #### Scenario: Report bundle is written
-- **WHEN** a dry-run or live migration reaches report generation
-- **THEN** the system SHALL write `index.html` and `report.json` under a unique directory in `.states/reports` for automatic state or the explicit state file's sibling `reports` directory
+- **WHEN** a dry-run or live transfer reaches report generation
+- **THEN** the system SHALL write `index.html` and `report.json` under a unique ignored report directory associated with the selected state
 
 #### Scenario: Migration hierarchy is inspected
 - **WHEN** an operator opens the HTML report
-- **THEN** the report SHALL show nested source pages with titles, statuses, source and destination references, resource counts and sizes, link/image/table/code metrics, warnings, errors, and stale destination mappings where applicable
+- **THEN** the report SHALL show the projected page tree with titles, statuses, source/destination references, resource sizes/counts, link metrics, warnings, conflicts, failures, and stale mappings where applicable
 
 #### Scenario: A page comparison is opened
 - **WHEN** an operator selects a page in the HTML report
-- **THEN** the report SHALL show sandboxed source and destination content previews side by side and identify whether the destination came from Confluence rendered view or a local dry-run fallback
+- **THEN** the report SHALL show sandboxed source and destination previews side by side and identify preview provenance and degradation status
 
 #### Scenario: Metadata is downloaded
 - **WHEN** an operator activates the JSON download control
-- **THEN** the browser SHALL download the metadata for that report without embedding source or destination page bodies in the JSON
+- **THEN** the browser SHALL download metadata for that run without embedding complete source or destination page bodies
 
 #### Scenario: State selection is audited
 - **WHEN** a report is generated
-- **THEN** its HTML and JSON metadata SHALL identify the credential-free state ID, selected path, selection mode, current load source, and fresh backup path when applicable
+- **THEN** its HTML and JSON SHALL identify the credential-free state ID, selected path, selection mode, load source, and fresh backup path when applicable
 
 #### Scenario: Runtime privacy is preserved
-- **WHEN** reports are generated with the default state location or package files are enumerated
-- **THEN** report folders SHALL remain ignored by Git and excluded from package publication
+- **WHEN** reports are generated or package files are enumerated
+- **THEN** report directories SHALL remain ignored by Git, excluded from package publication, and free of credentials and authorization headers
 
 ### Requirement: Selectable migration scope
-The system SHALL migrate the complete accessible subtree by default and SHALL provide an explicit single-page mode that selects only the exact source page while preserving all supported content and resources belonging to that page.
+The system SHALL expose `--scope page|subtree|linked`, default to `subtree`, and freeze the selected set before destination mutation.
+
+#### Scenario: Page scope
+- **WHEN** `--scope page` is selected
+- **THEN** only the resolved root page and its resources SHALL be transferred
+
+#### Scenario: Subtree scope
+- **WHEN** scope is omitted or `--scope subtree` is selected
+- **THEN** the root and all accessible structural descendants SHALL be transferred
+
+#### Scenario: Linked scope
+- **WHEN** `--scope linked` is selected
+- **THEN** the root and every accessible same-boundary page transitively referenced from selected page content or page-reference/include constructs SHALL be transferred without a depth limit
 
 #### Scenario: Default subtree scope
-- **WHEN** the operator starts a migration without the single-page option
-- **THEN** the system SHALL discover and migrate the accessible source root and its descendants with their hierarchy preserved
+- **WHEN** the operator starts a transfer without `--scope`
+- **THEN** the system SHALL discover and transfer the accessible source root and structural descendants with their hierarchy preserved
 
 #### Scenario: Single-page scope
-- **WHEN** the operator supplies `--single-page`
-- **THEN** the system SHALL migrate only the exact source page, SHALL report one selected page and zero descendants, and SHALL NOT request or create descendant pages
+- **WHEN** the operator supplies `--scope page`
+- **THEN** the system SHALL transfer only the exact source page and its resources and SHALL NOT request or create descendant pages
 
 #### Scenario: Link leaves the selected scope
-- **WHEN** the selected page links to an unselected descendant or any other Wiki page outside the active scope
-- **THEN** the system SHALL keep that link pointing to Yandex Wiki rather than rewriting it as a migrated Confluence page link
+- **WHEN** a selected page links to an accessible page outside `page` or `subtree` scope
+- **THEN** the system SHALL keep or safely normalize that link as an external source reference rather than rewriting it to a nonexistent destination page
 
 #### Scenario: Single-page rerun with shared state
-- **WHEN** single-page mode reuses state that contains mappings for the source root and prior descendants
-- **THEN** the system SHALL resume or update only the selected root mapping and SHALL NOT mark, update, move, or delete the unselected descendant mappings or destination pages
+- **WHEN** page scope reuses state containing mappings for the source root and prior descendants
+- **THEN** the system SHALL resume or update only the selected root mapping and SHALL NOT mark, update, move, or delete unselected mappings or destination pages
 
 ### Requirement: Observable state selection
 The system SHALL explain automatic, explicit, existing, new, and fresh state behavior in CLI output and per-run report metadata.
@@ -212,3 +246,51 @@ The Yandex client SHALL support Public API v1 with OAuth or IAM and `X-Org-Id` o
 #### Scenario: Required structure missing
 - **WHEN** a page, descendant, resource, or Grid response lacks a required structure
 - **THEN** the client SHALL report the endpoint and schema problem without logging authorization data
+
+### Requirement: Provider-neutral transfer directions
+The system SHALL transfer current accessible pages and resources for Yandex Wiki to Confluence, Yandex Wiki to Yandex Wiki, Confluence to Yandex Wiki, and Confluence to Confluence, including distinct configured instances of the same provider.
+
+#### Scenario: Direction-specific preflight
+- **WHEN** an operator selects source and destination profiles
+- **THEN** the system SHALL validate source read capabilities and destination create/update/resource capabilities before mutation
+
+#### Scenario: Self-copy protection
+- **WHEN** the resolved destination is the source page or belongs to the selected source graph on the same instance
+- **THEN** the system SHALL reject the operation before destination mutation
+
+### Requirement: Normalized loss-aware content pipeline
+The system SHALL normalize source content into typed structural, page-reference, resource, and vendor-extension nodes and SHALL render each node natively, as a readable fallback, or with a retained raw source snapshot.
+
+#### Scenario: Cross-provider degradation
+- **WHEN** a source construct has no destination equivalent
+- **THEN** the destination SHALL contain a readable fallback, the raw source SHALL be recoverable, and the report SHALL identify the degradation
+
+#### Scenario: Unaccounted source data
+- **WHEN** content or a resource is neither represented nor recoverably snapshotted
+- **THEN** the page SHALL NOT be marked complete and the run SHALL exit non-zero
+
+### Requirement: Graph-safe linked discovery
+The system SHALL discover transitive internal page references for linked scope until a fixed point and SHALL process each canonical page identity at most once.
+
+#### Scenario: Cyclic graph
+- **WHEN** linked pages contain self-links, diamonds, redirects, or cycles
+- **THEN** discovery SHALL terminate deterministically, record edge statuses, and SHALL NOT create duplicate destination pages
+
+#### Scenario: Link boundary
+- **WHEN** a link targets another origin, organization, binary resource, comment, unsupported reference, inaccessible page, or missing page
+- **THEN** the system SHALL keep or safely degrade the original reference, record its edge status, and SHALL NOT enqueue it as an accessible internal page
+
+### Requirement: Provider-neutral state and lifecycle
+The system SHALL use state schema v2 with canonical endpoint identity, graph edges, fingerprints, page/resource mappings, object statuses, and run lifecycle, and SHALL reject schema v1 without modifying it.
+
+#### Scenario: Equivalent locators and expanded scope
+- **WHEN** repeated runs identify the same endpoints through different supported URL/ID/slug forms or expand the scope
+- **THEN** they SHALL select the same automatic state and reuse only valid mapped objects
+
+#### Scenario: Destination changed outside ywtc
+- **WHEN** a mapped destination fingerprint differs from the last verified value
+- **THEN** the object SHALL become a conflict and SHALL NOT be overwritten automatically
+
+#### Scenario: Interrupted run
+- **WHEN** SIGINT or SIGTERM occurs
+- **THEN** the system SHALL stop scheduling, flush atomic state/report data, mark the run cancelled or interrupted, and return the conventional signal exit code

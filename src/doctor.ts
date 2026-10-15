@@ -1,31 +1,61 @@
-import {createConfluenceClient} from './clients/confluence-factory.js';
-import {YandexWikiClient} from './clients/yandex-wiki.js';
+import {createProviderAdapter} from './adapters/factory.js';
 import type {AppConfig} from './config.js';
-import {parseWikiSource} from './input.js';
+import {assertTransferCapabilities, type TransferScope} from './domain.js';
+import {discoverPageGraph} from './graph.js';
+import {sameRemoteInstance, type ResolvedLocator, type RemoteLocator} from './locators.js';
 
 export interface DoctorResult {
-  deployment: string;
-  platform?: string;
-  version?: string;
-  source?: {id: number; slug: string; title: string};
-  target?: {id: string; title: string; spaceKey: string};
+  source: {profile: string; provider: string; product: string; version?: string; id: string; title: string};
+  destination: {profile?: string; provider: string; product: string; version?: string; id: string};
+  pages: number;
+  links: number;
   warnings: string[];
 }
 
-export async function runCapabilityDoctor(config: AppConfig, source: string, target: string): Promise<DoctorResult> {
-  const yandex = new YandexWikiClient(config.yandex, config.timeoutMs, config.networkLimits.yandex);
-  const confluence = createConfluenceClient(config);
-  const sourceSlug = parseWikiSource(source, config.yandex.webUrl);
-  const [page, platform] = await Promise.all([
-    yandex.getPageBySlug(sourceSlug),
-    confluence.preflight?.(),
+export async function runCapabilityDoctor(
+  config: AppConfig,
+  sourceLocator: RemoteLocator,
+  destinationLocator: ResolvedLocator,
+  scope: TransferScope,
+): Promise<DoctorResult> {
+  const source = createProviderAdapter(sourceLocator.profile, config);
+  const destination = destinationLocator.type === 'remote' ? createProviderAdapter(destinationLocator.profile, config) : undefined;
+  assertTransferCapabilities(source, destination, scope);
+  const [sourcePlatform, destinationPlatform, root, container] = await Promise.all([
+    source.preflight(),
+    destination?.preflight(),
+    source.resolvePage(sourceLocator.value),
+    destinationLocator.type === 'remote' && destination ? destination.resolveContainer(destinationLocator.value) : undefined,
   ]);
-  const targetPage = await confluence.resolveTarget(target);
+  const graph = await discoverPageGraph({adapter: source, root, scope});
+  if (
+    container
+    && destinationLocator.type === 'remote'
+    && sameRemoteInstance(sourceLocator.profile, destinationLocator.profile)
+    && graph.pages.some((page) => page.id === container.id)
+  ) {
+    throw new Error('The destination belongs to the selected source graph. Choose a destination outside that graph.');
+  }
   return {
-    deployment: config.confluence.deployment,
-    ...(platform ? {platform: platform.product, ...(platform.version ? {version: platform.version} : {})} : {}),
-    source: {id: page.id, slug: page.slug, title: page.title},
-    target: {id: targetPage.id, title: targetPage.title, spaceKey: targetPage.space.key},
-    warnings: [],
+    source: {
+      profile: source.profile.name,
+      provider: source.kind,
+      product: sourcePlatform.product,
+      ...(sourcePlatform.version ? {version: sourcePlatform.version} : {}),
+      id: root.id,
+      title: root.title,
+    },
+    destination: destinationLocator.type === 'directory'
+      ? {provider: 'filesystem', product: `${destinationLocator.format} export`, id: destinationLocator.path}
+      : {
+        profile: destination!.profile.name,
+        provider: destination!.kind,
+        product: destinationPlatform?.product ?? destination!.kind,
+        ...(destinationPlatform?.version ? {version: destinationPlatform.version} : {}),
+        id: container!.id,
+      },
+    pages: graph.pages.length,
+    links: graph.edges.length,
+    warnings: [...sourcePlatform.warnings, ...(destinationPlatform?.warnings ?? []), ...graph.warnings],
   };
 }

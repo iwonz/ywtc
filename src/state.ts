@@ -1,25 +1,89 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import type {MigrationState, PageState} from './types.js';
+import type {ExportFormat, GraphEdgeStatus, ProviderKind} from './domain.js';
 
-export interface StateIdentity {
-  sourceRootSlug: string;
-  targetPageId: string;
-  spaceKey: string;
+export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
+export type RunStatus = 'running' | 'completed' | 'completed-with-warnings' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
+
+export interface EndpointIdentity {
+  profile: string;
+  provider: ProviderKind;
+  instance: string;
+  objectId: string;
+  containerId?: string;
 }
 
-export interface CanonicalMigrationIdentity {
-  yandexApiUrl: string;
-  yandexWebUrl: string;
-  yandexOrgId: string;
-  yandexOrgType: 'yandex360' | 'cloud';
-  sourcePageId: number;
-  confluenceBaseUrl: string;
-  targetPageId: string;
-  spaceKey: string;
-  confluenceDeployment?: 'data-center' | 'cloud';
-  confluenceSpaceId?: string;
+export interface DirectoryIdentity {
+  provider: 'filesystem';
+  path: string;
+  format: ExportFormat;
+}
+
+export interface TransferIdentity {
+  source: EndpointIdentity;
+  destination: EndpointIdentity | DirectoryIdentity;
+}
+
+export interface ResourceTransferState {
+  sourceId: string;
+  sourceName: string;
+  destinationId?: string;
+  destinationName: string;
+  sha256?: string;
+  size?: number;
+  status: 'planned' | 'complete' | 'partial' | 'failed';
+  lastError?: string;
+  updatedAt: string;
+}
+
+export interface PageTransferState {
+  sourceId: string;
+  sourceCanonicalId: string;
+  sourceLocator: string;
+  sourceTitle: string;
+  projectedParentId?: string;
+  destinationId?: string;
+  destinationCanonicalId?: string;
+  destinationLocator?: string;
+  destinationTitle: string;
+  sourceFingerprint?: string;
+  destinationFingerprint?: string;
+  status: PageTransferStatus;
+  resources: Record<string, ResourceTransferState>;
+  degradations: string[];
+  lastError?: string;
+  updatedAt: string;
+}
+
+export interface StateGraphEdge {
+  from: string;
+  raw: string;
+  to?: string;
+  status: GraphEdgeStatus;
+  message?: string;
+}
+
+export interface StateRun {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  status: RunStatus;
+  scope: 'page' | 'subtree' | 'linked';
+  dryRun: boolean;
+  pages: number;
+  warnings: number;
+  errors: number;
+}
+
+export interface TransferState {
+  version: 2;
+  identity: TransferIdentity;
+  createdAt: string;
+  updatedAt: string;
+  pages: Record<string, PageTransferState>;
+  graph: {rootId?: string; edges: StateGraphEdge[]};
+  runs: StateRun[];
 }
 
 export interface StateLocation {
@@ -32,18 +96,9 @@ export interface StateLocation {
 }
 
 export type StateLoadSource = 'existing' | 'new' | 'fresh';
+export interface StateLoadInfo {source: StateLoadSource; backupFilename?: string}
 
-export interface StateLoadInfo {
-  source: StateLoadSource;
-  backupFilename?: string;
-}
-
-export interface StateLoadOptions {
-  fresh?: boolean;
-  dryRun?: boolean;
-}
-
-function normalizedUrl(value: string): string {
+function canonicalUrl(value: string): string {
   const url = new URL(value);
   url.hash = '';
   url.search = '';
@@ -51,34 +106,28 @@ function normalizedUrl(value: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
-export function migrationStateId(identity: CanonicalMigrationIdentity): string {
-  const dataCenterCanonical = [
-    'ywtc-state-v1',
-    normalizedUrl(identity.yandexApiUrl),
-    normalizedUrl(identity.yandexWebUrl),
-    identity.yandexOrgType,
-    identity.yandexOrgId.trim(),
-    String(identity.sourcePageId),
-    normalizedUrl(identity.confluenceBaseUrl),
-    identity.spaceKey,
-    identity.targetPageId,
-  ];
-  const canonical = identity.confluenceDeployment === 'cloud'
-    ? [...dataCenterCanonical, 'cloud', identity.confluenceSpaceId ?? identity.spaceKey]
-    : dataCenterCanonical;
-  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 24);
+function canonicalIdentity(identity: TransferIdentity): unknown {
+  const endpoint = (value: EndpointIdentity | DirectoryIdentity): unknown => value.provider === 'filesystem'
+    ? {provider: value.provider, path: path.resolve(value.path), format: value.format}
+    : {
+      profile: value.profile,
+      provider: value.provider,
+      instance: canonicalUrl(value.instance),
+      objectId: value.objectId,
+      ...(value.containerId ? {containerId: value.containerId} : {}),
+    };
+  return {schema: 'ywtc-state-v2', source: endpoint(identity.source), destination: endpoint(identity.destination)};
 }
 
-export function resolveStateLocation(
-  identity: CanonicalMigrationIdentity,
-  options: {stateFilename?: string; runtimeDirectory?: string} = {},
-): StateLocation {
-  const id = migrationStateId(identity);
+export function transferStateId(identity: TransferIdentity): string {
+  return createHash('sha256').update(JSON.stringify(canonicalIdentity(identity))).digest('hex').slice(0, 24);
+}
+
+export function resolveStateLocation(identity: TransferIdentity, options: {stateFilename?: string; runtimeDirectory?: string} = {}): StateLocation {
+  const id = transferStateId(identity);
   if (options.stateFilename !== undefined) {
     const filename = options.stateFilename.trim();
-    if (!filename) {
-      throw new Error('--state must be a non-empty file path. Omit --state to use automatic state selection.');
-    }
+    if (!filename) throw new Error('--state must be a non-empty JSON path. Omit it to use automatic state selection.');
     const runtimeDirectory = path.dirname(filename);
     return {
       id,
@@ -89,7 +138,6 @@ export function resolveStateLocation(
       reportsDirectory: path.join(runtimeDirectory, 'reports'),
     };
   }
-
   const runtimeDirectory = options.runtimeDirectory ?? '.states';
   return {
     id,
@@ -101,129 +149,98 @@ export function resolveStateLocation(
   };
 }
 
-function emptyState(identity: StateIdentity): MigrationState {
+function emptyState(identity: TransferIdentity): TransferState {
   const now = new Date().toISOString();
-  return {
-    version: 1,
-    ...identity,
-    startedAt: now,
-    updatedAt: now,
-    pages: {},
-  };
+  return {version: 2, identity, createdAt: now, updatedAt: now, pages: {}, graph: {edges: []}, runs: []};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function belongsTo(state: MigrationState, identity: StateIdentity): boolean {
-  return state.sourceRootSlug === identity.sourceRootSlug
-    && state.targetPageId === identity.targetPageId
-    && state.spaceKey === identity.spaceKey;
+function identityEquals(left: TransferIdentity, right: TransferIdentity): boolean {
+  return JSON.stringify(canonicalIdentity(left)) === JSON.stringify(canonicalIdentity(right));
 }
 
-function stateHelp(filename: string): string {
-  return `Restore a valid backup, pass a matching file with --state, omit --state for automatic selection, or use --fresh to preserve "${filename}" as a backup and start clean.`;
+function help(filename: string): string {
+  return `Restore a v2 backup, choose a matching --state file, omit --state for automatic selection, or use --fresh to preserve "${filename}" and start clean.`;
 }
 
-async function readStateFile(filename: string): Promise<MigrationState | undefined> {
+async function readState(filename: string): Promise<TransferState | undefined> {
   let content: string;
   try {
     content = await readFile(filename, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new Error(
-      `Cannot read migration state "${filename}". Check that the file is readable and its parent directory is accessible. ${stateHelp(filename)}`,
-      {cause: error},
-    );
+    throw new Error(`Cannot read transfer state "${filename}". ${help(filename)}`, {cause: error});
   }
-
-  let parsed: unknown;
+  let value: unknown;
   try {
-    parsed = JSON.parse(content);
+    value = JSON.parse(content);
   } catch (error) {
-    throw new Error(`Migration state "${filename}" is not valid JSON. ${stateHelp(filename)}`, {cause: error});
+    throw new Error(`Transfer state "${filename}" is not valid JSON. ${help(filename)}`, {cause: error});
   }
-  if (
-    !isRecord(parsed)
-    || parsed.version !== 1
-    || typeof parsed.sourceRootSlug !== 'string'
-    || typeof parsed.targetPageId !== 'string'
-    || typeof parsed.spaceKey !== 'string'
-    || typeof parsed.startedAt !== 'string'
-    || typeof parsed.updatedAt !== 'string'
-    || !isRecord(parsed.pages)
-  ) {
-    throw new Error(`Migration state "${filename}" has an unsupported or incomplete schema. ${stateHelp(filename)}`);
+  if (isRecord(value) && value.version === 1) {
+    throw new Error(`Transfer state "${filename}" uses unsupported schema v1. It was preserved unchanged. Use a new workdir/state or --fresh; automatic conversion could duplicate remote content.`);
   }
-  return parsed as unknown as MigrationState;
-}
-
-function ownershipError(filename: string, state: MigrationState, identity: StateIdentity): Error {
-  return new Error(
-    `Migration state "${filename}" belongs to source "${state.sourceRootSlug}", target page "${state.targetPageId}", space "${state.spaceKey}", `
-    + `but this run resolved source "${identity.sourceRootSlug}", target page "${identity.targetPageId}", space "${identity.spaceKey}". ${stateHelp(filename)}`,
-  );
+  if (!isRecord(value) || value.version !== 2 || !isRecord(value.identity) || !isRecord(value.pages) || !isRecord(value.graph) || !Array.isArray(value.runs)) {
+    throw new Error(`Transfer state "${filename}" has an unsupported or incomplete schema. ${help(filename)}`);
+  }
+  return value as unknown as TransferState;
 }
 
 function backupFilename(filename: string): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `${filename}.backup-${timestamp}-${randomUUID().slice(0, 8)}`;
+  return `${filename}.backup-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
 }
 
 export class StateStore {
-  private state?: MigrationState;
+  private state?: TransferState;
   private saveChain: Promise<void> = Promise.resolve();
   private readOnly = false;
   private info?: StateLoadInfo;
 
   constructor(public readonly filename: string) {}
 
-  async load(identity: StateIdentity, options: StateLoadOptions = {}): Promise<MigrationState> {
+  async load(identity: TransferIdentity, options: {fresh?: boolean; dryRun?: boolean} = {}): Promise<TransferState> {
     this.readOnly = options.dryRun ?? false;
-
     if (options.fresh) {
-      let preservedFilename: string | undefined;
+      let preserved: string | undefined;
       if (!this.readOnly) {
-        const candidate = backupFilename(this.filename);
+        const backup = backupFilename(this.filename);
         try {
           const selected = await stat(this.filename);
-          if (!selected.isFile()) {
-            throw new Error(
-              `Migration state path "${this.filename}" is not a regular file. Choose a JSON file path with --state or omit --state for automatic selection.`,
-            );
-          }
-          await rename(this.filename, candidate);
-          preservedFilename = candidate;
+          if (!selected.isFile()) throw new Error(`State path is not a regular file: ${this.filename}`);
+          await rename(this.filename, backup);
+          preserved = backup;
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-            if (error instanceof Error && error.message.startsWith('Migration state path')) throw error;
-            throw new Error(
-              `Cannot preserve existing migration state "${this.filename}" as "${candidate}". Check file permissions or choose another --state path; no destination changes were made.`,
-              {cause: error},
-            );
-          }
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
       }
       this.state = emptyState(identity);
-      this.info = {source: 'fresh', ...(preservedFilename ? {backupFilename: preservedFilename} : {})};
+      this.info = {source: 'fresh', ...(preserved ? {backupFilename: preserved} : {})};
       return this.state;
     }
-
-    const selected = await readStateFile(this.filename);
+    const selected = await readState(this.filename);
     if (selected) {
-      if (!belongsTo(selected, identity)) throw ownershipError(this.filename, selected, identity);
+      if (!identityEquals(selected.identity, identity)) {
+        throw new Error(`Transfer state "${this.filename}" belongs to another canonical source/destination pair. ${help(this.filename)}`);
+      }
+      for (const run of selected.runs) {
+        if (run.status === 'running') {
+          run.status = 'interrupted';
+          run.finishedAt = new Date().toISOString();
+        }
+      }
       this.state = selected;
       this.info = {source: 'existing'};
       return selected;
     }
-
     this.state = emptyState(identity);
     this.info = {source: 'new'};
     return this.state;
   }
 
-  get value(): MigrationState {
+  get value(): TransferState {
     if (!this.state) throw new Error('StateStore.load() must be called before accessing state');
     return this.state;
   }
@@ -233,32 +250,48 @@ export class StateStore {
     return this.info;
   }
 
-  async setPage(page: PageState): Promise<void> {
-    this.value.pages[String(page.sourceId)] = page;
-    await this.save();
+  async beginRun(scope: StateRun['scope'], dryRun: boolean): Promise<StateRun> {
+    const run: StateRun = {
+      id: randomUUID(),
+      startedAt: new Date().toISOString(),
+      status: 'running',
+      scope,
+      dryRun,
+      pages: 0,
+      warnings: 0,
+      errors: 0,
+    };
+    this.value.runs.push(run);
+    if (!dryRun) await this.save();
+    return run;
+  }
+
+  async finishRun(runId: string, status: RunStatus, counts: {pages: number; warnings: number; errors: number}): Promise<void> {
+    const run = this.value.runs.find((candidate) => candidate.id === runId);
+    if (!run) throw new Error(`State run ${runId} was not initialized`);
+    Object.assign(run, counts, {status, finishedAt: new Date().toISOString()});
+    if (!this.readOnly) await this.save();
+  }
+
+  async setGraph(rootId: string, edges: StateGraphEdge[]): Promise<void> {
+    this.value.graph = {rootId, edges};
+    if (!this.readOnly) await this.save();
+  }
+
+  async setPage(page: PageTransferState): Promise<void> {
+    this.value.pages[page.sourceCanonicalId] = page;
+    if (!this.readOnly) await this.save();
   }
 
   async save(): Promise<void> {
-    if (this.readOnly) {
-      throw new Error(`Refusing to write migration state "${this.filename}" during --dry-run.`);
-    }
-    const write = this.saveChain
-      .catch(() => undefined)
-      .then(async () => {
-        const state = this.value;
-        state.updatedAt = new Date().toISOString();
-        const temporary = `${this.filename}.${process.pid}.${Date.now()}.${randomUUID().slice(0, 8)}.tmp`;
-        try {
-          await mkdir(path.dirname(this.filename), {recursive: true});
-          await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {mode: 0o600});
-          await rename(temporary, this.filename);
-        } catch (error) {
-          throw new Error(
-            `Cannot atomically write migration state "${this.filename}". Check free space and directory permissions, then rerun with the same state.`,
-            {cause: error},
-          );
-        }
-      });
+    if (this.readOnly) throw new Error(`Refusing to write transfer state "${this.filename}" during --dry-run.`);
+    const write = this.saveChain.catch(() => undefined).then(async () => {
+      this.value.updatedAt = new Date().toISOString();
+      const temporary = `${this.filename}.${process.pid}.${Date.now()}.${randomUUID().slice(0, 8)}.tmp`;
+      await mkdir(path.dirname(this.filename), {recursive: true, mode: 0o700});
+      await writeFile(temporary, `${JSON.stringify(this.value, null, 2)}\n`, {mode: 0o600});
+      await rename(temporary, this.filename);
+    });
     this.saveChain = write;
     await write;
   }

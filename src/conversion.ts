@@ -1,6 +1,6 @@
 import transform from '@diplodoc/transform';
 import {load} from 'cheerio';
-import LinkifyIt from 'linkify-it';
+import {LinkifyIt} from 'linkify-it';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import type {YandexGrid} from './types.js';
 

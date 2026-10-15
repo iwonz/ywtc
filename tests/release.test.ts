@@ -77,6 +77,7 @@ describe('release validation', () => {
       license: 'MIT',
       publishConfig: {access: 'public', provenance: true},
       bin: {ywtc: './dist/cli.js'},
+      engines: {node: '>=24.0.0', npm: '>=11.5.1'},
     });
     expect(packageJson).not.toHaveProperty('private');
   });

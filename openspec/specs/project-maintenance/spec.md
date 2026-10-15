@@ -2,7 +2,9 @@
 
 ## Purpose
 Maintain ywtc as a public, testable, documented, and release-safe TypeScript project with a mandatory OpenSpec change lifecycle.
+
 ## Requirements
+
 ### Requirement: Complete OpenSpec change lifecycle
 Repository agents MUST synchronize a clean local `master` with `origin/master` before starting a change, execute the complete OpenSpec lifecycle for every code, documentation, tooling, or specification change, and repeat the remote comparison before commit and push.
 
@@ -19,29 +21,41 @@ Repository agents MUST synchronize a clean local `master` with `origin/master` b
 - **THEN** it MUST update task status, sync delta specifications, archive the change, run strict validation, fetch and compare with `origin/master`, and only then commit and push without force
 
 ### Requirement: Static project quality gates
-The project SHALL use Biome for linting and Knip for unused file, dependency, and export analysis, and SHALL provide a single command that runs all release checks.
+The project SHALL keep a high/critical production dependency audit, TypeScript typechecking, Biome lint/format checks, Knip unused-code checks, Vitest tests, package verification, build validation, OpenSpec strict validation, graph performance checks, and static HTML browser smoke checks executable through maintained scripts.
+
+#### Scenario: Complete project check
+- **WHEN** a maintainer runs `npm run check`
+- **THEN** all configured security, static, unit, integration, package, performance, browser, build, and specification checks SHALL execute without rewriting tracked files
 
 #### Scenario: A maintainer checks the repository
 - **WHEN** `npm run check` is executed in a clean supported environment
-- **THEN** release hygiene, typechecking, Biome, Knip, tests, build, and strict OpenSpec validation SHALL all run and fail the command on violations
+- **THEN** release hygiene, production dependency audit, typechecking, Biome, Knip, tests, browser checks, build, package verification, and strict OpenSpec validation SHALL all run and fail the command on violations
 
 ### Requirement: Public repository documentation and metadata
-The project SHALL consistently identify itself as `ywtc` and the public npm package `@iwonz/ywtc`, SHALL identify its MIT license and public repository, and SHALL provide concise, neutral, non-repetitive, current-only documentation for installation, supported vendor APIs/products, credentials, workdir initialization, commands, complete environment and CLI parameters, state, reports, updates, releases, breaking migration, and local development.
+The repository SHALL describe ywtc as a provider-neutral Yandex Wiki/Confluence transfer and static export CLI, require Node.js 24 and npm 11.5.1 or newer, and SHALL document profiles, secrets, endpoint formats, scopes, direction matrix, filesystem formats, state/resume behavior, fidelity safeguards, examples, compatibility, and the breaking v2 migration.
+
+#### Scenario: First-time setup
+- **WHEN** a new operator reads README and generated templates
+- **THEN** they SHALL be able to create named connections, obtain/configure required credentials, validate with doctor, and run a remote transfer or static export without consulting source code
+
+#### Scenario: Runtime compatibility
+- **WHEN** package metadata, documentation, CI, or the generated Homebrew formula selects a JavaScript runtime
+- **THEN** it SHALL consistently require Node.js 24 and npm 11.5.1 or newer and SHALL NOT claim Node.js 22 support
 
 #### Scenario: A new operator reads the README
 - **WHEN** the repository README is opened
-- **THEN** it SHALL present a visually verified full-width dark technical header showing Yandex Wiki, the `ywtc` migration pipeline, and Confluence, without colored frames around the source panel, destination panel, or central pipeline, plus a short path to install, initialize, diagnose, dry-run, inspect, and migrate
+- **THEN** it SHALL present the verified full-width header and a concise path to install, initialize, diagnose, dry-run, inspect, and transfer content
 
 #### Scenario: Minimum migration flow is followed
 - **WHEN** an operator wants the shortest safe path from installation to migration
-- **THEN** the README SHALL provide a checklist containing workspace initialization, environment configuration, a dry run, and the corresponding live run without optional diagnostics or advanced state controls
+- **THEN** the README SHALL provide a checklist containing installation, workspace initialization, profile/secret configuration, a dry run, and the corresponding live run
 
 #### Scenario: Common command variants are needed
 - **WHEN** an operator needs a frequent workflow beyond the minimum
-- **THEN** the README SHALL provide a separate nearby examples section for diagnostics, a single page, URL inputs, a custom workdir, and a fresh run without duplicating the complete parameter reference
+- **THEN** the README SHALL provide nearby examples for all remote directions, page/linked scopes, filesystem exports, custom workdirs, and fresh runs without duplicating the parameter reference
 
 #### Scenario: Migration coverage is reviewed
-- **WHEN** an operator evaluates what will and will not be migrated
+- **WHEN** an operator evaluates what will and will not be transferred
 - **THEN** the README SHALL present supported content, transformations, degradation behavior, and exclusions in a compact table
 
 #### Scenario: README readability is reviewed
@@ -53,12 +67,12 @@ The project SHALL consistently identify itself as `ywtc` and the public npm pack
 - **THEN** the output SHALL identify `ywtc`, list the explicit v2 commands, and provide command-specific current usage without requiring configuration
 
 #### Scenario: Platform compatibility is inspected
-- **WHEN** an operator evaluates a Yandex Wiki or Confluence target
-- **THEN** the README SHALL identify Public API v1, Data Center 7.9+ without an upper bound subject to capability preflight, Cloud API support, unsupported Server/auth profiles, the review date, and the boundary between contract tests and live certification
+- **WHEN** an operator evaluates a Yandex Wiki or Confluence connection
+- **THEN** the README SHALL identify Public API v1, Data Center 7.9+ without an upper bound subject to capability preflight, Cloud API support, unsupported profiles, and the boundary between contract tests and live certification
 
 #### Scenario: Parameters are inspected
 - **WHEN** an operator constructs a command or configuration
-- **THEN** the README SHALL provide compact complete tables for commands, CLI options, and environment variables with type, requirement conditions, accepted values/formats, defaults, examples, and descriptions without a duplicated reference section
+- **THEN** the README SHALL provide compact complete tables for commands, CLI options, profile fields, and secret environment variables with requirement conditions, accepted formats, defaults, examples, and descriptions
 
 #### Scenario: Token setup is inspected
 - **WHEN** an operator follows authentication instructions
@@ -66,10 +80,14 @@ The project SHALL consistently identify itself as `ywtc` and the public npm pack
 
 #### Scenario: Package metadata is inspected
 - **WHEN** npm or release tooling consumes package metadata
-- **THEN** it SHALL name `@iwonz/ywtc`, expose binary `ywtc`, allow public scoped publication, require Node.js 22.12 or newer, reference the repository and MIT license, and include only intended publishable files
+- **THEN** it SHALL name `@iwonz/ywtc`, expose binary `ywtc`, allow public scoped publication, require Node.js 24 and npm 11.5.1 or newer, reference the repository and MIT license, and include only intended publishable files
 
 ### Requirement: Installable package verification
-The project SHALL verify the exact packed npm artifact in an isolated environment before publication.
+The public `@iwonz/ywtc` package SHALL include the universal `ywtc` binary, runtime templates, README, license, changelog, and required generated assets while excluding credentials, workdirs, state, cache, exports, reports, and tests.
+
+#### Scenario: Packed CLI smoke test
+- **WHEN** the tarball is installed in an isolated environment
+- **THEN** `ywtc --version`, help, init, profile validation, and non-mutating example parsing SHALL work on supported Node.js versions
 
 #### Scenario: Package acceptance
 - **WHEN** release validation packs the project

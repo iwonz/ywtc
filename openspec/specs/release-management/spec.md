@@ -1,10 +1,16 @@
 # release-management Specification
 
 ## Purpose
-TBD - created by archiving change automate-semver-github-releases. Update Purpose after archive.
+Define how ywtc calculates, validates, publishes, and distributes reviewable SemVer releases through GitHub, npm, and Homebrew.
+
 ## Requirements
+
 ### Requirement: SemVer release calculation
-The repository SHALL use Conventional Commits and Release Please to calculate stable Semantic Versioning releases from changes merged into `master`, include all recognized meaningful commit types in categorized changelog and GitHub notes, and allow only `feat`, `fix`, `perf`, `revert`, or breaking changes to trigger a product version.
+Release automation SHALL derive SemVer from validated Conventional Commits and SHALL publish the pending universal transfer contract as version 2.0.0 because it removes public flags, configuration, and state schema v1.
+
+#### Scenario: Universal transfer breaking release
+- **WHEN** the archived change is committed with a breaking `feat!` and the public latest version remains 1.x
+- **THEN** Release Please SHALL propose 2.0.0 and include the CLI/configuration/state migration guidance in changelog and release notes
 
 #### Scenario: Backward-compatible feature
 - **WHEN** unreleased history contains a `feat` commit and no breaking change

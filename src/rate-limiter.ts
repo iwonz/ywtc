@@ -1,81 +1,38 @@
-export interface TokenBucketOptions {
+import PQueue from 'p-queue';
+
+export interface RateLimitOptions {
   requestsPerSecond: number;
   burst: number;
 }
 
-interface Waiter {
-  resolve: () => void;
-}
+/** Shared request-start limiter backed by PQueue's strict rolling interval. */
+export class RequestRateLimiter {
+  private readonly queue: PQueue;
+  private resumeTimer: NodeJS.Timeout | undefined;
 
-/**
- * A service-wide token bucket. It limits request starts; operation concurrency is
- * controlled separately so long-running uploads keep occupying their own slots.
- */
-export class TokenBucketRateLimiter {
-  private tokens: number;
-  private lastRefill = Date.now();
-  private pausedUntil = 0;
-  private readonly queue: Waiter[] = [];
-  private timer: NodeJS.Timeout | undefined;
-
-  constructor(private readonly options: TokenBucketOptions) {
-    this.tokens = options.burst;
-  }
-
-  acquire(): Promise<void> {
-    return new Promise((resolve) => {
-      this.queue.push({resolve});
-      this.pump();
+  constructor(options: RateLimitOptions) {
+    const burst = Math.max(1, options.burst);
+    const interval = Math.max(1, Math.ceil((1_000 * burst) / Math.max(1, options.requestsPerSecond)));
+    this.queue = new PQueue({
+      concurrency: burst,
+      interval,
+      intervalCap: burst,
+      carryoverIntervalCount: true,
+      strict: true,
     });
   }
 
+  async acquire(signal?: AbortSignal): Promise<void> {
+    await this.queue.add(async () => undefined, {...(signal ? {signal} : {})});
+  }
+
   pause(delayMs: number): void {
-    const safeDelay = Math.max(1_000, delayMs);
-    this.pausedUntil = Math.max(this.pausedUntil, Date.now() + safeDelay);
-    this.tokens = Math.min(this.tokens, 1);
-    this.pump();
-  }
-
-  private refill(now: number): void {
-    if (now <= this.lastRefill) return;
-    const elapsedSeconds = (now - this.lastRefill) / 1_000;
-    this.tokens = Math.min(
-      this.options.burst,
-      this.tokens + elapsedSeconds * this.options.requestsPerSecond,
-    );
-    this.lastRefill = now;
-  }
-
-  private schedule(delayMs: number): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      this.pump();
-    }, Math.max(1, Math.ceil(delayMs)));
-  }
-
-  private pump(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
-    if (this.queue.length === 0) return;
-
-    const now = Date.now();
-    this.refill(now);
-    if (now < this.pausedUntil) {
-      this.schedule(this.pausedUntil - now);
-      return;
-    }
-
-    while (this.queue.length > 0 && this.tokens >= 1) {
-      this.tokens -= 1;
-      this.queue.shift()?.resolve();
-    }
-
-    if (this.queue.length > 0) {
-      const missing = Math.max(0, 1 - this.tokens);
-      this.schedule((missing / this.options.requestsPerSecond) * 1_000);
-    }
+    this.queue.pause();
+    if (this.resumeTimer) clearTimeout(this.resumeTimer);
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = undefined;
+      this.queue.start();
+    }, Math.max(1_000, delayMs));
+    this.resumeTimer.unref?.();
   }
 }

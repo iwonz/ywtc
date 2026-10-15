@@ -8,7 +8,7 @@ import {URL} from 'node:url';
 const root = process.cwd();
 const execFileAsync = promisify(execFile);
 const ignoredDirectories = new Set(['.git', 'coverage', 'dist', 'node_modules']);
-const localRuntimeNames = new Set(['.env', '.states']);
+const localRuntimeNames = new Set(['.env', '.states', 'ywtc.config.yaml']);
 const runtimeDirectoryPrefixes = ['.states/'];
 const forbiddenExtensions = new Set(['.key', '.p12', '.pem', '.pfx']);
 const textExtensions = new Set([
@@ -90,7 +90,7 @@ async function scanText(filename) {
 }
 
 const gitignore = await readFile(path.join(root, '.gitignore'), 'utf8');
-for (const required of ['.env', '.env.*', '.states/', 'dist/']) {
+for (const required of ['.env', '.env.*', 'ywtc.config.yaml', '.states/', 'dist/']) {
   if (!gitignore.split(/\r?\n/).includes(required)) add(path.join(root, '.gitignore'), `missing required ignore rule: ${required}`);
 }
 
@@ -101,6 +101,7 @@ try {
   for (const tracked of stdout.split('\0').filter(Boolean)) {
     if (
       tracked === '.env'
+      || tracked === 'ywtc.config.yaml'
       || tracked.startsWith('.env.') && tracked !== '.env.example'
       || runtimeDirectoryPrefixes.some((prefix) => tracked.startsWith(prefix))
     ) {

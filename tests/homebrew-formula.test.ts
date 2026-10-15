@@ -9,7 +9,7 @@ describe('Homebrew formula generation', () => {
       sha256: 'a'.repeat(64),
     });
     expect(formula).toContain('class Ywtc < Formula');
-    expect(formula).toContain('depends_on "node@22"');
+    expect(formula).toContain('depends_on "node@24"');
     expect(formula).toContain('cached_download');
     expect(formula).toContain('ywtc --version');
     expect(formula).not.toContain('CONFLUENCE_TOKEN');

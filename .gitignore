@@ -3,8 +3,11 @@ dist/
 .env
 .env.*
 !.env.example
+ywtc.config.yaml
 .states/
 coverage/
+playwright-report/
+test-results/
 *.log
 .DS_Store
 *.pem

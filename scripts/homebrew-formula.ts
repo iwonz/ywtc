@@ -15,14 +15,14 @@ export function renderHomebrewFormula(input: FormulaInput): string {
   if (!/^https:\/\//.test(input.url)) throw new Error('Formula URL must use HTTPS');
   if (!/^[a-f0-9]{64}$/i.test(input.sha256)) throw new Error('Formula SHA-256 must contain 64 hexadecimal characters');
   return `class Ywtc < Formula
-  desc "Migrate Yandex Wiki sections to Confluence"
+  desc "Transfer Yandex Wiki and Confluence content or export it to files"
   homepage "https://github.com/iwonz/ywtc"
   url "${rubyString(input.url)}"
   sha256 "${input.sha256.toLowerCase()}"
   license "MIT"
   version "${input.version}"
 
-  depends_on "node@22"
+  depends_on "node@24"
 
   def install
     system "npm", "install", "--global", "--prefix", libexec, cached_download

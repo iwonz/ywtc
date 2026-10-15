@@ -1,8 +1,10 @@
 # workspace-management Specification
 
 ## Purpose
-TBD - created by archiving change ship-ywtc-v2. Update Purpose after archive.
+Define deterministic workspace selection, safe local configuration, capability diagnosis, state placement, and controlled CLI self-update behavior.
+
 ## Requirements
+
 ### Requirement: Deterministic workdir selection
 The CLI SHALL select its workdir in the order explicit `--workdir`, current directory containing `.ywtc-workspace.json`, then `~/.ywtc`, and SHALL resolve `~` and relative paths without writing outside the selected workdir.
 
@@ -19,11 +21,11 @@ The CLI SHALL select its workdir in the order explicit `--workdir`, current dire
 - **THEN** the CLI SHALL use the current user's `~/.ywtc` directory
 
 ### Requirement: Safe idempotent workspace initialization
-The `init` command and migration auto-initialization SHALL create the selected directory, `.ywtc-workspace.json`, `.env`, and `.states/` with user-only writable credential-file permissions where supported, without overwriting existing content.
+The `init` command and migration auto-initialization SHALL create the selected directory, `.ywtc-workspace.json`, `.env`, `ywtc.config.yaml`, and `.states/` without overwriting existing content and with user-only credential-file permissions where supported.
 
 #### Scenario: New workspace
 - **WHEN** initialization targets an absent workdir
-- **THEN** all required workspace artifacts SHALL be created from the safe empty configuration template
+- **THEN** all workspace artifacts SHALL be created from safe empty profile and credential templates
 
 #### Scenario: Existing workspace
 - **WHEN** one or more workspace artifacts already exist
@@ -31,36 +33,52 @@ The `init` command and migration auto-initialization SHALL create the selected d
 
 #### Scenario: Incomplete automatic workspace
 - **WHEN** `migrate` selects an absent workdir
-- **THEN** it SHALL initialize the workspace and then stop before API requests with the `.env` path and missing fields if configuration is incomplete
+- **THEN** it SHALL initialize the workspace and then stop before API requests with the `.env` and `ywtc.config.yaml` paths plus missing fields if configuration is incomplete
 
 ### Requirement: Workdir-scoped configuration
-The CLI SHALL load `<workdir>/.env` and overlay process environment variables with higher precedence, SHALL validate all required values before API requests, and SHALL resolve relative explicit state paths from the workdir.
+The CLI SHALL load non-secret named connections from `<workdir>/ywtc.config.yaml`, resolve referenced secrets from `<workdir>/.env` with process environment precedence, and validate only the profiles required by the command before API requests.
+
+#### Scenario: Profile selection by URL
+- **WHEN** a full source or destination URL uniquely matches configured base URLs
+- **THEN** the longest matching compatible profile SHALL be selected without requiring a profile flag
+
+#### Scenario: Ambiguous shorthand
+- **WHEN** an ID or slug can resolve through multiple compatible profiles
+- **THEN** validation SHALL require the corresponding explicit profile and list valid names
+
+#### Scenario: Missing secret
+- **WHEN** a selected profile references an empty or absent secret environment variable
+- **THEN** the command SHALL identify the variable and `.env` path without revealing other secrets and SHALL stop before API requests
 
 #### Scenario: Process override
 - **WHEN** a key exists in both the workdir `.env` and the process environment
 - **THEN** the process environment value SHALL be used
 
 #### Scenario: Missing settings
-- **WHEN** required settings are empty, invalid, or form an unsupported Confluence deployment/authentication pair
-- **THEN** the command SHALL exit non-zero before API requests and list the affected setting names, `.env` path, and corrective guidance without exposing secrets
+- **WHEN** required profile settings are empty, invalid, or form an unsupported provider deployment/authentication pair
+- **THEN** the command SHALL exit non-zero before API requests and list the affected profile fields, configuration paths, and corrective guidance without exposing secrets
 
 #### Scenario: Relative state path
 - **WHEN** migration receives `--state relative/file.json`
 - **THEN** it SHALL resolve the path under the selected workdir and reject traversal outside it
 
 ### Requirement: Read-only workspace and capability diagnosis
-The `doctor` command SHALL validate workspace and configuration without source/target and SHALL perform a full read-only source/target capability preflight only when both are supplied.
+The `doctor` command SHALL validate workspace and profiles without endpoints and SHALL perform complete read-only source/destination capability preflight when both are supplied using the same locator, profile, scope, and format rules as migration.
+
+#### Scenario: Endpoint diagnosis
+- **WHEN** `doctor` receives both `--source` and `--destination`
+- **THEN** it SHALL resolve profiles/endpoints, verify required direction capabilities without mutation, and report provider/platform/version information plus corrective actions
 
 #### Scenario: Configuration diagnosis
-- **WHEN** `doctor` is run without `--source` and `--target`
-- **THEN** it SHALL report workdir, configuration validity, deployment profile, and actionable failures without contacting vendor APIs
+- **WHEN** `doctor` is run without `--source` and `--destination`
+- **THEN** it SHALL report workdir and profile configuration validity with actionable failures without contacting vendor APIs
 
 #### Scenario: Full diagnosis
-- **WHEN** `doctor` receives both `--source` and `--target`
-- **THEN** it SHALL authenticate, resolve both endpoints, verify the required read/write capabilities without mutations, and report platform/version information
+- **WHEN** `doctor` receives both `--source` and `--destination`
+- **THEN** it SHALL authenticate, resolve both endpoints, verify the direction-specific read/write capabilities without mutations, and report provider/platform/version information
 
 #### Scenario: Partial endpoint arguments
-- **WHEN** `doctor` receives only one of `--source` or `--target`
+- **WHEN** `doctor` receives only one endpoint
 - **THEN** it SHALL reject the invocation and explain that both are required for capability preflight
 
 ### Requirement: Safe update discovery and installation
@@ -81,4 +99,3 @@ The `update` command SHALL report the current version, latest published version,
 #### Scenario: Self-modification is unsafe
 - **WHEN** execution is through npx, a local dependency, or a source checkout
 - **THEN** the CLI SHALL not modify the environment and SHALL print the appropriate safe command instead
-

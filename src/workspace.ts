@@ -5,41 +5,66 @@ import path from 'node:path';
 
 export const WORKSPACE_MARKER = '.ywtc-workspace.json';
 export const WORKSPACE_ENV = '.env';
+export const WORKSPACE_CONFIG = 'ywtc.config.yaml';
 export const WORKSPACE_STATES = '.states';
 
-export const ENV_TEMPLATE = `# Yandex Wiki Public API v1
+export const ENV_TEMPLATE = `# Secrets referenced by ywtc.config.yaml
 YANDEX_WIKI_TOKEN=
-YANDEX_WIKI_AUTH_TYPE=oauth
-YANDEX_WIKI_ORG_ID=
-YANDEX_WIKI_ORG_TYPE=yandex360
-YANDEX_WIKI_API_URL=https://api.wiki.yandex.net/v1
-YANDEX_WIKI_WEB_URL=https://wiki.yandex.ru
-
-# Confluence: data-center + pat, or cloud + api-token
-CONFLUENCE_DEPLOYMENT=data-center
-CONFLUENCE_AUTH_TYPE=pat
-CONFLUENCE_BASE_URL=
 CONFLUENCE_TOKEN=
 CONFLUENCE_EMAIL=
 
+# Optional global overrides
 HTTP_TIMEOUT_MS=30000
 MIGRATION_CONCURRENCY=4
-YANDEX_API_CONCURRENCY=4
-YANDEX_DOWNLOAD_CONCURRENCY=2
-YANDEX_API_RPS=8
-YANDEX_API_BURST=8
-CONFLUENCE_READ_CONCURRENCY=4
-CONFLUENCE_WRITE_CONCURRENCY=2
-CONFLUENCE_UPLOAD_CONCURRENCY=2
-CONFLUENCE_API_RPS=8
-CONFLUENCE_API_BURST=10
+`;
+
+export const CONFIG_TEMPLATE = `schemaVersion: 2
+
+defaults:
+  timeoutMs: 30000
+  concurrency: 4
+
+connections:
+  yandex:
+    type: yandex-wiki
+    apiUrl: https://api.wiki.yandex.net/v1
+    webUrl: https://wiki.example.com
+    authType: oauth
+    tokenEnv: YANDEX_WIKI_TOKEN
+    organization:
+      type: yandex360
+      id: ""
+    limits:
+      readConcurrency: 4
+      writeConcurrency: 2
+      downloadConcurrency: 2
+      uploadConcurrency: 2
+      requestsPerSecond: 8
+      burst: 8
+
+  confluence:
+    type: confluence
+    deployment: data-center
+    baseUrl: https://confluence.example.com/confluence
+    authType: pat
+    tokenEnv: CONFLUENCE_TOKEN
+    limits:
+      readConcurrency: 4
+      writeConcurrency: 2
+      downloadConcurrency: 2
+      uploadConcurrency: 2
+      requestsPerSecond: 8
+      burst: 10
 `;
 
 export interface Workspace {
   root: string;
   marker: string;
   envFile: string;
+  configFile: string;
   statesDirectory: string;
+  cacheDirectory: string;
+  reportsDirectory: string;
   source: 'explicit' | 'current' | 'default';
 }
 
@@ -66,25 +91,23 @@ async function exists(filename: string): Promise<boolean> {
 }
 
 function workspaceAt(root: string, source: Workspace['source']): Workspace {
+  const statesDirectory = path.join(root, WORKSPACE_STATES);
   return {
     root,
     marker: path.join(root, WORKSPACE_MARKER),
     envFile: path.join(root, WORKSPACE_ENV),
-    statesDirectory: path.join(root, WORKSPACE_STATES),
+    configFile: path.join(root, WORKSPACE_CONFIG),
+    statesDirectory,
+    cacheDirectory: path.join(statesDirectory, 'cache'),
+    reportsDirectory: path.join(statesDirectory, 'reports'),
     source,
   };
 }
 
-export async function resolveWorkspace(options: {
-  explicit?: string;
-  cwd?: string;
-  homeDirectory?: string;
-} = {}): Promise<Workspace> {
+export async function resolveWorkspace(options: {explicit?: string; cwd?: string; homeDirectory?: string} = {}): Promise<Workspace> {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const homeDirectory = path.resolve(options.homeDirectory ?? os.homedir());
-  if (options.explicit) {
-    return workspaceAt(path.resolve(cwd, expandHome(options.explicit, homeDirectory)), 'explicit');
-  }
+  if (options.explicit) return workspaceAt(path.resolve(cwd, expandHome(options.explicit, homeDirectory)), 'explicit');
   if (await exists(path.join(cwd, WORKSPACE_MARKER))) return workspaceAt(cwd, 'current');
   return workspaceAt(path.join(homeDirectory, '.ywtc'), 'default');
 }
@@ -103,14 +126,21 @@ export async function initializeWorkspace(workspace: Workspace): Promise<Workspa
   const created: string[] = [];
   const existing: string[] = [];
   await mkdir(workspace.root, {recursive: true, mode: 0o700});
-  const markerCreated = await createExclusive(workspace.marker, `${JSON.stringify({schemaVersion: 1, tool: 'ywtc'}, null, 2)}\n`, 0o600);
-  (markerCreated ? created : existing).push(workspace.marker);
-  const envCreated = await createExclusive(workspace.envFile, ENV_TEMPLATE, 0o600);
-  (envCreated ? created : existing).push(workspace.envFile);
-  if (envCreated) await chmod(workspace.envFile, 0o600);
-  const statesExisted = await exists(workspace.statesDirectory);
-  await mkdir(workspace.statesDirectory, {recursive: true, mode: 0o700});
-  (statesExisted ? existing : created).push(workspace.statesDirectory);
+  const artifacts: Array<[string, string, number]> = [
+    [workspace.marker, `${JSON.stringify({schemaVersion: 2, tool: 'ywtc'}, null, 2)}\n`, 0o600],
+    [workspace.envFile, ENV_TEMPLATE, 0o600],
+    [workspace.configFile, CONFIG_TEMPLATE, 0o600],
+  ];
+  for (const [filename, content, mode] of artifacts) {
+    const artifactCreated = await createExclusive(filename, content, mode);
+    (artifactCreated ? created : existing).push(filename);
+    if (artifactCreated) await chmod(filename, mode);
+  }
+  for (const directory of [workspace.statesDirectory, workspace.cacheDirectory, workspace.reportsDirectory]) {
+    const existed = await exists(directory);
+    await mkdir(directory, {recursive: true, mode: 0o700});
+    (existed ? existing : created).push(directory);
+  }
   return {workspace, created, existing};
 }
 
@@ -123,9 +153,12 @@ export async function validateWorkspaceMarker(workspace: Workspace): Promise<voi
   }
   try {
     const value = JSON.parse(raw) as {schemaVersion?: unknown; tool?: unknown};
-    if (value.schemaVersion !== 1 || value.tool !== 'ywtc') throw new Error('unsupported marker');
+    if (value.schemaVersion === 1) {
+      throw new Error('schema v1 is not supported; create ywtc.config.yaml and a schema v2 marker or use a new workdir');
+    }
+    if (value.schemaVersion !== 2 || value.tool !== 'ywtc') throw new Error('unsupported marker');
   } catch (error) {
-    throw new Error(`Workspace marker is invalid: ${workspace.marker}. Run "ywtc init --workdir ${workspace.root}" after repairing it.`, {cause: error});
+    throw new Error(`Workspace marker is invalid: ${workspace.marker}. ${error instanceof Error ? error.message : 'Run ywtc init after repairing it.'}`, {cause: error});
   }
 }
 
