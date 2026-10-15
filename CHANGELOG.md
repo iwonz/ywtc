@@ -2,6 +2,23 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [3.1.0](https://github.com/iwonz/ywtc/compare/v3.0.0...v3.1.0) (2026-10-15)
+
+
+### Features
+
+* **init:** add interactive setup wizard ([d4699b4](https://github.com/iwonz/ywtc/commit/d4699b4106808239a0cd773dc1c2c42aef5b2dab))
+
+
+### Continuous Integration
+
+* **release:** retrigger publication workflow ([23e4094](https://github.com/iwonz/ywtc/commit/23e4094adde2189a7c28bf330275b1a0b9ccaca3))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v3.0.0 ([875ec34](https://github.com/iwonz/ywtc/commit/875ec34402154e5af52d9c2282a6419ab6a33346))
+
 ## [3.0.0](https://github.com/iwonz/ywtc/compare/v2.0.3...v3.0.0) (2026-10-15)
 
 
