@@ -92,6 +92,7 @@ describe('release validation', () => {
     expect(workflow).toContain('npm pack');
     expect(workflow).toContain('npm publish "$ARCHIVE" --access public --provenance');
     expect(workflow).toContain('gh release upload');
+    expect(workflow).toContain("if: always() && needs.publish-npm.result == 'success'");
     expect(workflow).toContain('brew audit --strict');
     expect(workflow).toContain('chore(homebrew): update formula to v$RELEASE_VERSION');
     expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN/);

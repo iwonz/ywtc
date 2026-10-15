@@ -227,6 +227,7 @@ jobs:
   homebrew:
     name: Verify and publish Homebrew formula
     needs: publish-npm
+    if: always() && needs.publish-npm.result == 'success'
     runs-on: macos-latest
     permissions:
       contents: write

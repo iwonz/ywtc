@@ -108,7 +108,7 @@ The repository SHALL document and support a one-time interactive owner publicati
 - **THEN** README SHALL state the npm CLI prerequisite, interactive bootstrap command, exact trusted publisher command, GitHub Actions PR setting and its permission boundary, and the Release Please merge sequence without exposing credentials
 
 ### Requirement: Same-repository Homebrew distribution
-The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywtc` from the published npm archive so macOS operators can use an explicit same-repository tap.
+The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywtc` from the published npm archive so macOS operators can use an explicit same-repository tap. Formula processing SHALL follow every successful npm/GitHub publication job, including authorized manual recovery.
 
 #### Scenario: Formula generation
 - **WHEN** npm version `X.Y.Z` is available
@@ -121,3 +121,11 @@ The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywt
 #### Scenario: Formula publication
 - **WHEN** formula verification succeeds
 - **THEN** automation SHALL fast-forward current `master`, create commit `chore(homebrew): update formula to vX.Y.Z`, and push without force so `brew update` and `brew upgrade ywtc` discover it
+
+#### Scenario: Manual release recovery publishes artifacts
+- **WHEN** an authorized manual recovery completes npm/GitHub publication successfully while automatic Release Please processing is skipped
+- **THEN** the Homebrew job SHALL still generate, verify, and publish the formula for the recovered version
+
+#### Scenario: Publication prerequisite fails
+- **WHEN** npm/GitHub publication fails or does not run
+- **THEN** the Homebrew job SHALL remain skipped and SHALL NOT modify `master`
