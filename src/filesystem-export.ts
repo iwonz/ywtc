@@ -7,7 +7,7 @@ import {ZipArchive} from '@archiver/archiver';
 import PQueue from 'p-queue';
 import {z} from 'zod';
 import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml} from './content-model.js';
-import type {ExportFormat, PageGraph, RenderContext, SourceAdapter, SourcePage, SourceResource} from './domain.js';
+import type {ExportFormat, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
 import {safeFilename} from './input.js';
 
 export interface ExportManifestPage {
@@ -195,14 +195,14 @@ export class FilesystemExporter {
     try {
       const sourcePages = new Map(input.graph.pages.map((page) => [page.canonicalId, page]));
       const queue = new PQueue({concurrency: this.concurrency});
-      const resourceMapByPage = new Map<string, Map<string, {path: string; name: string}>>();
+      const resourceMapByPage = new Map<string, Map<string, RenderResourceBinding>>();
       const resourcesByPage = new Map<string, SourceResource[]>();
 
       await Promise.all(input.graph.pages.map((page) => queue.add(async () => {
         if (input.signal?.aborted) throw input.signal.reason ?? new Error('Export cancelled');
         const resources = input.resourcesByPage?.get(page.canonicalId) ?? await this.source.listResources(page);
         resourcesByPage.set(page.canonicalId, resources);
-        const pageResources = new Map<string, {path: string; name: string}>();
+        const pageResources = new Map<string, RenderResourceBinding>();
         const manifestResources: ExportManifestPage['resources'] = [];
         for (const resource of resources.filter((item) => item.kind !== 'grid')) {
           const name = safeFilename(resource.name);
@@ -210,7 +210,7 @@ export class FilesystemExporter {
           const destination = path.join(staging, relative);
           await mkdir(path.dirname(destination), {recursive: true});
           const downloaded = await this.source.downloadResource(resource, destination);
-          pageResources.set(name.toLocaleLowerCase(), {path: relative, name});
+          pageResources.set(name.toLocaleLowerCase(), {kind: 'file', path: relative, name});
           manifestResources.push({name, path: relative, size: downloaded.size, sha256: downloaded.sha256});
           input.onItem?.(`attachment ${name}`);
         }

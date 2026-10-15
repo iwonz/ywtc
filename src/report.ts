@@ -22,6 +22,7 @@ export interface TransferReportPage {
   tables: number;
   codeBlocks: number;
   degraded: boolean;
+  resourceFallbacks: Array<{name: string; error: string}>;
   warnings: string[];
   error?: string;
 }
@@ -97,6 +98,7 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
     return `<details class="page" style="margin-left:${Math.min(page.depth, 8) * 14}px"><summary><span class="status ${statusClass(page.status)}">${escapeHtml(page.status)}</span><strong>${escapeHtml(page.sourceTitle)}</strong><span>${page.resources} files · ${page.links} links · depth ${page.depth}</span></summary>
       <div class="meta">${source ? `<a href="${escapeHtml(source)}" target="_blank" rel="noreferrer">source</a>` : ''}${destination ? `<a href="${escapeHtml(destination)}" target="_blank" rel="noreferrer">destination</a>` : ''}<span>${escapeHtml(page.sourceCanonicalId)}</span></div>
       ${preview ? `<div class="compare"><section><h3>Source</h3><iframe sandbox srcdoc="${escapeHtml(preview.source)}"></iframe></section><section><h3>Destination</h3><iframe sandbox srcdoc="${escapeHtml(preview.destination)}"></iframe></section></div>` : ''}
+      ${page.resourceFallbacks.length ? `<div class="fallbacks"><h3>Resource fallbacks</h3><ul>${page.resourceFallbacks.map((item) => `<li><strong>${escapeHtml(item.name)}</strong> — ${escapeHtml(item.error)}</li>`).join('')}</ul></div>` : ''}
       ${page.warnings.length ? `<ul class="warnings">${page.warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}${page.error ? `<p class="error">${escapeHtml(page.error)}</p>` : ''}</details>`;
   }).join('');
   const edgeRows = data.edges.map((edge) => `<tr><td>${escapeHtml(edge.status)}</td><td>${escapeHtml(edge.from)}</td><td>${escapeHtml(edge.to ?? '—')}</td><td>${escapeHtml(edge.raw)}</td></tr>`).join('');

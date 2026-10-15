@@ -22,6 +22,27 @@ function heading(label: string): void {
   console.log(`\n${paint(36, '◆')} ${paint(1, label)}`);
 }
 
+function reportBearingError(error: unknown): error is Error & {reportPaths: {html: string}; stateFilename: string} {
+  return error instanceof Error
+    && typeof (error as {reportPaths?: unknown}).reportPaths === 'object'
+    && typeof (error as {stateFilename?: unknown}).stateFilename === 'string';
+}
+
+async function printAndMaybeOpenReport(html: string, shouldOpen: boolean): Promise<void> {
+  const {openReportFile} = await import('./report-catalog.js');
+  const {pathToFileURL} = await import('node:url');
+  const url = pathToFileURL(html).href;
+  console.log(`  Report  ${html}`);
+  console.log(`  URL     ${url}`);
+  if (!shouldOpen) return;
+  try {
+    await openReportFile(html);
+    console.log(`  Opened  ${url}`);
+  } catch (error) {
+    console.log(`  ${paint(33, 'Warning')} ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {command: 'migrate'}>): Promise<number> {
   const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
   const initialized = await initializeWorkspace(workspace);
@@ -92,6 +113,12 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
       console.log(`  Resume   ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope} --workdir "${workspace.root}"`);
       return signalCode;
     }
+    if (reportBearingError(error)) {
+      heading('Transfer failed');
+      console.log(`  Status  failed`);
+      console.log(`  State   ${error.stateFilename}`);
+      await printAndMaybeOpenReport(error.reportPaths.html, command.openReport);
+    }
     throw error;
   } finally {
     process.removeListener('SIGINT', interrupt);
@@ -101,7 +128,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   heading(result.status === 'completed' ? 'Transfer complete' : 'Transfer finished');
   console.log(`  Status  ${result.status}`);
   console.log(`  State   ${result.stateFilename}`);
-  console.log(`  Report  ${result.reportPaths.html}`);
+  await printAndMaybeOpenReport(result.reportPaths.html, command.openReport);
   console.log(`  Pages   ${command.dryRun ? `${result.summary.complete}/${result.summary.pages} planned` : `${result.summary.complete}/${result.summary.pages} complete`} · ${result.summary.partial} partial · ${result.summary.failed} failed`);
   console.log(`  Content ${result.summary.resources} files · ${result.summary.bytes} bytes · ${result.summary.links} links · ${result.summary.cycles} cycles`);
   console.log(`  Issues  ${result.summary.warnings} warnings · ${result.summary.errors} errors`);
@@ -184,6 +211,34 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     console.log(`  Channel  ${result.channel}`);
     console.log(`  Status   ${result.installed ? paint(32, 'updated') : result.updateAvailable ? paint(33, 'update available') : paint(32, 'up to date')}`);
     if (!result.installed && result.updateAvailable) console.log(`  Command  ${result.command}`);
+    return 0;
+  }
+  if (command.command === 'reports-list' || command.command === 'reports-open') {
+    const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
+    const {listReports, openSelectedReport} = await import('./report-catalog.js');
+    if (command.command === 'reports-list') {
+      const catalog = await listReports(workspace.reportsDirectory);
+      heading('Migration reports');
+      console.log(`  Workdir  ${workspace.root}`);
+      for (const warning of catalog.warnings) console.log(`  ${paint(33, 'Warning')} ${warning}`);
+      if (catalog.reports.length === 0) {
+        console.log('  Reports  none');
+        return 0;
+      }
+      for (const report of catalog.reports) {
+        const issues = `${report.warnings} warnings · ${report.errors} errors`;
+        console.log(`  ${report.runId}  ${report.finishedAt ?? report.startedAt}  ${report.status}`);
+        console.log(`    ${report.direction} · ${report.scope} · ${report.pages} pages · ${issues}`);
+        console.log(`    ${report.url}`);
+      }
+      return 0;
+    }
+    const selected = await openSelectedReport(workspace.reportsDirectory, command.runId);
+    heading('Migration report opened');
+    for (const warning of selected.warnings) console.log(`  ${paint(33, 'Warning')} ${warning}`);
+    console.log(`  Run     ${selected.report.runId}`);
+    console.log(`  Report  ${selected.report.html}`);
+    console.log(`  URL     ${selected.report.url}`);
     return 0;
   }
   return migrate(command);

@@ -64,6 +64,8 @@ export interface DestinationPage {
   space?: string;
   version?: string;
   fingerprint?: string;
+  content?: string;
+  contentFingerprint?: string;
   contentLength?: number;
 }
 
@@ -74,6 +76,11 @@ export interface UploadedResource {
   size?: number;
   fingerprint?: string;
 }
+
+export type RenderResourceBinding =
+  | {kind: 'uploaded'; resource: UploadedResource}
+  | {kind: 'source'; resource: SourceResource; url?: string}
+  | {kind: 'file'; path: string; name: string};
 
 export interface AdapterCapabilities {
   readPages: boolean;
@@ -178,7 +185,7 @@ export interface NormalizedDocument {
 
 export interface RenderContext {
   pages: Map<string, DestinationPage | {path: string; title: string}>;
-  resources: Map<string, UploadedResource | {path: string; name: string}>;
+  resources: Map<string, RenderResourceBinding>;
   sourcePages: Map<string, SourcePage>;
   currentPageId: string;
   currentPath?: string;

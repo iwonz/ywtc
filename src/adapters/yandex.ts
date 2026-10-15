@@ -40,7 +40,8 @@ function canonical(profile: YandexConnectionProfile, id: string | number): strin
 }
 
 function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): SourcePage {
-  const rawContent = page.content ?? '';
+  if (page.content === undefined) throw new Error(`Yandex Wiki page response for ${page.id} is missing content`);
+  const rawContent = page.content;
   const parent = parentId(page);
   return {
     provider: 'yandex-wiki',
@@ -59,7 +60,8 @@ function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): 
 }
 
 function destinationPage(profile: YandexConnectionProfile, page: YandexPageDetails): DestinationPage {
-  const fingerprint = createHash('sha256').update(`${page.title}\0${page.content ?? ''}\0${page.attributes?.modified_at ?? ''}`).digest('hex');
+  const content = page.content ?? '';
+  const fingerprint = createHash('sha256').update(`${page.title}\0${content}\0${page.attributes?.modified_at ?? ''}`).digest('hex');
   return {
     provider: 'yandex-wiki',
     profile: profile.name,
@@ -70,7 +72,9 @@ function destinationPage(profile: YandexConnectionProfile, page: YandexPageDetai
     locator: normalizeWikiSlug(page.slug),
     ...(page.attributes?.modified_at ? {version: page.attributes.modified_at} : {}),
     fingerprint,
-    contentLength: Buffer.byteLength(page.content ?? ''),
+    content,
+    contentFingerprint: createHash('sha256').update(content).digest('hex'),
+    contentLength: Buffer.byteLength(content),
   };
 }
 

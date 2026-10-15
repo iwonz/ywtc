@@ -1,4 +1,5 @@
 import transform from '@diplodoc/transform';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {load} from 'cheerio';
 import {LinkifyIt} from 'linkify-it';
@@ -16,6 +17,7 @@ import type {
   NormalizedReference,
   PageReference,
   RenderContext,
+  RenderResourceBinding,
   RenderedDocument,
   SourcePage,
   SourceResource,
@@ -25,8 +27,45 @@ import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 
 const linkifier = new LinkifyIt();
 
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 function escapeHtml(value: unknown): string {
   return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+}
+
+function absoluteResourceUrl(page: SourcePage, resource: SourceResource): string {
+  if (resource.downloadUrl) {
+    try {
+      return new URL(resource.downloadUrl, page.url).toString();
+    } catch {
+      // Fall through to the page URL so the resource remains discoverable.
+    }
+  }
+  return page.url;
+}
+
+export function sourceResourceBindings(page: SourcePage, resources: SourceResource[]): Map<string, RenderResourceBinding> {
+  return new Map(resources.filter((resource) => resource.kind !== 'grid').map((resource) => [
+    resource.name.toLocaleLowerCase(),
+    {kind: 'source' as const, resource, url: absoluteResourceUrl(page, resource)},
+  ]));
+}
+
+function bindingTarget(binding: RenderResourceBinding): string | undefined {
+  return binding.kind === 'uploaded' ? binding.resource.url ?? binding.resource.name
+    : binding.kind === 'source' ? binding.url
+      : binding.path;
+}
+
+function resourceBinding(reference: string, context: RenderContext): RenderResourceBinding | undefined {
+  const withoutFragment = reference.split(/[?#]/, 1)[0] ?? reference;
+  const normalized = withoutFragment.replace(/^attachment:/, '').replace(/^\.\//, '').replace(/^\/+/, '').toLocaleLowerCase();
+  const direct = context.resources.get(normalized);
+  if (direct) return direct;
+  const basename = normalized.replace(/\\/g, '/').split('/').at(-1);
+  return basename ? context.resources.get(basename) : undefined;
 }
 
 function uniqueReferences(references: PageReference[]): PageReference[] {
@@ -252,6 +291,76 @@ export function renderedPreviewHtml(body: string, provider: SourcePage['provider
   return provider === 'confluence' ? storageToSemanticHtml(body, warnings) : yfmToHtml(body, warnings);
 }
 
+export function legacyTransferPlaceholder(provider: SourcePage['provider'], page: SourcePage): string {
+  return provider === 'confluence'
+    ? `<p><em>ywtc transfer in progress from <a href="${escapeHtml(page.url)}">${page.provider}</a>.</em></p>`
+    : `_ywtc transfer in progress from [${page.provider}](${page.url})._`;
+}
+
+export function isLegacyTransferPlaceholder(body: string | undefined, provider: SourcePage['provider'], page: SourcePage): boolean {
+  return body?.trim() === legacyTransferPlaceholder(provider, page).trim();
+}
+
+function markdownFence(value: string): string {
+  const longest = Math.max(0, ...[...value.matchAll(/`+/g)].map((match) => match[0].length));
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
+export function rawContentFallback(page: SourcePage, provider: SourcePage['provider'], reason: string): RenderedDocument {
+  const warning = `Preferred rendering failed; complete raw source is shown instead: ${reason}`;
+  if (provider === 'confluence') {
+    const raw = page.rawContent
+      ? `<pre><code>${escapeHtml(page.rawContent)}</code></pre>`
+      : '<p><em>The source page has no body content.</em></p>';
+    return {
+      body: `<p><strong>Source content fallback</strong> · <a href="${escapeHtml(page.url)}">original page</a></p>${raw}`,
+      warnings: [warning],
+      degraded: true,
+      representedReferences: page.references.length,
+    };
+  }
+  const raw = page.rawContent
+    ? `${markdownFence(page.rawContent)}text\n${page.rawContent}\n${markdownFence(page.rawContent)}`
+    : '_The source page has no body content._';
+  return {
+    body: `**Source content fallback** · [original page](${page.url})\n\n${raw}\n`,
+    warnings: [warning],
+    degraded: true,
+    representedReferences: page.references.length,
+  };
+}
+
+export function semanticContentFingerprint(body: string, provider: SourcePage['provider']): string {
+  const html = renderedPreviewHtml(body, provider);
+  const $ = load(html, null, false);
+  $('script, style').remove();
+  const tokens = $('*').toArray().map((element) => {
+    const node = $(element);
+    const directText = node.clone().children().remove().end().text().replace(/\s+/g, ' ').trim();
+    const attributes = ['href', 'src', 'id', 'class'].map((name) => node.attr(name) ? `${name}=${node.attr(name)}` : '').filter(Boolean);
+    const tagName = 'name' in element ? String(element.name) : element.type;
+    return `${tagName.toLocaleLowerCase()}[${attributes.join(',')}](${directText})`;
+  });
+  const text = $.root().text().replace(/\s+/g, ' ').trim();
+  return sha256(JSON.stringify({text, tokens}));
+}
+
+export function assertDestinationContent(
+  expectedBody: string,
+  actualBody: string | undefined,
+  provider: SourcePage['provider'],
+  page: SourcePage,
+): void {
+  if (actualBody === undefined) throw new Error(`Verification could not read destination content for ${page.title}`);
+  if (actualBody.trim().length === 0) throw new Error(`Verification found empty destination content for ${page.title}`);
+  if (isLegacyTransferPlaceholder(actualBody, provider, page)) {
+    throw new Error(`Verification found a transfer placeholder instead of source content for ${page.title}`);
+  }
+  if (semanticContentFingerprint(expectedBody, provider) !== semanticContentFingerprint(actualBody, provider)) {
+    throw new Error(`Verification found destination content that differs from the rendered source for ${page.title}`);
+  }
+}
+
 function relativeTarget(currentPath: string | undefined, targetPath: string): string {
   if (!currentPath) return targetPath;
   const from = currentPath.includes('/') ? currentPath.slice(0, currentPath.lastIndexOf('/')) : '.';
@@ -283,16 +392,19 @@ function rewritePortableHtml(html: string, context: RenderContext): string {
       }
       return;
     }
-    const attachmentName = href.replace(/^attachment:/, '').split('/').at(-1)?.toLocaleLowerCase();
-    const resource = attachmentName ? context.resources.get(attachmentName) : undefined;
-    if (resource) $(element).attr('href', 'path' in resource ? relativeTarget(context.currentPath, resource.path) : resource.url ?? resource.name);
+    const resource = resourceBinding(href, context);
+    const target = resource ? bindingTarget(resource) : undefined;
+    if (resource && target) {
+      $(element).attr('href', resource.kind === 'file' ? relativeTarget(context.currentPath, target) : target);
+    }
   });
   $('img').each((_index, element) => {
     const src = $(element).attr('src') ?? '';
-    const name = src.replace(/^attachment:/, '').split('/').at(-1);
-    if (!name) return;
-    const resource = context.resources.get(name.toLocaleLowerCase());
-    if (resource && 'path' in resource) $(element).attr('src', relativeTarget(context.currentPath, resource.path));
+    const resource = resourceBinding(src, context);
+    const target = resource ? bindingTarget(resource) : undefined;
+    if (resource && target) {
+      $(element).attr('src', resource.kind === 'file' ? relativeTarget(context.currentPath, target) : target);
+    }
   });
   return $.html();
 }
@@ -312,6 +424,7 @@ export async function renderStaticHtml(document: NormalizedDocument, context: Re
 export async function renderYfm(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
   if (document.rawFormat === 'yfm') {
     let body = document.raw;
+    const resourceWarnings = new Set<string>();
     const replacement = (href: string): string | undefined => {
       const current = context.sourcePages.get(context.currentPageId);
       if (!current) return undefined;
@@ -325,7 +438,11 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
     };
     body = body.replace(/(!?\[[^\]]*\]\()([^\s)]+)([^)]*\))/g, (match, prefix: string, href: string, suffix: string) => {
       const next = replacement(href);
-      return next ? `${prefix}${next}${suffix}` : match;
+      if (next) return `${prefix}${next}${suffix}`;
+      const binding = resourceBinding(href, context);
+      const target = binding ? bindingTarget(binding) : undefined;
+      if (binding?.kind === 'source') resourceWarnings.add(`Resource uses its source fallback because it was not transferred: ${binding.resource.name}`);
+      return target ? `${prefix}${target}${suffix}` : match;
     });
     body = body.replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, (match, href: string, label = '') => {
       const next = replacement(href);
@@ -338,7 +455,12 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
     const $ = load(htmlFromDocument(document), null, false);
     const gridHtml = $('.ywtc-grid').toArray().map((element) => $.html(element)).join('');
     if (gridHtml) body = `${body.trimEnd()}\n\n${(await htmlToMarkdown(gridHtml)).trimStart()}`;
-    return {body, warnings: [...document.warnings], degraded: document.degraded, representedReferences: document.references.length};
+    return {
+      body,
+      warnings: [...document.warnings, ...resourceWarnings],
+      degraded: document.degraded || resourceWarnings.size > 0,
+      representedReferences: document.references.length,
+    };
   }
   const body = await htmlToMarkdown(rewritePortableHtml(htmlFromDocument(document), context));
   return {body, warnings: [...document.warnings, 'Confluence Storage Format was converted to YFM-compatible Markdown'], degraded: document.degraded, representedReferences: document.references.length};
@@ -347,6 +469,55 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
 export async function renderConfluenceStorage(document: NormalizedDocument, page: SourcePage, context: RenderContext, spaceKey: string): Promise<RenderedDocument> {
   if (document.rawFormat === 'confluence-storage') {
     const $ = load(`<main data-root>${document.raw}</main>`, {xmlMode: true}, false);
+    const warnings = [...document.warnings];
+    $('ac\\:image').each((_index, element) => {
+      const image = $(element);
+      const attachment = image.children('ri\\:attachment');
+      const filename = attachment.attr('ri:filename');
+      if (!filename) return;
+      const binding = resourceBinding(filename, context);
+      if (!binding) return;
+      if (binding.kind === 'uploaded') {
+        attachment.attr('ri:filename', binding.resource.name);
+        return;
+      }
+      const target = bindingTarget(binding);
+      if (!target) return;
+      warnings.push(`Image uses its source fallback because it was not transferred: ${filename}`);
+      attachment.replaceWith(`<ri:url ri:value="${escapeHtml(target)}"/>`);
+    });
+    $('ac\\:link').each((_index, element) => {
+      const link = $(element);
+      const attachment = link.children('ri\\:attachment');
+      const filename = attachment.attr('ri:filename');
+      if (!filename) return;
+      const binding = resourceBinding(filename, context);
+      if (!binding) return;
+      if (binding.kind === 'uploaded') {
+        attachment.attr('ri:filename', binding.resource.name);
+        return;
+      }
+      const target = bindingTarget(binding);
+      if (!target) return;
+      const label = link.children('ac\\:link-body, ac\\:plain-text-link-body').text().trim() || filename;
+      warnings.push(`Attachment uses its source fallback because it was not transferred: ${filename}`);
+      link.replaceWith(`<a href="${escapeHtml(target)}">${escapeHtml(label)}</a>`);
+    });
+    $('ri\\:attachment').each((_index, element) => {
+      const attachment = $(element);
+      const filename = attachment.attr('ri:filename');
+      if (!filename) return;
+      const binding = resourceBinding(filename, context);
+      if (!binding) return;
+      if (binding.kind === 'uploaded') {
+        attachment.attr('ri:filename', binding.resource.name);
+        return;
+      }
+      const target = bindingTarget(binding);
+      if (!target) return;
+      warnings.push(`Attachment uses its source fallback because it was not transferred: ${filename}`);
+      attachment.replaceWith(`<a href="${escapeHtml(target)}">${escapeHtml(filename)}</a>`);
+    });
     $('ri\\:page').each((_index, element) => {
       const title = $(element).attr('ri:content-title');
       const id = $(element).attr('ri:content-id');
@@ -365,8 +536,8 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
     });
     return {
       body: $('main[data-root]').html() ?? '<p></p>',
-      warnings: [...document.warnings],
-      degraded: document.degraded,
+      warnings,
+      degraded: document.degraded || warnings.length > document.warnings.length,
       representedReferences: document.references.length,
     };
   }
@@ -382,13 +553,18 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
     });
   }
   const attachments = new Map<string, string>();
-  for (const [name, resource] of context.resources) attachments.set(name, resource.name);
+  const resourceFallbacks = new Map<string, string>();
+  for (const [name, binding] of context.resources) {
+    if (binding.kind === 'uploaded') attachments.set(name, binding.resource.name);
+    else if (binding.kind === 'source' && binding.url) resourceFallbacks.set(name, binding.url);
+  }
   const converted = convertYfmToStorage(document.raw, {
     currentSlug: page.locator,
     spaceKey,
     wikiWebUrl: new URL(page.url).origin,
     pagesBySlug,
     attachmentsByReference: attachments,
+    resourceFallbacksByReference: resourceFallbacks,
   });
   const $ = load(htmlFromDocument(document), null, false);
   const gridStorage = $('.ywtc-grid').toArray().map((element) => $(element).html() ?? '').join('');

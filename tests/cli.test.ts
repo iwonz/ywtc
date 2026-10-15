@@ -50,10 +50,17 @@ describe('CLI and named profiles', () => {
   it('parses the universal migration surface', () => {
     expect(parseCliArguments([
       'migrate', '--source', '42', '--source-profile', 'wiki-main', '--destination', './site',
-      '--scope', 'linked', '--format', 'html', '--archive', '--dry-run', '--concurrency', '8',
+      '--scope', 'linked', '--format', 'html', '--archive', '--dry-run', '--open-report', '--concurrency', '8',
     ])).toMatchObject({
       command: 'migrate', source: '42', destination: './site', sourceProfile: 'wiki-main',
-      scope: 'linked', format: 'html', archive: true, dryRun: true, concurrency: 8,
+      scope: 'linked', format: 'html', archive: true, dryRun: true, openReport: true, concurrency: 8,
+    });
+    expect(parseCliArguments(['reports', 'list', '--workdir', './workspace'])).toEqual({
+      command: 'reports-list', workdir: './workspace',
+    });
+    expect(parseCliArguments(['reports', 'open'])).toEqual({command: 'reports-open'});
+    expect(parseCliArguments(['reports', 'open', '11111111-1111-4111-8111-111111111111'])).toEqual({
+      command: 'reports-open', runId: '11111111-1111-4111-8111-111111111111',
     });
   });
 
@@ -64,6 +71,9 @@ describe('CLI and named profiles', () => {
     expect(() => parseCliArguments(['doctor', '--source', 'a'])).toThrow(/both --source and --destination/);
     expect(() => parseCliArguments(['migrate', '--source', 'a', '--destination', 'https://example.com', '--format', 'html'])).toThrow(/remote HTTP/);
     expect(cliHelp('migrate')).toContain('--scope');
+    expect(cliHelp('migrate')).toContain('--open-report');
+    expect(cliHelp('reports')).toContain('list');
+    expect(cliHelp('reports')).toContain('open');
     expect(cliHelp('migrate')).toContain('configured CWD');
   });
 

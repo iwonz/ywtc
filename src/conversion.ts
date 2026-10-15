@@ -16,6 +16,7 @@ export interface ConversionContext {
   wikiWebUrl: string;
   pagesBySlug: Map<string, DestinationPageReference>;
   attachmentsByReference: Map<string, string>;
+  resourceFallbacksByReference?: Map<string, string>;
 }
 
 export interface ConversionResult {
@@ -161,6 +162,14 @@ function attachmentFor(reference: string, context: ConversionContext): string | 
   return basename ? context.attachmentsByReference.get(normalizeReference(basename)) : undefined;
 }
 
+function resourceFallbackFor(reference: string, context: ConversionContext): string | undefined {
+  const withoutFragment = reference.split(/[?#]/, 1)[0] ?? reference;
+  const direct = context.resourceFallbacksByReference?.get(normalizeReference(withoutFragment));
+  if (direct) return direct;
+  const basename = withoutFragment.replace(/\\/g, '/').split('/').at(-1);
+  return basename ? context.resourceFallbacksByReference?.get(normalizeReference(basename)) : undefined;
+}
+
 type LinkTarget =
   | {type: 'page'; page: DestinationPageReference; anchor?: string}
   | {type: 'attachment'; filename: string}
@@ -170,6 +179,8 @@ type LinkTarget =
 function resolveLink(href: string, context: ConversionContext): LinkTarget {
   const attached = attachmentFor(href, context);
   if (attached) return {type: 'attachment', filename: attached};
+  const fallback = resourceFallbackFor(href, context);
+  if (fallback) return {type: 'external', href: fallback};
   if (href.startsWith('#')) return {type: 'anchor', anchor: href.slice(1)};
   if (/^(?:mailto|tel):/i.test(href)) return {type: 'external', href};
 
@@ -334,6 +345,12 @@ function renderHtmlToStorage(
       if (filename) {
         stats.attachedImages += 1;
         return `<ac:image${attrs}><ri:attachment ri:filename="${escapeAttribute(filename)}"/></ac:image>`;
+      }
+      const fallback = resourceFallbackFor(src, context);
+      if (fallback) {
+        stats.externalImages += 1;
+        warnings.add(`Image uses its source fallback because it was not transferred: ${src}`);
+        return `<ac:image${attrs}><ri:url ri:value="${escapeAttribute(fallback)}"/></ac:image>`;
       }
       const target = resolveLink(src, context);
       const external = target.type === 'external' ? target.href : new URL(src, `${context.wikiWebUrl}/`).toString();

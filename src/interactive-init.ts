@@ -307,11 +307,15 @@ function review(context: WizardContext): string {
   ].join('\n');
 }
 
-function firstDryRun(context: WizardContext): string {
-  const workdir = JSON.stringify(context.workspace.root);
-  const sourceProfile = JSON.stringify(context.yandex!.profile.name);
-  const destinationProfile = JSON.stringify(context.confluence!.profile.name);
-  return `ywtc migrate --source "<yandex-page-url-or-slug>" --source-profile ${sourceProfile} --destination "<confluence-page-url-or-id>" --destination-profile ${destinationProfile} --scope subtree --dry-run --workdir ${workdir}`;
+function firstDryRun(context: WizardContext, options: InteractiveInitOptions): string {
+  const command = 'ywtc migrate --source "<yandex-page-url>" --destination "<confluence-page-url>" --dry-run';
+  const defaultWorkspace = resolveInitWorkspace({
+    ...(options.cwd ? {cwd: options.cwd} : {}),
+    ...(options.homeDirectory ? {homeDirectory: options.homeDirectory} : {}),
+  });
+  return context.workspace.root === defaultWorkspace.root
+    ? command
+    : `${command} --workdir ${JSON.stringify(context.workspace.root)}`;
 }
 
 async function workspaceStep(
@@ -383,6 +387,7 @@ async function verifyAndCommit(
   context: WizardContext,
   prompter: InitPrompter,
   verify: typeof verifyConnection,
+  options: InteractiveInitOptions,
 ): Promise<InteractiveInitResult | 0 | 1 | 2> {
   prompter.info('Step 4 of 4 · Review and verify');
   prompter.note(review(context), 'Configuration summary');
@@ -444,7 +449,7 @@ async function verifyAndCommit(
     }),
     () => 'Workspace configuration saved',
   );
-  const dryRunCommand = firstDryRun(context);
+  const dryRunCommand = firstDryRun(context, options);
   prompter.success(`Config: ${committed.configFile}`);
   if (committed.backupFile) prompter.info(`Backup: ${committed.backupFile}`);
   prompter.note(dryRunCommand, 'First migration dry-run');
@@ -491,7 +496,7 @@ export async function runInteractiveInit(options: InteractiveInitOptions): Promi
         step = next === 'back' ? 1 : 3;
         continue;
       }
-      const result = await verifyAndCommit(context, prompter, options.verify ?? verifyConnection);
+      const result = await verifyAndCommit(context, prompter, options.verify ?? verifyConnection, options);
       if (typeof result !== 'number') return result;
       step = result;
     }

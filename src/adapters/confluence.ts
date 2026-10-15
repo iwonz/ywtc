@@ -32,8 +32,13 @@ function fingerprint(page: ConfluencePage): string {
   return createHash('sha256').update(`${page.title}\0${page.body?.storage?.value ?? ''}\0${page.version?.number ?? ''}`).digest('hex');
 }
 
+function contentFingerprint(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
 function sourcePage(profile: ConfluenceConnectionProfile, client: ConfluenceApi, page: ConfluencePage): SourcePage {
-  const rawContent = page.body?.storage?.value ?? '';
+  const rawContent = page.body?.storage?.value;
+  if (rawContent === undefined) throw new Error(`Confluence page response for ${page.id} is missing body.storage.value`);
   return {
     provider: 'confluence',
     profile: profile.name,
@@ -52,6 +57,7 @@ function sourcePage(profile: ConfluenceConnectionProfile, client: ConfluenceApi,
 }
 
 function destinationPage(profile: ConfluenceConnectionProfile, client: ConfluenceApi, page: ConfluencePage): DestinationPage {
+  const content = page.body?.storage?.value ?? '';
   return {
     provider: 'confluence',
     profile: profile.name,
@@ -63,7 +69,9 @@ function destinationPage(profile: ConfluenceConnectionProfile, client: Confluenc
     space: page.space.key,
     ...(page.version?.number ? {version: String(page.version.number)} : {}),
     fingerprint: fingerprint(page),
-    contentLength: Buffer.byteLength(page.body?.storage?.value ?? ''),
+    content,
+    contentFingerprint: contentFingerprint(content),
+    contentLength: Buffer.byteLength(content),
   };
 }
 
@@ -87,7 +95,12 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   }
 
   async getDescendants(page: SourcePage): Promise<SourcePage[]> {
-    return (await this.client.getDescendants(page.id)).map((item) => sourcePage(this.profile, this.client, item));
+    const descendants = await this.client.getDescendants(page.id);
+    return Promise.all(descendants.map(async (item) => sourcePage(
+      this.profile,
+      this.client,
+      item.body?.storage?.value === undefined ? await this.client.getPage(item.id) : item,
+    )));
   }
 
   async resolveReference(from: SourcePage, reference: PageReference): Promise<SourcePage | undefined> {

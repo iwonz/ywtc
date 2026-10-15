@@ -1,12 +1,16 @@
 import {describe, expect, it} from 'vitest';
 import {
   appendGridSnapshots,
+  assertDestinationContent,
   extractPageReferences,
+  legacyTransferPlaceholder,
   normalizePageContent,
+  rawContentFallback,
   renderConfluenceStorage,
   renderMarkdown,
   renderStaticHtml,
   renderYfm,
+  sourceResourceBindings,
 } from '../src/content-model.js';
 import type {DestinationPage, RenderContext, SourcePage, SourceResource} from '../src/domain.js';
 
@@ -78,5 +82,51 @@ describe('normalized content pipeline', () => {
     };
     expect((await renderYfm(document, context)).body).toMatch(/\| Ship \| ✓\s+\|/);
     expect((await renderConfluenceStorage(document, page, context, 'DOC')).body).toContain('<table>');
+  });
+
+  it('keeps unavailable resources as explicit source fallbacks and uses native uploaded attachments', async () => {
+    const page = source('![Diagram](diagram.png)\n\n[Download](manual.pdf)');
+    const resources: SourceResource[] = [
+      {provider: 'yandex-wiki', id: 'image', pageId: page.id, name: 'diagram.png', kind: 'image', downloadUrl: '/download/diagram.png'},
+      {provider: 'yandex-wiki', id: 'file', pageId: page.id, name: 'manual.pdf', kind: 'attachment', downloadUrl: '/download/manual.pdf'},
+    ];
+    const fallbackContext: RenderContext = {
+      pages: new Map(), resources: sourceResourceBindings(page, resources),
+      sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const yfm = await renderYfm(normalizePageContent(page), fallbackContext);
+    expect(yfm.body).toContain('https://wiki.example.com/download/diagram.png');
+    expect(yfm.body).toContain('https://wiki.example.com/download/manual.pdf');
+    expect(yfm.degraded).toBe(true);
+    const storage = await renderConfluenceStorage(normalizePageContent(page), page, fallbackContext, 'DOC');
+    expect(storage.body).toContain('<ri:url');
+    expect(storage.body).toContain('https://wiki.example.com/download/manual.pdf');
+
+    const uploadedContext: RenderContext = {
+      ...fallbackContext,
+      resources: new Map(resources.map((resource) => [resource.name.toLocaleLowerCase(), {
+        kind: 'uploaded' as const,
+        resource: {id: `dest-${resource.id}`, name: resource.name},
+      }])),
+    };
+    const uploadedStorage = await renderConfluenceStorage(normalizePageContent(page), page, uploadedContext, 'DOC');
+    expect(uploadedStorage.body).toContain('<ri:attachment ri:filename="diagram.png"');
+    expect(uploadedStorage.body).toContain('<ri:attachment ri:filename="manual.pdf"');
+  });
+
+  it('provides complete raw fallback and rejects empty, truncated, or legacy placeholder bodies', () => {
+    const page = source('# Full source\n\nImportant details');
+    const fallback = rawContentFallback(page, 'confluence', 'test renderer failure');
+    expect(fallback.body).toContain('Full source');
+    expect(fallback.body).toContain('Important details');
+    expect(() => assertDestinationContent(fallback.body, fallback.body, 'confluence', page)).not.toThrow();
+    expect(() => assertDestinationContent(fallback.body, '', 'confluence', page)).toThrow(/empty destination content/);
+    expect(() => assertDestinationContent(fallback.body, '<p>Full source</p>', 'confluence', page)).toThrow(/differs/);
+    expect(() => assertDestinationContent(
+      fallback.body,
+      legacyTransferPlaceholder('confluence', page),
+      'confluence',
+      page,
+    )).toThrow(/transfer placeholder/);
   });
 });

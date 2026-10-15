@@ -53,7 +53,7 @@ ywtc update --install --via brew  # явно через Homebrew
 - [ ] Установите CLI одним из способов выше.
 - [ ] Запустите `ywtc init --interactive` и настройте обязательные подключения Yandex Wiki и Confluence.
 - [ ] Дождитесь read-only проверки API и авторизации: конфиг сохраняется только после её успеха.
-- [ ] Выполните предложенную wizard команду первой миграции с `--dry-run`, заменив placeholders страниц.
+- [ ] Выполните предложенную wizard команду первой миграции с `--dry-run`, подставив полные URL страниц.
 - [ ] Проверьте план и повторите команду без `--dry-run`.
 
 ## Конфигурация
@@ -150,6 +150,8 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `ywtc init [--workdir <path>] [--interactive]` | Создать шаблон либо настроить и проверить подключения в TTY wizard |
 | `ywtc doctor [options]` | Проверить workspace; с source и destination выполнить read-only preflight |
 | `ywtc migrate --source <locator> --destination <locator\|directory> [options]` | Перенести или экспортировать выбранный граф страниц |
+| `ywtc reports list [--workdir <path>]` | Показать локальные отчёты от новых к старым |
+| `ywtc reports open [run-id] [--workdir <path>]` | Открыть выбранный или последний отчёт в системном браузере |
 | `ywtc update [--install] [--via npm\|brew]` | Проверить или установить обновление безопасным для текущего канала способом |
 | `ywtc --help`, `ywtc <command> --help` | Показать общую или командную справку |
 | `ywtc --version` | Показать версию |
@@ -167,9 +169,10 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `--archive` | `migrate` | только вместе с `--format` | Дополнительно создать ZIP рядом с каталогом |
 | `--dry-run` | `migrate` | default `false` | Discovery и план без записи в destination |
 | `--fresh` | `migrate` | default `false` | Игнорировать mappings текущего state |
+| `--open-report` | `migrate` | default `false` | Открыть итоговый HTML-отчёт; ошибка браузера не меняет результат миграции |
 | `--concurrency <n>` | `migrate` | `1..64`; иначе config default | Общая параллельность; профильные лимиты сохраняются |
 | `--state <path>` | `migrate` | внутри workspace | Явный state вместо автоматического |
-| `--workdir <path>` | `init`, `doctor`, `migrate` | config в CWD или `~/.ywtc` | Явно выбрать workspace; поддерживается `~/...` |
+| `--workdir <path>` | `init`, `doctor`, `migrate`, `reports` | config в CWD или `~/.ywtc` | Явно выбрать workspace; поддерживается `~/...` |
 | `--interactive` | `init` | требует stdin/stdout TTY | Обязательный wizard Yandex Wiki + Confluence; без частично сохранённого конфига |
 | `--install` | `update` | default `false` | Установить найденное обновление |
 | `--via <channel>` | `update` | `npm` или `brew` | Явно выбрать совместимый канал обновления |
@@ -223,6 +226,15 @@ ywtc migrate --source-profile confluence-prod --source 123456 \
 # Markdown dry-run
 ywtc migrate --source-profile wiki-prod --source team/start \
   --destination ./exports/knowledge-base --format markdown --dry-run
+
+# Миграция с автоматическим открытием итогового отчёта
+ywtc migrate --source https://wiki.example.com/team/start \
+  --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
+  --open-report
+
+# Список отчётов и открытие последнего
+ywtc reports list
+ywtc reports open
 ```
 
 Wizard проверяет только доступность API и авторизацию без страниц и внешних записей. `doctor` принимает те же endpoints, profiles, `scope` и `format`: без endpoints он проверяет workspace, конфигурацию и секреты, а с обоими endpoints выполняет page-specific read-only capability-preflight.
@@ -241,6 +253,8 @@ Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json
 
 - Одинаковые source и destination автоматически подхватывают один state независимо от формы URL/ID/slug.
 - Уже сопоставленные страницы и вложения обновляются без создания дубликатов.
+- Страница с прежним неизменённым служебным placeholder ywtc автоматически получает полноценный source-derived контент.
+- Ошибка отдельного файла оставляет полный текст и source-ссылку, фиксирует `partial` и повторяет ресурс при следующем запуске.
 - Страница, изменённая вручную после прошлого запуска, получает `conflict` и не перезаписывается.
 - `--fresh` игнорирует mappings; перед live-run прежний state сохраняется как backup, а destination может получить новые объекты.
 - Удалённые из source объекты автоматически не удаляются из destination.
@@ -249,9 +263,11 @@ Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json
 
 ## Отчёты
 
-Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json`. Отчёт содержит направление, профили, дерево и link graph, циклы, вложения, размеры, деградации, raw snapshots, ошибки и side-by-side preview страниц; unversioned JSON доступен для автоматической обработки.
+Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json` и печатает кликабельный `file://` URL. `--open-report` открывает отчёт после миграции; `ywtc reports list` показывает историю, а `ywtc reports open [run-id]` открывает выбранный или последний корректный отчёт.
 
-Итоговый статус запуска: `completed`, `completed-with-warnings`, `partial`, `failed`, `cancelled` или `interrupted`. Для страниц фиксируются `discovered`, `planned`, `skeleton-created`, `complete`, `partial`, `conflict`, `failed` и `blocked`.
+Отчёт содержит направление, профили, дерево и link graph, циклы, вложения, resource fallbacks, размеры, деградации, raw snapshots, ошибки и side-by-side preview фактически прочитанного destination-контента. JSON доступен для автоматической обработки.
+
+Итоговый статус запуска: `completed`, `completed-with-warnings`, `partial`, `failed`, `cancelled` или `interrupted`. Страница получает `complete` или `partial` только после повторного чтения и проверки полного тела; технический промежуточный статус `skeleton-created` уже содержит source-derived bootstrap, а не progress-placeholder.
 
 ## Разработка
 

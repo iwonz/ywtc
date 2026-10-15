@@ -2,8 +2,10 @@ import {Command, Option} from '@commander-js/extra-typings';
 import type {ExportFormat, TransferScope} from './domain.js';
 import {packageVersion} from './version.js';
 
+export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'reports' | 'update';
+
 export type CliCommand =
-  | {command: 'help'; topic?: 'init' | 'doctor' | 'migrate' | 'update'}
+  | {command: 'help'; topic?: CliHelpTopic}
   | {command: 'version'}
   | {command: 'init'; workdir?: string; interactive: boolean}
   | {
@@ -30,7 +32,10 @@ export type CliCommand =
     fresh: boolean;
     concurrency?: number;
     stateFilename?: string;
+    openReport: boolean;
   }
+  | {command: 'reports-list'; workdir?: string}
+  | {command: 'reports-open'; runId?: string; workdir?: string}
   | {command: 'update'; install: boolean; via?: 'npm' | 'brew'};
 
 function nonEmpty(value: string | undefined, option: string): string | undefined {
@@ -102,6 +107,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('--workdir <path>', 'workspace (configured CWD, then ~/.ywtc)')
     .option('--dry-run', 'discover and render without destination writes', false)
     .option('--fresh', 'ignore mappings and preserve existing live state as a backup', false)
+    .option('--open-report', 'open the generated HTML report in the system browser', false)
     .option('--concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
     .option('--state <path>', 'state path inside workdir')
     .action((options) => {
@@ -121,6 +127,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
         archive: options.archive,
         dryRun: options.dryRun,
         fresh: options.fresh,
+        openReport: options.openReport,
         ...(sourceProfile ? {sourceProfile} : {}),
         ...(destinationProfile ? {destinationProfile} : {}),
         ...(options.format ? {format: options.format as ExportFormat} : {}),
@@ -128,6 +135,24 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
         ...(options.concurrency !== undefined ? {concurrency: options.concurrency} : {}),
         ...(stateFilename ? {stateFilename} : {}),
       });
+    });
+
+  const reports = program.command('reports').description('List and open local migration reports');
+  reports.command('list')
+    .description('List valid reports from newest to oldest')
+    .option('--workdir <path>', 'workspace containing reports')
+    .action((options) => {
+      const workdir = nonEmpty(options.workdir, '--workdir');
+      onCommand({command: 'reports-list', ...(workdir ? {workdir} : {})});
+    });
+  reports.command('open')
+    .description('Open a report by run ID, or the latest report when omitted')
+    .argument('[run-id]', 'report run ID from "ywtc reports list"')
+    .option('--workdir <path>', 'workspace containing reports')
+    .action((runIdValue: string | undefined, options) => {
+      const runId = nonEmpty(runIdValue, 'run-id');
+      const workdir = nonEmpty(options.workdir, '--workdir');
+      onCommand({command: 'reports-open', ...(runId ? {runId} : {}), ...(workdir ? {workdir} : {})});
     });
 
   program.command('update')
@@ -148,8 +173,8 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const helpIndex = argv.findIndex((value) => ['--help', '-h'].includes(value));
   if (helpIndex >= 0) {
     const topic = argv[0];
-    return ['init', 'doctor', 'migrate', 'update'].includes(topic ?? '')
-      ? {command: 'help', topic: topic as 'init' | 'doctor' | 'migrate' | 'update'}
+    return ['init', 'doctor', 'migrate', 'reports', 'update'].includes(topic ?? '')
+      ? {command: 'help', topic: topic as CliHelpTopic}
       : {command: 'help'};
   }
   let parsed: CliCommand | undefined;
@@ -170,7 +195,7 @@ export function parseCliArguments(argv: string[]): CliCommand {
   return parsed;
 }
 
-export function cliHelp(topic?: 'init' | 'doctor' | 'migrate' | 'update'): string {
+export function cliHelp(topic?: CliHelpTopic): string {
   const program = createCliProgram();
   if (!topic) return program.helpInformation();
   const command = program.commands.find((candidate) => candidate.name() === topic);

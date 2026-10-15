@@ -18,7 +18,7 @@ describe('transfer report', () => {
     report.addPage({
       sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', sourceUrl: 'https://wiki.example.com/root',
       depth: 0, status: 'planned', resources: 0, bytes: 0, links: 1, images: 0, tables: 0, codeBlocks: 0,
-      degraded: false, warnings: [],
+      degraded: true, resourceFallbacks: [{name: 'manual.pdf', error: 'upload failed'}], warnings: [],
     }, {source: '<p>Source</p>', destination: '<p>Destination</p>'});
     report.finish('completed');
     const paths = await report.write(directory);
@@ -29,5 +29,7 @@ describe('transfer report', () => {
     expect(html).toContain('download="report.json"');
     expect(html).toContain('Source');
     expect(html).toContain('Destination');
+    expect(html).toContain('Resource fallbacks');
+    expect(html).toContain('manual.pdf');
   });
 });

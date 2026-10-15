@@ -171,7 +171,15 @@ The wizard SHALL keep configuration drafts and secrets in memory, perform only a
 
 #### Scenario: Successful commit
 - **WHEN** both probes and strict draft validation succeed and the operator confirms saving
-- **THEN** the wizard SHALL create runtime directories, atomically replace or create `ywtc.config.yaml`, use user-only permissions for a new file, roll back on persistence failure, and print paths plus a profile-specific first dry-run example
+- **THEN** the wizard SHALL create runtime directories, atomically replace or create `ywtc.config.yaml`, use user-only permissions for a new file, roll back on persistence failure, and print paths plus the shortest reliable first dry-run command
+
+#### Scenario: Default workspace handoff
+- **WHEN** the wizard configured the default workspace
+- **THEN** the first dry-run command SHALL contain full source and destination URL placeholders plus `--dry-run` and SHALL omit profile and default-scope options
+
+#### Scenario: Custom workspace handoff
+- **WHEN** the wizard configured a workdir that ordinary command resolution would not select automatically
+- **THEN** the first dry-run command SHALL additionally include the normalized `--workdir` path and no other optional defaults
 
 #### Scenario: Permission boundary
 - **WHEN** connection-only verification succeeds

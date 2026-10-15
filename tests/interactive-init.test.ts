@@ -124,9 +124,10 @@ describe('interactive init wizard', () => {
 
     const result = await runInteractiveInit({prompter, verify});
     expect(result).toMatchObject({status: 'completed', code: 0});
-    expect(result.dryRunCommand).toContain('--source-profile "yandex"');
-    expect(result.dryRunCommand).toContain('--destination-profile "confluence"');
-    expect(result.dryRunCommand).toContain('--dry-run');
+    expect(result.dryRunCommand).toBe(`ywtc migrate --source "<yandex-page-url>" --destination "<confluence-page-url>" --dry-run --workdir ${JSON.stringify(root)}`);
+    expect(result.dryRunCommand).not.toContain('--source-profile');
+    expect(result.dryRunCommand).not.toContain('--destination-profile');
+    expect(result.dryRunCommand).not.toContain('--scope');
     expect(verify).toHaveBeenCalledTimes(2);
     expect(prompter.validationErrors).toEqual(expect.arrayContaining([
       expect.stringContaining('yandex.organization.id'), expect.stringContaining('yandex.token'),
@@ -139,6 +140,18 @@ describe('interactive init wizard', () => {
     expect(config.profiles.confluence).toMatchObject({token: 'conf-secret'});
     expect(prompter.output.join('\n')).not.toContain('wiki-secret');
     expect(prompter.output.join('\n')).not.toContain('conf-secret');
+  });
+
+  it('omits optional flags from the default-workspace dry-run handoff', async () => {
+    const homeDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'ywtc-wizard-home-'));
+    const root = path.join(homeDirectory, '.ywtc');
+    const prompter = new ScriptedPrompter(newWorkspaceResponses(root));
+    const result = await runInteractiveInit({
+      prompter,
+      homeDirectory,
+      verify: async (_config, profile) => successfulVerification(profile),
+    });
+    expect(result.dryRunCommand).toBe('ywtc migrate --source "<yandex-page-url>" --destination "<confluence-page-url>" --dry-run');
   });
 
   it('supports IAM and Confluence Cloud while retrying a redacted failed probe', async () => {

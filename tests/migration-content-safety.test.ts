@@ -1,0 +1,166 @@
+import {createHash} from 'node:crypto';
+import {mkdtemp, readdir, readFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {describe, expect, it} from 'vitest';
+import type {AppConfig, ConfluenceConnectionProfile, ConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
+import {legacyTransferPlaceholder} from '../src/content-model.js';
+import type {DestinationAdapter, DestinationContainer, DestinationPage, SourceAdapter, SourcePage, SourceResource, UploadedResource} from '../src/domain.js';
+import type {Logger} from '../src/logger.js';
+import type {RemoteLocator} from '../src/locators.js';
+import {Migrator} from '../src/migrator.js';
+import type {TransferState} from '../src/state.js';
+
+const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 50, burst: 50};
+const sourceProfile: YandexConnectionProfile = {
+  name: 'source', type: 'yandex-wiki', apiUrl: 'https://api.wiki.example/v1', webUrl: 'https://wiki.example',
+  authType: 'oauth', organization: {type: 'yandex360', id: 'org'}, token: 'token', limits,
+};
+const destinationProfile: ConfluenceConnectionProfile = {
+  name: 'destination', type: 'confluence', deployment: 'data-center', baseUrl: 'https://conf.example/confluence',
+  authType: 'pat', token: 'token', limits,
+};
+const root: SourcePage = {
+  provider: 'yandex-wiki', profile: sourceProfile.name, id: '1', canonicalId: 'source:yandex-wiki:1', title: 'Root',
+  locator: 'root', url: 'https://wiki.example/root', rawContent: '# Root\n\nImportant body\n\n[Manual](manual.pdf)', rawFormat: 'yfm',
+  references: [{raw: 'manual.pdf', href: 'manual.pdf', kind: 'attachment'}],
+};
+const resource: SourceResource = {
+  provider: 'yandex-wiki', id: 'a1', pageId: root.id, name: 'manual.pdf', size: 4,
+  mimeType: 'application/pdf', downloadUrl: '/download/manual.pdf', kind: 'attachment',
+};
+const container: DestinationContainer = {
+  provider: 'confluence', profile: destinationProfile.name, id: '100', canonicalId: 'destination:confluence:100',
+  title: 'Archive', url: 'https://conf.example/confluence/pages/100', space: 'DOC', locator: '100',
+};
+const capabilities = {readPages: true, readHierarchy: true, readResources: true, writePages: true, writeResources: true, verifyWrites: true};
+const logger: Logger = {info: () => undefined, warn: () => undefined, error: () => undefined};
+
+function sha(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function fixture() {
+  let created = 0;
+  let updated = 0;
+  let failUpload = false;
+  let failUpdate = false;
+  let version = 0;
+  let current: DestinationPage | undefined;
+  const uploaded = new Map<string, UploadedResource>();
+  const page = (title: string, body: string): DestinationPage => ({
+    provider: 'confluence', profile: destinationProfile.name, id: '200', canonicalId: 'destination:confluence:200',
+    title, url: 'https://conf.example/confluence/pages/200', locator: '200', space: 'DOC',
+    fingerprint: `version-${++version}`, content: body, contentFingerprint: sha(body), contentLength: Buffer.byteLength(body),
+  });
+  const source = {
+    profile: sourceProfile, kind: 'yandex-wiki', capabilities,
+    preflight: async () => ({product: 'Yandex Wiki', warnings: []}),
+    resolvePage: async () => root,
+    getPage: async () => root,
+    getDescendants: async () => [],
+    resolveReference: async () => undefined,
+    listResources: async () => [resource],
+    downloadResource: async (_resource: SourceResource, destination: string) => ({path: destination, size: 4, sha256: sha('file'), mimeType: 'application/pdf'}),
+  } as unknown as SourceAdapter;
+  const destination = {
+    profile: destinationProfile, kind: 'confluence', capabilities,
+    preflight: async () => ({product: 'Confluence', warnings: []}),
+    resolveContainer: async () => container,
+    findChild: async () => undefined,
+    createPage: async ({title, body}: {title: string; body: string}) => {
+      created += 1;
+      current = page(title, body);
+      return current;
+    },
+    updatePage: async ({title, body}: {title: string; body: string}) => {
+      updated += 1;
+      if (failUpdate) throw new Error('destination update unavailable');
+      current = page(title, body);
+      return current;
+    },
+    verifyPage: async () => current!,
+    uploadResource: async ({name}: {name: string}) => {
+      if (failUpload) throw new Error('attachment upload unavailable');
+      const value = {id: `uploaded-${name}`, name, size: 4};
+      uploaded.set(value.id, value);
+      return value;
+    },
+    listUploadedResources: async () => [...uploaded.values()],
+  } as unknown as DestinationAdapter;
+  return {
+    source,
+    destination,
+    setFailUpload: (value: boolean) => { failUpload = value; },
+    setFailUpdate: (value: boolean) => { failUpdate = value; },
+    setLegacyPlaceholder: () => { current = page(current!.title, legacyTransferPlaceholder('confluence', root)); },
+    snapshot: () => ({created, updated, current, uploaded: uploaded.size}),
+  };
+}
+
+async function setup() {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-content-safety-'));
+  const config: AppConfig = {
+    profiles: {source: sourceProfile, destination: destinationProfile}, timeoutMs: 5_000, concurrency: 2,
+    configFile: path.join(directory, 'ywtc.config.yaml'),
+  };
+  const source: RemoteLocator = {type: 'remote', profile: sourceProfile, value: 'root'};
+  const destination: RemoteLocator = {type: 'remote', profile: destinationProfile, value: '100'};
+  return {
+    directory,
+    config,
+    options: {
+      source, destination, scope: 'page' as const, dryRun: false, archive: false, concurrency: 2,
+      runtimeDirectory: path.join(directory, '.states'), cacheDirectory: path.join(directory, '.states/cache'),
+      reportsDirectory: path.join(directory, '.states/reports'),
+    },
+  };
+}
+
+describe('source-derived remote page safety', () => {
+  it('keeps full content with a source fallback when upload fails, then resumes without duplication', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture();
+    adapters.setFailUpload(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true});
+    expect(adapters.snapshot().current?.content).toContain('Important body');
+    expect(adapters.snapshot().current?.content).toContain('https://wiki.example/download/manual.pdf');
+    expect(adapters.snapshot().current?.content).not.toContain('ywtc transfer in progress');
+
+    const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
+    const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
+    expect(state.pages[root.canonicalId]?.resources[resource.id]?.status).toBe('failed');
+
+    adapters.setFailUpload(false);
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
+    expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 1});
+    expect(adapters.snapshot().current?.content).toContain('ri:attachment');
+  });
+
+  it('leaves verified bootstrap content when final refinement fails', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setFailUpdate(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true});
+    expect(adapters.snapshot().current?.content).toContain('Important body');
+    expect(adapters.snapshot().current?.content).not.toContain('ywtc transfer in progress');
+  });
+
+  it('repairs an exact generated placeholder on rerun without creating another page', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed'});
+    adapters.setLegacyPlaceholder();
+
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed'});
+    expect(adapters.snapshot().created).toBe(1);
+    expect(adapters.snapshot().current?.content).toContain('Important body');
+    expect(adapters.snapshot().current?.content).not.toContain('ywtc transfer in progress');
+  });
+});

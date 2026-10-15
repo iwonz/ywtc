@@ -53,17 +53,18 @@ function fixture() {
     preflight: async () => ({product: 'Confluence', warnings: []}),
     resolveContainer: async () => container,
     findChild: async () => undefined,
-    createPage: async ({title}: {title: string}) => {
+    createPage: async ({title, body}: {title: string; body: string}) => {
       created += 1;
       current = {
         provider: 'confluence', profile: destinationProfile.name, id: '200', canonicalId: 'destination:confluence:200',
-        title, url: 'https://conf.example/confluence/pages/200', locator: '200', space: 'DOC', fingerprint: 'skeleton', contentLength: 12,
+        title, url: 'https://conf.example/confluence/pages/200', locator: '200', space: 'DOC', fingerprint: 'bootstrap',
+        content: body, contentLength: Buffer.byteLength(body),
       };
       return current;
     },
     updatePage: async ({page, title, body}: {page: DestinationPage; title: string; body: string}) => {
       updated += 1;
-      current = {...page, title, fingerprint: `body-${updated}`, contentLength: Buffer.byteLength(body)};
+      current = {...page, title, fingerprint: `body-${updated}`, content: body, contentLength: Buffer.byteLength(body)};
       return current;
     },
     verifyPage: async () => current!,
