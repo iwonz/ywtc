@@ -58,7 +58,9 @@ describe('release validation', () => {
   it('keeps the workflow least-privileged and release-capable', async () => {
     const workflow = await readFile('.github/workflows/release.yml', 'utf8');
     expect(workflow).toContain('permissions:\n  contents: read');
-    expect(workflow).toContain('googleapis/release-please-action@v4');
+    expect(workflow).toContain('actions/checkout@v7');
+    expect(workflow).toContain('actions/setup-node@v7');
+    expect(workflow).toContain('googleapis/release-please-action@v5');
     expect(workflow).toContain('pull-requests: write');
     expect(workflow).toContain('id-token: write');
     expect(workflow).toContain('npm run check');
