@@ -2,6 +2,18 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.0.3](https://github.com/iwonz/ywtc/compare/v2.0.2...v2.0.3) (2026-10-15)
+
+
+### Bug Fixes
+
+* **release:** wait for npm registry propagation ([e27d2e1](https://github.com/iwonz/ywtc/commit/e27d2e18fb41d80c8b07dea4fe610fab15ab6676))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v2.0.2 ([479f375](https://github.com/iwonz/ywtc/commit/479f375afbb1344f41f261e4e77f1960b897bd4f))
+
 ## [2.0.2](https://github.com/iwonz/ywtc/compare/v2.0.1...v2.0.2) (2026-10-15)
 
 
