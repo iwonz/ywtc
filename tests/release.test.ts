@@ -93,7 +93,14 @@ describe('release validation', () => {
     expect(workflow).toContain('npm publish "$ARCHIVE" --access public --provenance');
     expect(workflow).toContain('gh release upload');
     expect(workflow).toContain("if: always() && needs.publish-npm.result == 'success'");
-    expect(workflow).toContain('brew audit --strict');
+    expect(workflow).toContain('brew tap-new --no-git "$tap_name"');
+    expect(workflow).toContain('tap_dir="$(brew --repository "$tap_name")"');
+    expect(workflow).toContain('cp Formula/ywtc.rb "$tap_dir/Formula/ywtc.rb"');
+    expect(workflow).toContain('brew audit --strict "$tap_name/ywtc"');
+    expect(workflow).toContain('brew install --formula "$tap_name/ywtc"');
+    expect(workflow).toContain('brew test "$tap_name/ywtc"');
+    expect(workflow).not.toContain('brew audit --strict Formula/ywtc.rb');
+    expect(workflow).not.toContain('brew install --formula ./Formula/ywtc.rb');
     expect(workflow).toContain('chore(homebrew): update formula to v$RELEASE_VERSION');
     expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN/);
   });

@@ -259,11 +259,16 @@ jobs:
           sha256="$(shasum -a 256 "$archive" | awk '{print $1}')"
           node --import tsx scripts/homebrew-formula.ts "$RELEASE_VERSION" "$registry_url" "$sha256" Formula/ywtc.rb
       - name: Verify formula
+        shell: bash
         run: |
           brew style Formula/ywtc.rb
-          brew audit --strict Formula/ywtc.rb
-          brew install --formula ./Formula/ywtc.rb
-          brew test ywtc
+          tap_name="iwonz/ywtc-ci"
+          brew tap-new --no-git "$tap_name"
+          tap_dir="$(brew --repository "$tap_name")"
+          cp Formula/ywtc.rb "$tap_dir/Formula/ywtc.rb"
+          brew audit --strict "$tap_name/ywtc"
+          brew install --formula "$tap_name/ywtc"
+          brew test "$tap_name/ywtc"
           ywtc --version
       - name: Commit formula to master
         env:

@@ -2,9 +2,7 @@
 
 ## Purpose
 Define how ywtc calculates, validates, publishes, and distributes reviewable SemVer releases through GitHub, npm, and Homebrew.
-
 ## Requirements
-
 ### Requirement: SemVer release calculation
 Release automation SHALL derive SemVer from validated Conventional Commits and SHALL publish the pending universal transfer contract as version 2.0.0 because it removes public flags, configuration, and state schema v1.
 
@@ -120,7 +118,7 @@ The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywt
 
 #### Scenario: Formula verification
 - **WHEN** a formula candidate is generated
-- **THEN** macOS CI SHALL run Homebrew style, audit, install, and functional CLI tests before updating `master`
+- **THEN** macOS CI SHALL check its style, stage the exact candidate in an isolated non-git tap, and run strict audit, installation, formula test, and functional CLI version checks through the fully qualified formula name before updating `master`
 
 #### Scenario: Formula publication
 - **WHEN** formula verification succeeds
