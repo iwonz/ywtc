@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-header.png" alt="Yandex Wiki and Confluence content moving through the ywtc pipeline" width="100%">
+  <img src="docs/assets/readme-header.png" alt="Yandex Wiki and Confluence sources moving through ywtc to Confluence, Yandex Wiki, Markdown, and HTML destinations" width="100%">
 </p>
 
 # ywtc
