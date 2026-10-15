@@ -58,6 +58,7 @@ function fixture() {
       current = {
         provider: 'confluence', profile: destinationProfile.name, id: '200', canonicalId: 'destination:confluence:200',
         title, url: 'https://conf.example/confluence/pages/200', locator: '200', space: 'DOC', fingerprint: 'bootstrap',
+        parentId: container.id,
         content: body, contentLength: Buffer.byteLength(body),
       };
       return current;

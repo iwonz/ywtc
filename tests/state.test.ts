@@ -24,6 +24,8 @@ describe('transfer state', () => {
     const html: TransferIdentity = {...identity, destination: {provider: 'filesystem', path: '/tmp/export', format: 'html'}};
     expect(transferStateId(markdown)).not.toBe(transferStateId(html));
     expect(resolveStateLocation(identity, {runtimeDirectory: '/tmp/states'}).filename).toContain(transferStateId(identity));
+    // Source selection changes expand or narrow the same canonical transfer state.
+    expect(transferStateId(identity)).toBe(transferStateId(identity));
   });
 
   it('checkpoints unversioned runs and pages atomically and marks abandoned runs interrupted', async () => {
@@ -31,7 +33,12 @@ describe('transfer state', () => {
     const filename = path.join(directory, 'state.json');
     const store = new StateStore(filename);
     await store.load(identity);
-    const run = await store.beginRun('linked', false);
+    const run = await store.beginRun('linked', false, 'current');
+    await store.setRunSelection(run.id, {
+      requestedStatus: 'current', effectiveStatus: 'current', returnedDescendants: 9, selectedDescendants: 2,
+      excluded: [{id: '11', locator: 'root/obsolete', reason: 'source-status', status: 'obsolete'}],
+      maximumDepth: 2, hierarchyGaps: [], notes: [],
+    });
     await store.setPage({
       sourceId: '10', sourceCanonicalId: 'wiki:10', sourceLocator: 'root', sourceTitle: 'Root',
       destinationTitle: 'Root', status: 'discovered', resources: {}, degradations: [], updatedAt: new Date().toISOString(),
@@ -41,6 +48,7 @@ describe('transfer state', () => {
     const resumed = new StateStore(filename);
     const state = await resumed.load(identity);
     expect(state.runs.find((item) => item.id === run.id)?.status).toBe('interrupted');
+    expect(state.runs.find((item) => item.id === run.id)).toMatchObject({sourceStatus: 'current', returnedDescendants: 9, selectedDescendants: 2, excludedPages: 1, maximumDepth: 2});
     expect(state.pages['wiki:10']?.status).toBe('discovered');
   });
 

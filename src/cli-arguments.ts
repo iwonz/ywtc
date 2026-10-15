@@ -1,5 +1,5 @@
 import {Command, Option} from '@commander-js/extra-typings';
-import type {ExportFormat, TransferScope} from './domain.js';
+import type {ExportFormat, SourceStatus, TransferScope} from './domain.js';
 import {packageVersion} from './version.js';
 
 export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'reports' | 'update';
@@ -16,6 +16,7 @@ export type CliCommand =
     sourceProfile?: string;
     destinationProfile?: string;
     scope: TransferScope;
+    sourceStatus: SourceStatus;
     format?: ExportFormat;
   }
   | {
@@ -25,6 +26,7 @@ export type CliCommand =
     sourceProfile?: string;
     destinationProfile?: string;
     scope: TransferScope;
+    sourceStatus: SourceStatus;
     format?: ExportFormat;
     archive: boolean;
     workdir?: string;
@@ -76,6 +78,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('--source-profile <name>', 'named source connection')
     .option('--destination-profile <name>', 'named destination connection')
     .addOption(new Option('--scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
+    .addOption(new Option('--source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
     .addOption(new Option('--format <format>', 'filesystem format').choices(['markdown', 'html']))
     .action((options) => {
       const source = nonEmpty(options.source, '--source');
@@ -87,6 +90,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       onCommand({
         command: 'doctor',
         scope: options.scope as TransferScope,
+        sourceStatus: options.sourceStatus as SourceStatus,
         ...(workdir ? {workdir} : {}),
         ...(source && destination ? {source, destination} : {}),
         ...(sourceProfile ? {sourceProfile} : {}),
@@ -102,6 +106,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('--source-profile <name>', 'named source connection')
     .option('--destination-profile <name>', 'named destination connection')
     .addOption(new Option('--scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
+    .addOption(new Option('--source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
     .addOption(new Option('--format <format>', 'filesystem format').choices(['markdown', 'html']))
     .option('--archive', 'also create a ZIP for filesystem output', false)
     .option('--workdir <path>', 'workspace (configured CWD, then ~/.ywtc)')
@@ -124,6 +129,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
         source,
         destination,
         scope: options.scope as TransferScope,
+        sourceStatus: options.sourceStatus as SourceStatus,
         archive: options.archive,
         dryRun: options.dryRun,
         fresh: options.fresh,

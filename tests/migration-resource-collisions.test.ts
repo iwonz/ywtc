@@ -52,6 +52,7 @@ describe('migration resource name collisions', () => {
     const destinationPage = (body: string): DestinationPage => ({
       provider: 'confluence', profile: 'destination', id: '200', canonicalId: 'destination:200', title: 'Root',
       url: 'https://conf.example/confluence/pages/200', locator: '200', space: 'DOC', content: body,
+      parentId: container.id,
       contentFingerprint: hash(body), fingerprint: `v${++version}`,
     });
     const source = {

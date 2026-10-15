@@ -30,7 +30,7 @@ describe('page graph discovery', () => {
 
   it('keeps page and subtree selection distinct', async () => {
     const root = page('root', ['/linked']);
-    const child = page('child', [], 'root');
+    const child = {...page('child', [], 'root'), locator: 'root/child', ancestorIds: ['root']};
     const adapter = {getDescendants: async () => [child]} as unknown as SourceAdapter;
     await expect(discoverPageGraph({adapter, root, scope: 'page'})).resolves.toMatchObject({pages: [{id: 'root'}]});
     await expect(discoverPageGraph({adapter, root, scope: 'subtree'})).resolves.toMatchObject({pages: [{id: 'root'}, {id: 'child'}]});
@@ -85,5 +85,43 @@ describe('page graph discovery', () => {
     expect(graph.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Hierarchy cycle')]));
     expect(graph.pages.find((item) => item.id === 'a')?.projectedParentId).toBe(root.canonicalId);
     expect(graph.pages.map((item) => item.depth)).toEqual([0, 1, 2]);
+  });
+
+  it('uses the nearest selected ancestor and records a status-filtered hierarchy gap', async () => {
+    const root = page('root', []);
+    const leaf = {
+      ...page('leaf', [], 'obsolete-parent'),
+      locator: 'root/obsolete-parent/leaf',
+      ancestorIds: ['root', 'obsolete-parent'],
+    };
+    const adapter = {
+      supportsSourceStatus: () => true,
+      getDescendants: async () => ({
+        pages: [leaf],
+        returned: 2,
+        excluded: [{id: 'obsolete-parent', locator: 'root/obsolete-parent', reason: 'source-status' as const, status: 'obsolete'}],
+        effectiveStatus: 'current' as const,
+        notes: [],
+      }),
+    } as unknown as SourceAdapter;
+    const graph = await discoverPageGraph({adapter, root, scope: 'subtree', sourceStatus: 'current'});
+    expect(graph.pages.find((item) => item.id === 'leaf')).toMatchObject({projectedParentId: root.canonicalId, depth: 1});
+    expect(graph.selection).toMatchObject({
+      returnedDescendants: 2,
+      selectedDescendants: 1,
+      maximumDepth: 1,
+      excluded: [{id: 'obsolete-parent', reason: 'source-status'}],
+      hierarchyGaps: [{pageId: 'wiki:leaf', missingParentId: 'obsolete-parent', selectedParentId: root.canonicalId, reason: 'source-status'}],
+    });
+  });
+
+  it('rejects an incomplete subtree inventory before returning a graph', async () => {
+    const root = page('root', []);
+    const outside = {...page('outside', [], 'elsewhere'), locator: 'another-tree/outside', ancestorIds: ['elsewhere']};
+    const adapter = {
+      supportsSourceStatus: () => true,
+      getDescendants: async () => ({pages: [outside], returned: 1, excluded: [], effectiveStatus: 'all' as const, notes: []}),
+    } as unknown as SourceAdapter;
+    await expect(discoverPageGraph({adapter, root, scope: 'subtree'})).rejects.toThrow(/outside subtree/);
   });
 });

@@ -9,6 +9,7 @@ import type {
   DestinationPage,
   PageReference,
   SourceAdapter,
+  SourceStatus,
   SourcePage,
   SourceResource,
   UploadedResource,
@@ -25,6 +26,7 @@ const capabilities: AdapterCapabilities = {
   writePages: true,
   writeResources: true,
   verifyWrites: true,
+  reparentPages: false,
 };
 
 function pageUrl(profile: YandexConnectionProfile, slug: string): string {
@@ -32,7 +34,12 @@ function pageUrl(profile: YandexConnectionProfile, slug: string): string {
 }
 
 function parentId(page: YandexPageDetails): string | undefined {
-  return [...(page.breadcrumbs ?? [])].reverse().find((item) => item.id !== undefined && item.id !== page.id)?.id?.toString();
+  return ancestorIds(page).at(-1);
+}
+
+function ancestorIds(page: YandexPageDetails): string[] {
+  return (page.breadcrumbs ?? [])
+    .flatMap((item) => item.id !== undefined && item.id !== page.id ? [String(item.id)] : []);
 }
 
 function canonical(profile: YandexConnectionProfile, id: string | number): string {
@@ -43,6 +50,7 @@ function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): 
   if (page.content === undefined) throw new Error(`Yandex Wiki page response for ${page.id} is missing content`);
   const rawContent = page.content;
   const parent = parentId(page);
+  const ancestors = ancestorIds(page);
   return {
     provider: 'yandex-wiki',
     profile: profile.name,
@@ -52,6 +60,7 @@ function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): 
     locator: normalizeWikiSlug(page.slug),
     url: pageUrl(profile, page.slug),
     ...(parent ? {parentId: parent} : {}),
+    ...(ancestors.length > 0 ? {ancestorIds: ancestors} : {}),
     rawContent,
     rawFormat: 'yfm',
     ...(page.attributes?.modified_at ? {modifiedAt: page.attributes.modified_at, version: page.attributes.modified_at} : {}),
@@ -172,9 +181,48 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     return sourcePage(this.profile, await this.client.getPageById(Number(id)));
   }
 
-  async getDescendants(page: SourcePage): Promise<SourcePage[]> {
-    const identities = await this.client.getDescendants(Number(page.id));
-    return Promise.all(identities.map(async (identity) => sourcePage(this.profile, await this.client.getPageById(identity.id))));
+  supportsSourceStatus(scope: import('../domain.js').TransferScope, status: SourceStatus): boolean {
+    return status === 'all' || scope !== 'linked';
+  }
+
+  async getDescendants(page: SourcePage, options: {status: SourceStatus}) {
+    const all = await this.client.getDescendants(Number(page.id));
+    const current = options.status === 'current'
+      ? await this.client.getDescendants(Number(page.id), {actuality: 'actual'})
+      : all;
+    const allIds = new Set(all.map((identity) => identity.id));
+    const unexpectedCurrent = current.filter((identity) => !allIds.has(identity.id));
+    if (unexpectedCurrent.length > 0) {
+      throw new Error(`Yandex Wiki actuality inventory changed during discovery; ${unexpectedCurrent.length} current page(s) were absent from the complete enumeration`);
+    }
+    const currentIds = new Set(current.map((identity) => identity.id));
+    const selected = options.status === 'current' ? all.filter((identity) => currentIds.has(identity.id)) : all;
+    const results = await Promise.allSettled(selected.map(async (identity) => {
+      const detail = await this.client.getPageById(identity.id);
+      const normalized = sourcePage(this.profile, detail);
+      const expectedLocator = normalizeWikiSlug(identity.slug);
+      if (normalized.locator !== expectedLocator) {
+        throw new Error(`Yandex Wiki descendant ${identity.id} detail slug ${normalized.locator} conflicts with inventory slug ${expectedLocator}`);
+      }
+      return options.status === 'current' ? {...normalized, sourceStatus: 'current' as const} : normalized;
+    }));
+    const failures = results.flatMap((result, index) => result.status === 'rejected'
+      ? [`${selected[index]?.id ?? 'unknown'} (${selected[index]?.slug ?? 'unknown'}): ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`]
+      : []);
+    if (failures.length > 0) {
+      throw new Error(`Yandex Wiki descendant inventory is incomplete; ${failures.length} page detail request(s) failed: ${failures.join('; ')}`);
+    }
+    return {
+      pages: results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []),
+      returned: all.length,
+      excluded: options.status === 'current'
+        ? all.filter((identity) => !currentIds.has(identity.id)).map((identity) => ({
+          id: String(identity.id), locator: normalizeWikiSlug(identity.slug), reason: 'source-status' as const, status: 'obsolete',
+        }))
+        : [],
+      effectiveStatus: options.status,
+      notes: [],
+    };
   }
 
   async resolveReference(from: SourcePage, reference: PageReference): Promise<SourcePage | undefined> {

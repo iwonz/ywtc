@@ -2,7 +2,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
-import type {ExportFormat, GraphEdgeStatus, ProviderKind} from './domain.js';
+import type {ExportFormat, GraphEdgeStatus, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
 
 export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
 export type RunStatus = 'running' | 'completed' | 'completed-with-warnings' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
@@ -74,8 +74,13 @@ export interface StateRun {
   finishedAt?: string;
   status: RunStatus;
   scope: 'page' | 'subtree' | 'linked';
+  sourceStatus: SourceStatus;
   dryRun: boolean;
   pages: number;
+  returnedDescendants: number;
+  selectedDescendants: number;
+  excludedPages: number;
+  maximumDepth: number;
   warnings: number;
   errors: number;
 }
@@ -224,8 +229,13 @@ const runSchema = z.object({
   finishedAt: z.string().optional(),
   status: z.enum(['running', 'completed', 'completed-with-warnings', 'partial', 'failed', 'cancelled', 'interrupted']),
   scope: z.enum(['page', 'subtree', 'linked']),
+  sourceStatus: z.enum(['all', 'current']).optional().default('all'),
   dryRun: z.boolean(),
   pages: z.number().int().nonnegative(),
+  returnedDescendants: z.number().int().nonnegative().optional().default(0),
+  selectedDescendants: z.number().int().nonnegative().optional().default(0),
+  excludedPages: z.number().int().nonnegative().optional().default(0),
+  maximumDepth: z.number().int().nonnegative().optional().default(0),
   warnings: z.number().int().nonnegative(),
   errors: z.number().int().nonnegative(),
 }).strict();
@@ -327,20 +337,38 @@ export class StateStore {
     return this.info;
   }
 
-  async beginRun(scope: StateRun['scope'], dryRun: boolean): Promise<StateRun> {
+  async beginRun(scope: StateRun['scope'], dryRun: boolean, sourceStatus: SourceStatus = 'all'): Promise<StateRun> {
     const run: StateRun = {
       id: randomUUID(),
       startedAt: new Date().toISOString(),
       status: 'running',
       scope,
+      sourceStatus,
       dryRun,
       pages: 0,
+      returnedDescendants: 0,
+      selectedDescendants: 0,
+      excludedPages: 0,
+      maximumDepth: 0,
       warnings: 0,
       errors: 0,
     };
     this.value.runs.push(run);
     if (!dryRun) await this.save();
     return run;
+  }
+
+  async setRunSelection(runId: string, selection: SourceSelection): Promise<void> {
+    const run = this.value.runs.find((candidate) => candidate.id === runId);
+    if (!run) throw new Error(`State run ${runId} was not initialized`);
+    Object.assign(run, {
+      sourceStatus: selection.effectiveStatus,
+      returnedDescendants: selection.returnedDescendants,
+      selectedDescendants: selection.selectedDescendants,
+      excludedPages: selection.excluded.length,
+      maximumDepth: selection.maximumDepth,
+    });
+    if (!this.readOnly) await this.save();
   }
 
   async finishRun(runId: string, status: RunStatus, counts: {pages: number; warnings: number; errors: number}): Promise<void> {

@@ -30,6 +30,7 @@ import type {
   SourceAdapter,
   SourcePage,
   SourceResource,
+  SourceStatus,
   TransferScope,
 } from './domain.js';
 import {assertTransferCapabilities} from './domain.js';
@@ -61,6 +62,7 @@ export interface TransferOptions {
   source: RemoteLocator;
   destination: ResolvedLocator;
   scope: TransferScope;
+  sourceStatus?: SourceStatus;
   dryRun: boolean;
   archive: boolean;
   fresh?: boolean;
@@ -318,11 +320,12 @@ export class Migrator {
   ) {}
 
   async run(options: TransferOptions): Promise<TransferResult> {
+    const sourceStatus = options.sourceStatus ?? 'all';
     const source = this.adapterFactory(options.source.profile, this.config);
     const destination = options.destination.type === 'remote'
       ? this.adapterFactory(options.destination.profile, this.config)
       : undefined;
-    assertTransferCapabilities(source, destination, options.scope);
+    assertTransferCapabilities(source, destination, options.scope, sourceStatus);
     const status = options.onStatus ?? (() => undefined);
     status('Checking source and destination capabilities');
     const [sourcePlatform, destinationPlatform, root, container] = await Promise.all([
@@ -346,10 +349,11 @@ export class Migrator {
     const store = new StateStore(stateLocation.filename);
     await store.load(identity, {fresh: options.fresh ?? false, dryRun: options.dryRun});
     if (!options.dryRun) await store.save();
-    const run = await store.beginRun(options.scope, options.dryRun);
+    const run = await store.beginRun(options.scope, options.dryRun, sourceStatus);
     const report = new TransferReport({
       dryRun: options.dryRun,
       scope: options.scope,
+      sourceStatus,
       direction: `${source.kind} → ${options.destination.type === 'directory' ? options.destination.format : destination!.kind}`,
       source: {provider: source.kind, profile: source.profile.name, rootId: root.id, title: root.title, url: root.url},
       destination: options.destination.type === 'directory'
@@ -373,11 +377,14 @@ export class Migrator {
         adapter: source,
         root,
         scope: options.scope,
+        sourceStatus,
         ...(options.signal ? {signal: options.signal} : {}),
         onProgress: (progress) => status(`Discovery: ${progress.pages} pages, ${progress.edges} links${progress.active ? ` · ${progress.active}` : ''}`),
       });
       report.registerPages(graph.pages);
       report.setEdges(graph.edges);
+      report.setSelection(graph.selection);
+      await store.setRunSelection(run.id, graph.selection);
       for (const warning of graph.warnings) report.warning(warning);
       if (
         container
@@ -387,6 +394,7 @@ export class Migrator {
       ) {
         throw new Error('The destination page belongs to the selected source graph. Choose a destination outside the transferred graph.');
       }
+      status(`Source tree: root ${root.title} · ${graph.selection.returnedDescendants} descendants returned · ${graph.selection.selectedDescendants} selected · ${graph.selection.excluded.length} excluded · depth ${graph.selection.maximumDepth}`);
       status(`Caching source content for ${graph.pages.length} pages`);
       sourceFingerprints = await cacheDiscoveredPages(options.cacheDirectory, graph);
       await store.setGraph(graph.rootId, graph.edges);
@@ -469,7 +477,7 @@ export class Migrator {
       });
       throw new MigrationRunError('Resource preflight failed before destination mutation', reportPaths, stateLocation.filename);
     }
-    const planSummary = `Plan ready: ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks`;
+    const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks`;
     status(planSummary);
     this.logger.info(planSummary);
 
@@ -699,6 +707,9 @@ export class Migrator {
         let resourcesForState = saved?.resources ?? {};
         let previousDestinationIds = saved?.previousDestinationIds ?? [];
         let mappingRecovered = false;
+        const findTitleConflict = (candidateTitle: string) => destination.findTitleConflict
+          ? destination.findTitleConflict(parent, candidateTitle)
+          : destination.findChild(parent, candidateTitle);
         if (saved?.destinationId) {
           const mapped = destinationFromState(saved, destination);
           try {
@@ -740,14 +751,30 @@ export class Migrator {
               created = candidate;
             } else {
               let recoveryTitle = title;
-              if (candidate) {
+              let titleConflict = candidate;
+              if (!titleConflict && !recoveryLookupFailed) {
+                try {
+                  titleConflict = await findTitleConflict(recoveryTitle);
+                } catch (lookupError) {
+                  recoveryLookupFailed = true;
+                  report.issue({
+                    code: 'destination-title-lookup-failed',
+                    severity: 'warning',
+                    phase: 'page',
+                    pageId: page.canonicalId,
+                    retryable: true,
+                    message: `${page.title}: destination title lookup failed; bootstrap recreation will be attempted with a stable suffix: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
+                  });
+                }
+              }
+              if (titleConflict || recoveryLookupFailed) {
                 const base = collisionTitle(page);
                 const hash = sha256(page.canonicalId).slice(0, 8);
                 recoveryTitle = base;
                 let sequence = 0;
                 while (!recoveryLookupFailed) {
                   try {
-                    if (!await findRecoveryChild(recoveryTitle)) break;
+                    if (!await findTitleConflict(recoveryTitle)) break;
                     sequence += 1;
                     recoveryTitle = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
                   } catch (lookupError) {
@@ -795,6 +822,89 @@ export class Migrator {
             created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
             assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
           }
+          if (!mappingRecovered && created.parentId !== parent.id) {
+            const oldPage = created;
+            if (options.dryRun) {
+              report.addHierarchyRepair({
+                sourceCanonicalId: page.canonicalId,
+                mode: destination.capabilities.reparentPages && destination.reparentPage ? 'moved' : 'recreated',
+                ...(created.parentId ? {oldParentId: created.parentId} : {}),
+                newParentId: parent.id,
+                oldDestinationId: created.id,
+                newDestinationId: created.id,
+                verified: false,
+              });
+            } else if (destination.capabilities.reparentPages && destination.reparentPage) {
+              created = await destination.reparentPage({
+                page: created,
+                parent,
+                ...(created.fingerprint ? {expectedFingerprint: created.fingerprint} : {}),
+              });
+              created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
+              if (created.parentId !== parent.id) {
+                throw new Error(`Destination hierarchy verification failed for ${page.title}: expected parent ${parent.id}, received ${created.parentId ?? 'none'}`);
+              }
+              report.addHierarchyRepair({
+                sourceCanonicalId: page.canonicalId,
+                mode: 'moved',
+                ...(oldPage.parentId ? {oldParentId: oldPage.parentId} : {}),
+                newParentId: parent.id,
+                oldDestinationId: oldPage.id,
+                newDestinationId: created.id,
+                verified: true,
+              });
+              report.issue({
+                code: 'destination-hierarchy-repaired',
+                severity: 'normalization',
+                phase: 'page',
+                pageId: page.canonicalId,
+                retryable: false,
+                message: `${page.title}: moved destination page ${created.id} from parent ${oldPage.parentId ?? 'none'} to ${parent.id} and verified the hierarchy`,
+              });
+            } else {
+              let replacement = await destination.findChild(parent, title);
+              const replacementMatches = replacement
+                && sourceDerivedTextMatches(bootstrap.body, replacement.content, destination.kind, cachedPage);
+              const titleConflict = replacementMatches ? undefined : replacement ?? await findTitleConflict(title);
+              if (titleConflict) {
+                const base = collisionTitle(page);
+                const hash = sha256(page.canonicalId).slice(0, 8);
+                title = base;
+                let sequence = 0;
+                while (await findTitleConflict(title)) {
+                  sequence += 1;
+                  title = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
+                }
+                replacement = undefined;
+              }
+              created = replacement ?? await destination.createPage({container: parent, title, body: bootstrap.body});
+              created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
+              assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
+              if (created.parentId !== parent.id) {
+                throw new Error(`Destination hierarchy verification failed for recreated page ${page.title}: expected parent ${parent.id}, received ${created.parentId ?? 'none'}`);
+              }
+              previousDestinationIds = [...new Set([...previousDestinationIds, oldPage.id])];
+              resourcesForState = resetResourceDestinations(saved.resources);
+              mappingRecovered = true;
+              report.addHierarchyRepair({
+                sourceCanonicalId: page.canonicalId,
+                mode: 'recreated',
+                ...(oldPage.parentId ? {oldParentId: oldPage.parentId} : {}),
+                newParentId: parent.id,
+                oldDestinationId: oldPage.id,
+                newDestinationId: created.id,
+                verified: true,
+              });
+              report.issue({
+                code: 'destination-hierarchy-recreated',
+                severity: 'normalization',
+                phase: 'page',
+                pageId: page.canonicalId,
+                retryable: false,
+                message: `${page.title}: created verified replacement ${created.id} below ${parent.id}; previous page ${oldPage.id} was left untouched`,
+              });
+            }
+          }
         } else if (options.dryRun) {
           created = {
             provider: destination.kind,
@@ -804,24 +914,43 @@ export class Migrator {
             title,
             url: container.url,
             locator: `dry-run:${page.id}`,
+            parentId: parent.id,
             content: bootstrap.body,
             contentLength: Buffer.byteLength(bootstrap.body),
             ...(container.space ? {space: container.space} : {}),
           };
         } else {
-          if (await destination.findChild(parent, title)) {
-            const base = collisionTitle(page);
-            const hash = sha256(page.canonicalId).slice(0, 8);
-            title = base;
-            let sequence = 0;
-            while (await destination.findChild(parent, title)) {
-              sequence += 1;
-              title = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
+          const existingChild = await destination.findChild(parent, title);
+          if (existingChild && sourceDerivedTextMatches(bootstrap.body, existingChild.content, destination.kind, cachedPage)) {
+            created = existingChild;
+            mappingRecovered = true;
+            report.issue({
+              code: 'destination-unmapped-page-recovered',
+              severity: 'normalization',
+              phase: 'page',
+              pageId: page.canonicalId,
+              retryable: false,
+              message: `${page.title}: adopted an existing source-derived page below the expected parent`,
+            });
+          } else {
+            const titleConflict = existingChild ?? await findTitleConflict(title);
+            if (titleConflict) {
+              const base = collisionTitle(page);
+              const hash = sha256(page.canonicalId).slice(0, 8);
+              title = base;
+              let sequence = 0;
+              while (await findTitleConflict(title)) {
+                sequence += 1;
+                title = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
+              }
             }
+            created = await destination.createPage({container: parent, title, body: bootstrap.body});
+            created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
+            assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
           }
-          created = await destination.createPage({container: parent, title, body: bootstrap.body});
-          created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
-          assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
+        }
+        if (!options.dryRun && created.parentId !== parent.id) {
+          throw new Error(`Destination hierarchy verification failed for ${page.title}: expected parent ${parent.id}, received ${created.parentId ?? 'none'}`);
         }
         destinationPages.set(page.canonicalId, created);
         const next: PageTransferState = {
@@ -925,7 +1054,9 @@ export class Migrator {
         await store.setPage({...state, status: 'partial', lastError: detail, updatedAt: new Date().toISOString()});
       };
       try {
-        let remoteResources = options.dryRun ? [] : await destination.listUploadedResources(destinationPage);
+        let remoteResources = options.dryRun || transferableResources.length === 0
+          ? []
+          : await destination.listUploadedResources(destinationPage);
         const nameAllocator = new DestinationNameAllocator(remoteResources.map((resource) => resource.name));
         for (const resourceState of Object.values(state.resources)) {
           if (resourceState.status === 'complete') nameAllocator.reserve(resourceState.destinationName);
@@ -1124,6 +1255,9 @@ export class Migrator {
         };
         const rendered = await renderRemoteDocument({destination, container, document, page: cachedPage, context});
         if (rendered.degraded && !options.dryRun) {
+          if (transferableResources.length === 0) {
+            remoteResources = await destination.listUploadedResources(destinationPage);
+          }
           const extension = page.rawFormat === 'yfm' ? 'yfm' : 'storage.xml';
           const snapshotName = `ywtc-source-${sha256(page.canonicalId).slice(0, 8)}.${extension}`;
           const snapshotPath = path.join(options.cacheDirectory, 'snapshots', snapshotName);

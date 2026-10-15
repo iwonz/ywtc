@@ -39,6 +39,17 @@ describe('transfer report', () => {
       destination: {provider: 'confluence', profile: 'docs', id: '10', url: 'https://docs.example.com/pages/10'},
       state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'existing'},
     });
+    report.setSelection({
+      requestedStatus: 'current', effectiveStatus: 'current', returnedDescendants: 4, selectedDescendants: 2,
+      excluded: [{id: '4', locator: 'root/obsolete', title: 'Obsolete', reason: 'source-status', status: 'obsolete'}],
+      maximumDepth: 1,
+      hierarchyGaps: [{pageId: 'wiki:2', missingParentId: 'wiki:4', selectedParentId: 'wiki:1', reason: 'source-status'}],
+      notes: ['Only accessible hierarchy pages are visible.'],
+    });
+    report.addHierarchyRepair({
+      sourceCanonicalId: 'wiki:2', mode: 'moved', oldParentId: '10', newParentId: '11',
+      oldDestinationId: '20', newDestinationId: '20', verified: true,
+    });
     report.addPage(page({
       sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete', links: 3, images: 1, tables: 1,
       resources: 1, sourceBytes: 7, transferredBytes: 7,
@@ -68,6 +79,7 @@ describe('transfer report', () => {
     expect(json).not.toHaveProperty('version');
     expect(json.summary).toMatchObject({
       pages: 3, complete: 1, partial: 1, failed: 1, blocked: 0, conflicts: 0, unprocessedPages: 0,
+      returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, maximumDepth: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
       resources: 3, attachments: 2, resourceImages: 1, resourcesComplete: 1, resourcesFailed: 1, resourcesPlanned: 1,
       sourceBytes: 16, bytes: 7, bytesUnknown: 1, links: 3, images: 1, tables: 1,
       inventoryComplete: false, inventoriedPages: 2, inventoryFailedPages: 1,
@@ -85,6 +97,9 @@ describe('transfer report', () => {
     expect(JSON.stringify(json)).not.toContain('private source preview');
     expect(JSON.stringify(json)).not.toContain('private destination preview');
     expect(html).toContain('Source scope inventory');
+    expect(html).toContain('Selection and hierarchy');
+    expect(html).toContain('Obsolete');
+    expect(html).toContain('Destination repairs');
     expect(html).toContain('Transfer outcomes');
     expect(html).toContain('Needs attention');
     expect(html).toContain('1 errors');
@@ -99,6 +114,7 @@ describe('transfer report', () => {
     const catalog = await listReports(directory);
     expect(catalog.reports[0]).toMatchObject({
       pages: 3, complete: 1, partial: 1, failed: 1, blocked: 0, conflicts: 0,
+      sourceStatus: 'current', returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
       resources: 3, resourcesComplete: 1, resourcesFailed: 1, resourcesPlanned: 1,
       inventoryComplete: false, warnings: 0, degradations: 1, errors: 1,
     });

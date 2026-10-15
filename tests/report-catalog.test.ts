@@ -25,11 +25,13 @@ async function reportBundle(root: string, runId: string, finishedAt: string): Pr
     status: 'partial',
     dryRun: false,
     scope: 'subtree',
+    sourceStatus: 'current',
     direction: 'yandex-wiki → confluence',
     warnings: ['warning'],
     errors: ['error'],
     summary: {
       pages: 3, complete: 2, partial: 1, failed: 0, blocked: 0, conflicts: 0, unprocessedPages: 0,
+      returnedDescendants: 5, selectedDescendants: 2, excludedPages: 3, maximumDepth: 2, hierarchyGaps: 1, hierarchyRepairs: 1,
       resources: 4, resourcesComplete: 3, resourcesPartial: 0, resourcesFailed: 1, resourcesPlanned: 0,
       inventoryComplete: true, degradations: 3, warnings: 4, errors: 5,
     },
@@ -46,6 +48,7 @@ describe('report catalog', () => {
     expect(catalog.reports.map((report) => report.runId)).toEqual([newer, older]);
     expect(catalog.reports[0]).toMatchObject({
       pages: 3, complete: 2, partial: 1, resources: 4, resourcesComplete: 3, resourcesFailed: 1,
+      sourceStatus: 'current', returnedDescendants: 5, selectedDescendants: 2, excludedPages: 3, maximumDepth: 2, hierarchyGaps: 1, hierarchyRepairs: 1,
       inventoryComplete: true, degradations: 3, warnings: 4, errors: 5,
     });
     expect(catalog.reports[0]?.url).toMatch(/^file:/);

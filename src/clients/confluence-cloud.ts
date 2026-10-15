@@ -199,7 +199,7 @@ export class CloudConfluenceClient implements ConfluenceApi {
     return this.normalizePage(response.data);
   }
 
-  async updatePage(input: {pageId: string; title: string; storage: string}): Promise<ConfluencePage> {
+  async updatePage(input: {pageId: string; title: string; storage: string; parentId?: string}): Promise<ConfluencePage> {
     const current = await this.getPage(input.pageId);
     const versionNumber = current.version?.number;
     if (!versionNumber) throw new Error(`Confluence Cloud page ${input.pageId} has no version information`);
@@ -207,6 +207,7 @@ export class CloudConfluenceClient implements ConfluenceApi {
       method: 'PUT', url: `/api/v2/pages/${encodeURIComponent(input.pageId)}`, headers: {'Content-Type': 'application/json'},
       data: {
         id: input.pageId, status: 'current', title: input.title,
+        ...(input.parentId ? {parentId: input.parentId} : {}),
         body: {representation: 'storage', value: input.storage},
         version: {number: versionNumber + 1, message: 'Transferred by ywtc'},
       },
@@ -264,7 +265,12 @@ export class CloudConfluenceClient implements ConfluenceApi {
   async getDescendants(pageId: string): Promise<ConfluencePage[]> {
     const results: ConfluencePage[] = [];
     let cursor: string | undefined;
+    const seenCursors = new Set<string>();
     do {
+      if (cursor) {
+        if (seenCursors.has(cursor)) throw new Error(`Confluence Cloud descendants cursor repeated for page ${pageId}: ${cursor}`);
+        seenCursors.add(cursor);
+      }
       const response = await this.readLimit(() => this.http.request<CloudList<CloudPage>>({
         method: 'GET',
         url: `/api/v2/pages/${encodeURIComponent(pageId)}/descendants`,

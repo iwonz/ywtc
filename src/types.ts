@@ -162,7 +162,7 @@ export interface ConfluencePlatformInfo {
 export interface YandexWikiApi {
   getPageBySlug(slug: string): Promise<YandexPageDetails>;
   getPageById(id: number): Promise<YandexPageDetails>;
-  getDescendants(id: number): Promise<YandexPageIdentity[]>;
+  getDescendants(id: number, options?: {actuality?: 'actual'}): Promise<YandexPageIdentity[]>;
   getAttachments(pageId: number): Promise<YandexAttachment[]>;
   getPageGrids(pageId: number): Promise<YandexGridSummary[]>;
   getGrid(id: string): Promise<YandexGrid>;
@@ -189,6 +189,7 @@ export interface ConfluenceApi {
     pageId: string;
     title: string;
     storage: string;
+    parentId?: string;
   }): Promise<ConfluencePage>;
   findAttachment(pageId: string, filename: string): Promise<ConfluenceAttachment | undefined>;
   uploadAttachment(input: {

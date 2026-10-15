@@ -201,7 +201,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
     });
   }
 
-  async updatePage(input: {pageId: string; title: string; storage: string}): Promise<ConfluencePage> {
+  async updatePage(input: {pageId: string; title: string; storage: string; parentId?: string}): Promise<ConfluencePage> {
     return this.writeLimit(async () => {
       const current = await this.getPage(input.pageId);
       if (!current.version?.number) throw new Error(`Confluence page ${input.pageId} has no version information`);
@@ -218,6 +218,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
             minorEdit: true,
             message: 'Transferred by ywtc',
           },
+          ...(input.parentId ? {ancestors: [{id: input.parentId}]} : {}),
           body: {storage: {value: input.storage, representation: 'storage'}},
         },
       });

@@ -9,6 +9,7 @@ import type {
   DestinationPage,
   PageReference,
   SourceAdapter,
+  SourceStatus,
   SourcePage,
   SourceResource,
   UploadedResource,
@@ -22,6 +23,7 @@ const capabilities: AdapterCapabilities = {
   writePages: true,
   writeResources: true,
   verifyWrites: true,
+  reparentPages: true,
 };
 
 function canonical(profile: ConfluenceConnectionProfile, id: string): string {
@@ -48,6 +50,8 @@ function sourcePage(profile: ConfluenceConnectionProfile, client: ConfluenceApi,
     locator: page.id,
     url: client.pageWebUrl(page),
     ...(page.ancestors?.at(-1)?.id ? {parentId: page.ancestors.at(-1)!.id} : {}),
+    ...(page.ancestors?.length ? {ancestorIds: page.ancestors.map((ancestor) => ancestor.id)} : {}),
+    ...(page.status ? {sourceStatus: page.status === 'current' ? 'current' as const : 'non-current' as const} : {}),
     space: page.space.key,
     rawContent,
     rawFormat: 'confluence-storage',
@@ -95,13 +99,39 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     return sourcePage(this.profile, this.client, await this.client.getPage(id));
   }
 
-  async getDescendants(page: SourcePage): Promise<SourcePage[]> {
+  supportsSourceStatus(_scope: import('../domain.js').TransferScope, _status: SourceStatus): boolean {
+    return true;
+  }
+
+  async getDescendants(page: SourcePage, options: {status: SourceStatus}) {
     const descendants = await this.client.getDescendants(page.id);
-    return Promise.all(descendants.map(async (item) => sourcePage(
+    const hydrated = await Promise.all(descendants.map(async (item) => sourcePage(
       this.profile,
       this.client,
       item.body?.storage?.value === undefined ? await this.client.getPage(item.id) : item,
     )));
+    if (options.status === 'current') {
+      const unknown = hydrated.filter((item) => item.sourceStatus === undefined);
+      if (unknown.length > 0) {
+        throw new Error(`Confluence hierarchy did not expose status for ${unknown.length} descendant page(s); --source-status current cannot be determined reliably`);
+      }
+    }
+    const pages = options.status === 'current'
+      ? hydrated.filter((item) => item.sourceStatus === 'current')
+      : hydrated;
+    return {
+      pages,
+      returned: hydrated.length,
+      excluded: options.status === 'current'
+        ? hydrated.filter((item) => item.sourceStatus !== 'current').map((item) => ({
+          id: item.id, locator: item.locator, title: item.title, reason: 'source-status' as const, status: 'non-current',
+        }))
+        : [],
+      effectiveStatus: options.status,
+      notes: options.status === 'all'
+        ? ['Confluence hierarchy APIs expose accessible structural pages; archived, trashed, and historical versions may be absent.']
+        : [],
+    };
   }
 
   async resolveReference(from: SourcePage, reference: PageReference): Promise<SourcePage | undefined> {
@@ -170,6 +200,12 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     return page.parentId === container.id ? page : undefined;
   }
 
+  async findTitleConflict(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined> {
+    if (!container.space) return this.findChild(container, title);
+    const found = await this.client.findPageByTitle(container.space, title);
+    return found ? destinationPage(this.profile, this.client, await this.client.getPage(found.id)) : undefined;
+  }
+
   async findRecoverablePage(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined> {
     return this.findChild(container, title);
   }
@@ -188,6 +224,31 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
       if (current.fingerprint !== input.expectedFingerprint) throw new Error(`Destination conflict for Confluence page ${input.page.id}: content changed since the last verified run`);
     }
     return destinationPage(this.profile, this.client, await this.client.updatePage({pageId: input.page.id, title: input.title, storage: input.body}));
+  }
+
+  async reparentPage(input: {
+    page: DestinationPage;
+    parent: DestinationContainer | DestinationPage;
+    expectedFingerprint?: string;
+  }): Promise<DestinationPage> {
+    if (input.expectedFingerprint) {
+      const current = destinationPage(this.profile, this.client, await this.client.getPage(input.page.id));
+      if (current.fingerprint !== input.expectedFingerprint) {
+        throw new Error(`Destination conflict for Confluence page ${input.page.id}: content changed since the last verified run`);
+      }
+      input.page = current;
+    }
+    const moved = destinationPage(this.profile, this.client, await this.client.updatePage({
+      pageId: input.page.id,
+      title: input.page.title,
+      storage: input.page.content ?? '',
+      parentId: input.parent.id,
+    }));
+    const verified = destinationPage(this.profile, this.client, await this.client.getPage(moved.id));
+    if (verified.parentId !== input.parent.id) {
+      throw new Error(`Confluence hierarchy verification failed for page ${input.page.id}: expected parent ${input.parent.id}, received ${verified.parentId ?? 'none'}`);
+    }
+    return verified;
   }
 
   async uploadResource(input: {page: DestinationPage; name: string; filePath: string; size?: number; mimeType?: string; existingId?: string}): Promise<UploadedResource> {

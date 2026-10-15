@@ -74,6 +74,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   console.log(`  Source       ${command.source} ${paint(90, `[${source.profile.name}]`)}`);
   console.log(`  Destination  ${command.destination}${destination.type === 'remote' ? ` ${paint(90, `[${destination.profile.name}]`)}` : ` ${paint(90, `[${destination.format}]`)}`}`);
   console.log(`  Scope        ${command.scope}`);
+  console.log(`  Source state ${command.sourceStatus}`);
   console.log(`  Mode         ${command.dryRun ? paint(33, 'dry-run · read-only') : paint(35, 'live')}`);
   if (initialized.created.length > 0) console.log(`  Initialized  ${initialized.created.join(', ')}`);
 
@@ -86,6 +87,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
           source,
           destination,
           scope: command.scope,
+          sourceStatus: command.sourceStatus,
           dryRun: command.dryRun,
           archive: command.archive,
           fresh: command.fresh,
@@ -113,7 +115,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
       console.log(`  Workdir  ${workspace.root}`);
       console.log(`  Reports  ${workspace.reportsDirectory}`);
       if (reportBearingError(error)) await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume   ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope} --workdir "${workspace.root}"`);
+      console.log(`  Resume   ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope}${command.sourceStatus === 'all' ? '' : ` --source-status ${command.sourceStatus}`} --workdir "${workspace.root}"`);
       return signalCode;
     }
     if (reportBearingError(error)) {
@@ -132,14 +134,15 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   console.log(`  Status  ${result.status}`);
   console.log(`  State   ${result.stateFilename}`);
   await printAndMaybeOpenReport(result.reportPaths, workspace.root, command.openReport);
-  console.log(`  Source  ${result.summary.pages} pages · ${result.summary.resources} files · ${result.summary.sourceBytes} known bytes${result.summary.bytesUnknown ? ` · ${result.summary.bytesUnknown} sizes unknown` : ''}`);
+  console.log(`  Source  root + ${result.summary.selectedDescendants}/${result.summary.returnedDescendants} descendants · ${result.summary.excludedPages} excluded · depth ${result.summary.maximumDepth}`);
+  console.log(`  Assets  ${result.summary.pages} pages · ${result.summary.resources} files · ${result.summary.sourceBytes} known bytes${result.summary.bytesUnknown ? ` · ${result.summary.bytesUnknown} sizes unknown` : ''}`);
   console.log(`  Pages   ${result.summary.complete} complete · ${result.summary.partial} partial · ${result.summary.failed} failed · ${result.summary.blocked} blocked · ${result.summary.conflicts} conflicts · ${result.summary.unprocessedPages} unprocessed`);
   console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesPlanned} planned · ${result.summary.bytes} transferred bytes`);
   console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
   console.log(`  Issues  ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.normalizations} safe normalizations`);
   if (result.output) console.log(`  Output  ${result.output}`);
   if (result.archive) console.log(`  Archive ${result.archive}`);
-  if (result.hasErrors) console.log(`  Resume  ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope}`);
+  if (result.hasErrors) console.log(`  Resume  ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope}${command.sourceStatus === 'all' ? '' : ` --source-status ${command.sourceStatus}`}`);
   return result.hasErrors ? 1 : 0;
 }
 
@@ -201,10 +204,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     });
     validateProfileSecrets(config, [source.profile, ...(destination.type === 'remote' ? [destination.profile] : [])]);
     const {runCapabilityDoctor} = await import('./doctor.js');
-    const result = await runCapabilityDoctor(config, source, destination, command.scope);
+    const result = await runCapabilityDoctor(config, source, destination, command.scope, command.sourceStatus);
     console.log(`  Source    ${paint(32, `${result.source.product}${result.source.version ? ` ${result.source.version}` : ''}`)} · ${result.source.title}`);
     console.log(`  Dest      ${paint(32, `${result.destination.product}${result.destination.version ? ` ${result.destination.version}` : ''}`)}`);
-    console.log(`  Scope     ${result.pages} pages · ${result.links} links`);
+    console.log(`  Scope     ${result.pages} pages · ${result.links} links · status ${result.sourceStatus}`);
+    console.log(`  Tree      ${result.returnedDescendants} descendants returned · ${result.selectedDescendants} selected · ${result.excludedPages} excluded · depth ${result.maximumDepth}`);
     for (const warning of result.warnings) console.log(`  ${paint(33, 'Warning')}   ${warning}`);
     return 0;
   }
@@ -233,7 +237,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       for (const report of catalog.reports) {
         const issues = `${report.errors} errors · ${report.warnings} warnings · ${report.degradations} degradations`;
         console.log(`  ${report.runId}  ${report.finishedAt ?? report.startedAt}  ${report.status}`);
-        console.log(`    ${report.direction} · ${report.scope} · source ${report.pages} pages · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);
+        console.log(`    ${report.direction} · ${report.scope} · source status ${report.sourceStatus} · ${report.selectedDescendants}/${report.returnedDescendants} descendants selected · ${report.excludedPages} excluded · depth ${report.maximumDepth}`);
+        console.log(`    source ${report.pages} pages · ${report.hierarchyGaps} hierarchy gaps · ${report.hierarchyRepairs} repaired · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);
         console.log(`    pages ${report.complete} complete · ${report.partial} partial · ${report.failed} failed · ${report.blocked} blocked · ${report.conflicts} conflicts · ${report.unprocessedPages} unprocessed`);
         console.log(`    files ${report.resourcesComplete}/${report.resources} complete · ${report.resourcesPartial} partial · ${report.resourcesFailed} failed · ${report.resourcesPlanned} planned · ${issues}`);
         console.log(`    ${report.url}`);

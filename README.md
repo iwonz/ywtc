@@ -165,6 +165,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `--source-profile <name>` | `doctor`, `migrate` | при неоднозначном коротком locator | Профиль source из `connections` |
 | `--destination-profile <name>` | `doctor`, `migrate` | при неоднозначном remote locator | Профиль destination; несовместим с файловым экспортом |
 | `--scope <mode>` | `doctor`, `migrate` | `page`, `subtree` (default), `linked` | Граница выбора страниц |
+| `--source-status <status>` | `doctor`, `migrate` | `all` (default) или `current` | Статус автоматически обнаруживаемых страниц; явно заданный root включается всегда |
 | `--format <format>` | `doctor`, `migrate` | `markdown` или `html` | Делает destination файловым каталогом |
 | `--archive` | `migrate` | только вместе с `--format` | Дополнительно создать ZIP рядом с каталогом |
 | `--dry-run` | `migrate` | default `false` | Discovery и план без записи в destination |
@@ -190,7 +191,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 ### Scope
 
 - `page` — только исходная страница.
-- `subtree` — страница и все структурные потомки; default.
+- `subtree` — страница и все доступные структурные потомки до последнего уровня; default. С `all` Yandex Wiki включает `actual` и `obsolete`, а с `current` — только `actual`. Confluence переносит страницы, доступные через hierarchy API; archived, trashed и historical versions могут не возвращаться этим API.
 - `linked` — детерминированный BFS по внутренним ссылкам и page/include references до фиксированной точки. Циклы завершаются безопасно, каждая страница обрабатывается один раз; внешние и недоступные ссылки не обходятся и попадают в отчёт.
 
 ## Частые примеры
@@ -206,6 +207,11 @@ ywtc init --workdir ./migration
 ywtc migrate --source https://wiki.example.com/team/start \
   --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
   --scope linked
+
+# Только текущие страницы структурного поддерева
+ywtc migrate --source https://wiki.example.com/team/start \
+  --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
+  --source-status current
 
 # Confluence → Yandex Wiki
 ywtc migrate --source-profile confluence-prod --source 123456 \
@@ -237,7 +243,7 @@ ywtc reports list
 ywtc reports open last
 ```
 
-Wizard проверяет только доступность API и авторизацию без страниц и внешних записей. `doctor` принимает те же endpoints, profiles, `scope` и `format`: без endpoints он проверяет workspace, конфигурацию и секреты, а с обоими endpoints выполняет page-specific read-only capability-preflight.
+Wizard проверяет только доступность API и авторизацию без страниц и внешних записей. `doctor` принимает те же endpoints, profiles, `scope`, `source-status` и `format`: без endpoints он проверяет workspace, конфигурацию и секреты, а с обоими endpoints выполняет page-specific read-only capability-preflight.
 
 ## Файловый экспорт
 
@@ -247,11 +253,13 @@ Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json
 
 ## State
 
-По умолчанию state хранится в `<workdir>/.states/<automatic-id>.json`. ID строится из канонических профилей и ID source/destination, а для файлового экспорта также из формата; форма locator и `scope` на ID не влияют. State имеет единственный строгий актуальный формат без поля версии. Несоответствующий файл не преобразуется и не изменяется. Относительный `--state` разрешается внутри workspace, выход за его границы запрещён.
+По умолчанию state хранится в `<workdir>/.states/<automatic-id>.json`. ID строится из канонических профилей и ID source/destination, а для файлового экспорта также из формата; форма locator, `scope` и `source-status` на ID не влияют. State имеет единственный строгий актуальный формат без поля версии. Несоответствующий файл не преобразуется и не изменяется. Относительный `--state` разрешается внутри workspace, выход за его границы запрещён.
 
 ### Повторные запуски
 
 - Одинаковые source и destination автоматически подхватывают один state независимо от формы URL/ID/slug.
+- Переключение `current → all` расширяет тот же state новыми страницами без дубликатов; обратное переключение не удаляет mappings вне текущего выбора.
+- Если ранее страница была создана под временно ближайшим выбранным предком, повторный запуск безопасно перемещает неизменённую страницу под найденного родителя; пользовательские изменения дают `conflict`.
 - Уже сопоставленные страницы и вложения сверяются по ID, фактическому размеру и SHA-256; проверенный cache повторно не скачивается.
 - Неудачные mappings вложений автоматически получают безопасные уникальные имена и повторяются без `--fresh`.
 - Временный `404` подтверждённой destination-страницы повторяется с backoff; устойчиво пропавшая mapping восстанавливается под ожидаемым родителем с сохранением прежнего ID в state.
@@ -267,7 +275,7 @@ Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json
 
 Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json`, затем печатает run ID, кликабельный `file://` URL и готовую команду повторного открытия. `--open-report` сразу открывает отчёт; `ywtc reports list` показывает историю, `ywtc reports open <run-id>` открывает конкретный, а `ywtc reports open last` или `ywtc reports open` — последний корректный.
 
-Отчёт отдельно показывает доступный контент выбранного source scope и результат переноса. Количество страниц и файлов сверяется с исчерпывающими статусами; source bytes не смешиваются с подтверждёнными transferred bytes, а неизвестные размеры отмечаются явно. Ошибки, конфликты, retryable failures и деградации привязаны к конкретной странице и файлу, содержат причину и ссылку на дерево с resource-статусами и side-by-side preview. Safe normalizations, HTML/JSON, итог терминала и `reports list` используют одинаковые счётчики.
+Отчёт отдельно показывает root, effective `source-status`, сколько descendants вернул source, сколько выбрано и исключено, максимальную глубину, hierarchy gaps и результаты восстановления родителей. Количество страниц и файлов сверяется с исчерпывающими статусами; source bytes не смешиваются с подтверждёнными transferred bytes, а неизвестные размеры отмечаются явно. Ошибки, конфликты, retryable failures и деградации привязаны к конкретной странице и файлу, содержат причину и ссылку на дерево с resource-статусами и side-by-side preview. Safe normalizations, HTML/JSON, итог терминала и `reports list` используют одинаковые счётчики.
 
 Итоговый статус запуска: `completed`, `completed-with-warnings`, `partial`, `failed`, `cancelled` или `interrupted`. Provider-aware verification допускает безопасные различия сериализации, отмечает значимое упрощение оформления как `partial`, а потерю текста, ссылок, ячеек таблиц, кода, изображений, вложений или anchors — как ошибку. Технический статус `skeleton-created` уже содержит source-derived bootstrap, а не progress-placeholder.
 

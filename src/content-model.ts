@@ -530,6 +530,7 @@ interface SemanticContent {
   code: string[];
   links: string[];
   images: string[];
+  imageLabels: string[];
   anchors: string[];
   structure: {lists: number; rows: number; details: number; asides: number; codeBlocks: number};
   macros: string[];
@@ -563,7 +564,8 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     tableCells: $('th,td').toArray().map((element) => `${element.tagName}:${semanticText($(element).text())}`),
     code: textValues('pre,code'),
     links: $('a[href]').toArray().map((element) => `${$(element).attr('href') ?? ''}|${semanticText($(element).text())}`).sort(),
-    images: $('img').toArray().map((element) => `${$(element).attr('src') ?? ''}|${$(element).attr('alt') ?? ''}`).sort(),
+    images: $('img').toArray().map((element) => $(element).attr('src') ?? '').sort(),
+    imageLabels: $('img').toArray().map((element) => $(element).attr('alt') ?? '').sort(),
     anchors: $('[id],a[name]').toArray().map((element) => $(element).attr('id') ?? $(element).attr('name') ?? '').filter(Boolean).sort(),
     structure: {
       lists: $('ul,ol').length,
@@ -606,7 +608,7 @@ export function verifyDestinationContent(
       differences: [`Verification found destination content that differs from the rendered source for ${page.title}: ${missingData.join(', ')}`],
     };
   }
-  const simplifiedFormatting = (['headings', 'listItems', 'structure'] as const).filter(differs);
+  const simplifiedFormatting = (['headings', 'listItems', 'imageLabels', 'structure'] as const).filter(differs);
   if (simplifiedFormatting.length > 0) {
     return {
       status: 'partial',

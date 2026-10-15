@@ -50,11 +50,13 @@ describe('CLI and named profiles', () => {
   it('parses the universal migration surface', () => {
     expect(parseCliArguments([
       'migrate', '--source', '42', '--source-profile', 'wiki-main', '--destination', './site',
-      '--scope', 'linked', '--format', 'html', '--archive', '--dry-run', '--open-report', '--concurrency', '8',
+      '--scope', 'linked', '--source-status', 'current', '--format', 'html', '--archive', '--dry-run', '--open-report', '--concurrency', '8',
     ])).toMatchObject({
       command: 'migrate', source: '42', destination: './site', sourceProfile: 'wiki-main',
-      scope: 'linked', format: 'html', archive: true, dryRun: true, openReport: true, concurrency: 8,
+      scope: 'linked', sourceStatus: 'current', format: 'html', archive: true, dryRun: true, openReport: true, concurrency: 8,
     });
+    expect(parseCliArguments(['migrate', '--source', 'root', '--destination', '100'])).toMatchObject({sourceStatus: 'all'});
+    expect(parseCliArguments(['doctor'])).toMatchObject({sourceStatus: 'all'});
     expect(parseCliArguments(['reports', 'list', '--workdir', './workspace'])).toEqual({
       command: 'reports-list', workdir: './workspace',
     });
@@ -72,6 +74,8 @@ describe('CLI and named profiles', () => {
     expect(() => parseCliArguments(['doctor', '--source', 'a'])).toThrow(/both --source and --destination/);
     expect(() => parseCliArguments(['migrate', '--source', 'a', '--destination', 'https://example.com', '--format', 'html'])).toThrow(/remote HTTP/);
     expect(cliHelp('migrate')).toContain('--scope');
+    expect(cliHelp('migrate')).toContain('--source-status');
+    expect(cliHelp('doctor')).toContain('--source-status');
     expect(cliHelp('migrate')).toContain('--open-report');
     expect(cliHelp('reports')).toContain('list');
     expect(cliHelp('reports')).toContain('open');

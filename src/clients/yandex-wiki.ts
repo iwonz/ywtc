@@ -161,7 +161,12 @@ export class YandexWikiClient implements YandexWikiApi {
   private async paginate<T>(url: string, schema: z.ZodType<unknown>, params: Record<string, unknown> = {}): Promise<T[]> {
     const results: T[] = [];
     let cursor: string | undefined;
+    const seenCursors = new Set<string>();
     do {
+      if (cursor) {
+        if (seenCursors.has(cursor)) throw new Error(`Yandex Wiki pagination cursor repeated for GET ${url}: ${cursor}`);
+        seenCursors.add(cursor);
+      }
       const response = await this.authenticated.request<CursorPage<T>>({
         method: 'GET',
         url,
@@ -178,11 +183,22 @@ export class YandexWikiClient implements YandexWikiApi {
     return results;
   }
 
-  getDescendants(id: number): Promise<YandexPageIdentity[]> {
-    return this.readQueue.add(() => this.paginate<YandexPageIdentity>(`/pages/${id}/descendants`, pageIdentitySchema, {
-      actuality: 'actual',
-      include_self: false,
-    })) as Promise<YandexPageIdentity[]>;
+  getDescendants(id: number, options: {actuality?: 'actual'} = {}): Promise<YandexPageIdentity[]> {
+    return this.readQueue.add(async () => {
+      const items = await this.paginate<YandexPageIdentity>(`/pages/${id}/descendants`, pageIdentitySchema, {
+        include_self: false,
+        ...(options.actuality ? {actuality: options.actuality} : {}),
+      });
+      const unique = new Map<number, YandexPageIdentity>();
+      for (const item of items) {
+        const existing = unique.get(item.id);
+        if (existing && existing.slug !== item.slug) {
+          throw new Error(`Yandex Wiki descendant ${item.id} was returned with conflicting slugs: ${existing.slug}, ${item.slug}`);
+        }
+        if (!existing) unique.set(item.id, item);
+      }
+      return [...unique.values()];
+    }) as Promise<YandexPageIdentity[]>;
   }
 
   getAttachments(pageId: number): Promise<YandexAttachment[]> {

@@ -76,6 +76,36 @@ describe('provider clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
+  it('enumerates every Yandex descendant page, follows short cursor pages, and applies actuality only when requested', async () => {
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/1/descendants').query({include_self: false, page_size: 100})
+      .reply(200, {results: [{id: 2, slug: 'root/one'}], next_cursor: 'next'})
+      .get('/v1/pages/1/descendants').query({include_self: false, page_size: 100, cursor: 'next'})
+      .reply(200, {results: [{id: 3, slug: 'root/two'}]})
+      .get('/v1/pages/1/descendants').query({include_self: false, actuality: 'actual', page_size: 100})
+      .reply(200, {results: [{id: 2, slug: 'root/one'}]});
+    const client = new YandexWikiClient(wiki, 5_000, limits);
+    await expect(client.getDescendants(1)).resolves.toEqual([{id: 2, slug: 'root/one'}, {id: 3, slug: 'root/two'}]);
+    await expect(client.getDescendants(1, {actuality: 'actual'})).resolves.toEqual([{id: 2, slug: 'root/one'}]);
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('rejects repeated Yandex cursors and conflicting locators for one immutable ID', async () => {
+    const repeated = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/8/descendants').query({include_self: false, page_size: 100})
+      .reply(200, {results: [{id: 9, slug: 'root/one'}], next_cursor: 'again'})
+      .get('/v1/pages/8/descendants').query({include_self: false, page_size: 100, cursor: 'again'})
+      .reply(200, {results: [], next_cursor: 'again'});
+    await expect(new YandexWikiClient(wiki, 5_000, limits).getDescendants(8)).rejects.toThrow(/cursor repeated/);
+    expect(repeated.isDone()).toBe(true);
+
+    const conflicting = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/18/descendants').query({include_self: false, page_size: 100})
+      .reply(200, {results: [{id: 19, slug: 'root/one'}, {id: 19, slug: 'root/renamed'}]});
+    await expect(new YandexWikiClient(wiki, 5_000, limits).getDescendants(18)).rejects.toThrow(/conflicting slugs/);
+    expect(conflicting.isDone()).toBe(true);
+  });
+
   it('streams Yandex upload sessions in documented order', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-upload-'));
     const filename = path.join(directory, 'file.txt');
@@ -104,6 +134,31 @@ describe('provider clients', () => {
     await expect(client.downloadAttachment('10', {id: 'a', title: 'file.txt', _links: {download: '/download/attachments/10/file.txt'}}, destination)).resolves.toMatchObject({size: 5});
     await expect(readFile(destination, 'utf8')).resolves.toBe('hello');
     expect(api.isDone()).toBe(true);
+  });
+
+  it('sends deployment-specific parent fields when updating Confluence pages', async () => {
+    const dcApi = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
+      .get('/confluence/rest/api/content/10').query({expand: 'space,version,ancestors,body.storage,body.view,operations'})
+      .reply(200, {id: '10', type: 'page', title: 'Child', space: {key: 'DOC'}, version: {number: 2}, body: {storage: {value: '<p>x</p>', representation: 'storage'}}})
+      .put('/confluence/rest/api/content/10', (body) => body.ancestors?.[0]?.id === '99' && body.version?.number === 3)
+      .reply(200, {id: '10', type: 'page', title: 'Child', space: {key: 'DOC'}, ancestors: [{id: '99'}], version: {number: 3}, body: {storage: {value: '<p>x</p>', representation: 'storage'}}});
+    await expect(new DataCenterConfluenceClient(dc, 5_000, limits).updatePage({pageId: '10', title: 'Child', storage: '<p>x</p>', parentId: '99'}))
+      .resolves.toMatchObject({ancestors: [{id: '99'}]});
+    expect(dcApi.isDone()).toBe(true);
+
+    const cloud: ConfluenceConnectionProfile = {
+      name: 'cloud-parent', type: 'confluence', deployment: 'cloud', authType: 'api-token', baseUrl: 'https://parent.atlassian.net',
+      token: 'token', email: 'person@example.com', limits,
+    };
+    const cloudApi = nock('https://parent.atlassian.net')
+      .get('/wiki/api/v2/pages/10').query({'body-format': 'storage', 'include-operations': true})
+      .reply(200, {id: '10', status: 'current', title: 'Child', spaceId: '1', parentId: '1', version: {number: 2}, body: {storage: {value: '<p>x</p>', representation: 'storage'}}})
+      .get('/wiki/api/v2/spaces/1').reply(200, {id: '1', key: 'DOC'})
+      .put('/wiki/api/v2/pages/10', (body) => body.parentId === '99' && body.version?.number === 3)
+      .reply(200, {id: '10', status: 'current', title: 'Child', spaceId: '1', parentId: '99', version: {number: 3}, body: {storage: {value: '<p>x</p>', representation: 'storage'}}});
+    await expect(new CloudConfluenceClient(cloud, 5_000, limits).updatePage({pageId: '10', title: 'Child', storage: '<p>x</p>', parentId: '99'}))
+      .resolves.toMatchObject({ancestors: [{id: '99'}]});
+    expect(cloudApi.isDone()).toBe(true);
   });
 
   it('finds a Data Center child by exact title across parent-scoped pages', async () => {

@@ -2,6 +2,7 @@ import type {ConnectionProfile} from './config.js';
 
 export type ProviderKind = 'yandex-wiki' | 'confluence';
 export type TransferScope = 'page' | 'subtree' | 'linked';
+export type SourceStatus = 'all' | 'current';
 export type ExportFormat = 'markdown' | 'html';
 export type RawContentFormat = 'yfm' | 'confluence-storage';
 
@@ -22,6 +23,10 @@ export interface SourcePage {
   locator: string;
   url: string;
   parentId?: string;
+  /** Ordered provider page IDs from the highest available ancestor to the direct parent. */
+  ancestorIds?: string[];
+  /** Normalized status when the provider exposes it for this page. */
+  sourceStatus?: 'current' | 'non-current';
   space?: string;
   rawContent: string;
   rawFormat: RawContentFormat;
@@ -94,6 +99,23 @@ export interface AdapterCapabilities {
   writePages: boolean;
   writeResources: boolean;
   verifyWrites: boolean;
+  reparentPages?: boolean;
+}
+
+export interface SourceStatusExclusion {
+  id: string;
+  locator: string;
+  title?: string;
+  reason: 'source-status';
+  status?: string;
+}
+
+export interface DescendantDiscovery {
+  pages: SourcePage[];
+  returned: number;
+  excluded: SourceStatusExclusion[];
+  effectiveStatus: SourceStatus;
+  notes: string[];
 }
 
 export interface SourceAdapter {
@@ -103,7 +125,8 @@ export interface SourceAdapter {
   preflight(): Promise<{product: string; version?: string; warnings: string[]}>;
   resolvePage(locator: string): Promise<SourcePage>;
   getPage(id: string): Promise<SourcePage>;
-  getDescendants(page: SourcePage): Promise<SourcePage[]>;
+  supportsSourceStatus(scope: TransferScope, status: SourceStatus): boolean;
+  getDescendants(page: SourcePage, options: {status: SourceStatus}): Promise<DescendantDiscovery>;
   resolveReference(from: SourcePage, reference: PageReference): Promise<SourcePage | undefined>;
   listResources(page: SourcePage): Promise<SourceResource[]>;
   downloadResource(resource: SourceResource, destination: string): Promise<{path: string; size: number; sha256: string; mimeType?: string}>;
@@ -116,9 +139,15 @@ export interface DestinationAdapter {
   preflight(): Promise<{product: string; version?: string; warnings: string[]}>;
   resolveContainer(locator: string): Promise<DestinationContainer>;
   findChild(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined>;
+  findTitleConflict?(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined>;
   findRecoverablePage?(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined>;
   createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage>;
   updatePage(input: {page: DestinationPage; title: string; body: string; expectedFingerprint?: string}): Promise<DestinationPage>;
+  reparentPage?(input: {
+    page: DestinationPage;
+    parent: DestinationContainer | DestinationPage;
+    expectedFingerprint?: string;
+  }): Promise<DestinationPage>;
   uploadResource(input: {
     page: DestinationPage;
     name: string;
@@ -149,11 +178,30 @@ export interface DiscoveredPage extends SourcePage {
   projectedParentId?: string;
 }
 
+export interface HierarchyGap {
+  pageId: string;
+  missingParentId?: string;
+  selectedParentId: string;
+  reason: 'unavailable' | 'source-status';
+}
+
+export interface SourceSelection {
+  requestedStatus: SourceStatus;
+  effectiveStatus: SourceStatus;
+  returnedDescendants: number;
+  selectedDescendants: number;
+  excluded: SourceStatusExclusion[];
+  maximumDepth: number;
+  hierarchyGaps: HierarchyGap[];
+  notes: string[];
+}
+
 export interface PageGraph {
   rootId: string;
   pages: DiscoveredPage[];
   edges: PageGraphEdge[];
   warnings: string[];
+  selection: SourceSelection;
 }
 
 export interface NormalizedReference {
@@ -212,6 +260,7 @@ export function assertTransferCapabilities(
   source: SourceAdapter,
   destination: DestinationAdapter | undefined,
   scope: TransferScope,
+  sourceStatus: SourceStatus = 'all',
 ): void {
   const missing: string[] = [];
   if (!source.capabilities.readPages) missing.push(`${source.profile.name}: read pages`);
@@ -221,4 +270,8 @@ export function assertTransferCapabilities(
   if (destination && !destination.capabilities.writeResources) missing.push(`${destination.profile.name}: write resources`);
   if (destination && !destination.capabilities.verifyWrites) missing.push(`${destination.profile.name}: verify writes`);
   if (missing.length > 0) throw new Error(`Selected direction lacks required capabilities: ${missing.join(', ')}.`);
+  const supportsSourceStatus = source.supportsSourceStatus?.(scope, sourceStatus) ?? sourceStatus === 'all';
+  if (!supportsSourceStatus) {
+    throw new Error(`${source.profile.name} (${source.kind}) cannot determine --source-status ${sourceStatus} for --scope ${scope}. Use --source-status all or choose a supported scope.`);
+  }
 }

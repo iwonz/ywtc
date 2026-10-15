@@ -42,6 +42,45 @@ describe('source page content contracts', () => {
     expect(resources[0]?.referenceAliases).toContain('/root/.files/image-3.png');
   });
 
+  it('selects all Yandex descendants by default and reports current-only exclusions', async () => {
+    const calls: Array<'all' | 'actual'> = [];
+    const details = new Map<number, YandexPageDetails>([
+      [2, {id: 2, slug: 'root/current', title: 'Current', page_type: 'page', content: 'current', breadcrumbs: [{id: 1, slug: 'root', title: 'Root'}]}],
+      [3, {id: 3, slug: 'root/obsolete', title: 'Obsolete', page_type: 'page', content: 'obsolete', breadcrumbs: [{id: 1, slug: 'root', title: 'Root'}]}],
+    ]);
+    const client = {
+      getDescendants: async (_id: number, options?: {actuality?: 'actual'}) => {
+        calls.push(options?.actuality ? 'actual' : 'all');
+        return options?.actuality ? [{id: 2, slug: 'root/current'}] : [{id: 2, slug: 'root/current'}, {id: 3, slug: 'root/obsolete'}];
+      },
+      getPageById: async (id: number) => details.get(id)!,
+    } as unknown as YandexWikiClient;
+    const adapter = new YandexAdapter(yandexProfile, client);
+    const sourceRoot = {provider: 'yandex-wiki' as const, profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root', locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm' as const, references: []};
+    await expect(adapter.getDescendants(sourceRoot, {status: 'all'})).resolves.toMatchObject({returned: 2, pages: [{id: '2'}, {id: '3'}], excluded: []});
+    expect(calls).toEqual(['all']);
+    calls.length = 0;
+    await expect(adapter.getDescendants(sourceRoot, {status: 'current'})).resolves.toMatchObject({
+      returned: 2,
+      pages: [{id: '2', sourceStatus: 'current'}],
+      excluded: [{id: '3', locator: 'root/obsolete', reason: 'source-status', status: 'obsolete'}],
+    });
+    expect(calls).toEqual(['all', 'actual']);
+  });
+
+  it('fails the complete Yandex inventory when any selected detail cannot be loaded', async () => {
+    const client = {
+      getDescendants: async () => [{id: 2, slug: 'root/child'}, {id: 3, slug: 'root/missing'}],
+      getPageById: async (id: number) => {
+        if (id === 3) throw new Error('not found');
+        return {id, slug: 'root/child', title: 'Child', page_type: 'page', content: 'body', breadcrumbs: [{id: 1, slug: 'root', title: 'Root'}]};
+      },
+    } as unknown as YandexWikiClient;
+    const adapter = new YandexAdapter(yandexProfile, client);
+    const sourceRoot = {provider: 'yandex-wiki' as const, profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root', locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm' as const, references: []};
+    await expect(adapter.getDescendants(sourceRoot, {status: 'all'})).rejects.toThrow(/inventory is incomplete.*3 \(root\/missing\): not found/);
+  });
+
   it('requires Confluence Storage Format while allowing an explicitly empty body', async () => {
     const base: ConfluencePage = {id: '1', type: 'page', title: 'Root', space: {key: 'DOC'}};
     const missingClient = {
@@ -72,6 +111,7 @@ describe('source page content contracts', () => {
       provider: 'confluence' as const, profile: 'conf', id: '100', canonicalId: 'conf:100',
       title: 'Parent', url: 'https://conf.example/confluence/pages/100', space: 'DOC',
     };
+    await expect(adapter.findTitleConflict!(expectedParent, 'Child')).resolves.toMatchObject({id: '2', parentId: 'other-parent'});
     await expect(adapter.findRecoverablePage(expectedParent, 'Child')).resolves.toBeUndefined();
     parentId = expectedParent.id;
     await expect(adapter.findChild(expectedParent, 'Child')).resolves.toMatchObject({id: '2', parentId: '100'});
@@ -95,5 +135,33 @@ describe('source page content contracts', () => {
       title: 'Parent', url: 'https://conf.example/confluence/pages/100', space: 'DOC',
     };
     await expect(adapter.findRecoverablePage(expectedParent, 'Child')).resolves.toMatchObject({id: '2', parentId: '100'});
+  });
+
+  it('filters Confluence current descendants and reparents through the shared adapter', async () => {
+    const pages: ConfluencePage[] = [
+      {id: '2', type: 'page', status: 'current', title: 'Current', space: {key: 'DOC'}, ancestors: [{id: '1'}], body: {storage: {value: '<p>Current</p>', representation: 'storage'}}},
+      {id: '3', type: 'page', status: 'archived', title: 'Archived', space: {key: 'DOC'}, ancestors: [{id: '1'}], body: {storage: {value: '<p>Archived</p>', representation: 'storage'}}},
+    ];
+    let updatedParent: string | undefined;
+    const client = {
+      getDescendants: async () => pages,
+      updatePage: async (input: {pageId: string; title: string; storage: string; parentId?: string}) => {
+        updatedParent = input.parentId;
+        return {...pages[0]!, ancestors: input.parentId ? [{id: input.parentId}] : []};
+      },
+      getPage: async () => ({...pages[0]!, ancestors: updatedParent ? [{id: updatedParent}] : []}),
+      pageWebUrl: (page: ConfluencePage) => `https://conf.example/confluence/pages/${page.id}`,
+    } as unknown as ConfluenceApi;
+    const adapter = new ConfluenceAdapter(confluenceProfile, client);
+    const sourceRoot = {provider: 'confluence' as const, profile: 'conf', id: '1', canonicalId: 'conf:1', title: 'Root', locator: '1', url: 'https://conf.example/confluence/pages/1', rawContent: '', rawFormat: 'confluence-storage' as const, references: []};
+    await expect(adapter.getDescendants(sourceRoot, {status: 'current'})).resolves.toMatchObject({
+      returned: 2, pages: [{id: '2'}], excluded: [{id: '3', reason: 'source-status'}],
+    });
+    const moved = await adapter.reparentPage!({
+      page: {provider: 'confluence', profile: 'conf', id: '2', canonicalId: 'conf:2', title: 'Current', url: 'https://conf.example/confluence/pages/2', content: '<p>Current</p>', parentId: '1'},
+      parent: {provider: 'confluence', profile: 'conf', id: '9', canonicalId: 'conf:9', title: 'Parent', url: 'https://conf.example/confluence/pages/9', space: 'DOC'},
+    });
+    expect(updatedParent).toBe('9');
+    expect(moved.parentId).toBe('9');
   });
 });

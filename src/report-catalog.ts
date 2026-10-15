@@ -15,11 +15,18 @@ const reportListSchema = z.object({
   status: z.enum(['running', 'completed', 'completed-with-warnings', 'partial', 'failed', 'cancelled', 'interrupted']),
   dryRun: z.boolean(),
   scope: z.enum(['page', 'subtree', 'linked']),
+  sourceStatus: z.enum(['all', 'current']).optional().default('all'),
   direction: z.string(),
   warnings: z.array(z.string()),
   errors: z.array(z.string()),
   summary: z.object({
     pages: z.number().nonnegative(),
+    returnedDescendants: z.number().nonnegative().optional().default(0),
+    selectedDescendants: z.number().nonnegative().optional().default(0),
+    excludedPages: z.number().nonnegative().optional().default(0),
+    maximumDepth: z.number().nonnegative().optional().default(0),
+    hierarchyGaps: z.number().nonnegative().optional().default(0),
+    hierarchyRepairs: z.number().nonnegative().optional().default(0),
     complete: z.number().nonnegative(),
     partial: z.number().nonnegative(),
     failed: z.number().nonnegative(),
@@ -45,8 +52,15 @@ export interface ReportCatalogEntry {
   status: z.infer<typeof reportListSchema>['status'];
   dryRun: boolean;
   scope: z.infer<typeof reportListSchema>['scope'];
+  sourceStatus: z.infer<typeof reportListSchema>['sourceStatus'];
   direction: string;
   pages: number;
+  returnedDescendants: number;
+  selectedDescendants: number;
+  excludedPages: number;
+  maximumDepth: number;
+  hierarchyGaps: number;
+  hierarchyRepairs: number;
   complete: number;
   partial: number;
   failed: number;
@@ -135,8 +149,15 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     status: parsed.status,
     dryRun: parsed.dryRun,
     scope: parsed.scope,
+    sourceStatus: parsed.sourceStatus,
     direction: parsed.direction,
     pages: parsed.summary.pages,
+    returnedDescendants: parsed.summary.returnedDescendants,
+    selectedDescendants: parsed.summary.selectedDescendants,
+    excludedPages: parsed.summary.excludedPages,
+    maximumDepth: parsed.summary.maximumDepth,
+    hierarchyGaps: parsed.summary.hierarchyGaps,
+    hierarchyRepairs: parsed.summary.hierarchyRepairs,
     complete: parsed.summary.complete,
     partial: parsed.summary.partial,
     failed: parsed.summary.failed,

@@ -153,6 +153,18 @@ describe('normalized content pipeline', () => {
     expect(verifyDestinationContent('<table><tr><td>A</td></tr></table>', '<table><tr><td></td></tr></table>', 'confluence', page).status).toBe('failed');
     expect(verifyDestinationContent('<pre><code>x</code></pre>', '<p>x</p>', 'confluence', page).status).toBe('failed');
     expect(verifyDestinationContent('<a href="https://example.com">Link</a>', '<p>Link</p>', 'confluence', page).status).toBe('failed');
+    expect(verifyDestinationContent(
+      '<ac:image ac:alt="Source label"><ri:url ri:value="https://example.com/image.png"/></ac:image>',
+      '<ac:image><ri:url ri:value="https://example.com/image.png"/></ac:image>',
+      'confluence',
+      page,
+    ).status).toBe('partial');
+    expect(verifyDestinationContent(
+      '<ac:image><ri:url ri:value="https://example.com/image.png"/></ac:image>',
+      '<ac:image><ri:url ri:value="https://example.com/other.png"/></ac:image>',
+      'confluence',
+      page,
+    ).status).toBe('failed');
   });
 
   it('renders supported YFM tree directives natively and as static navigation', async () => {

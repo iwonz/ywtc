@@ -1,7 +1,7 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import type {DiscoveredPage, GraphEdgeStatus, ProviderKind, SourceResource, TransferScope} from './domain.js';
+import type {DiscoveredPage, GraphEdgeStatus, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
 import {IssueCollector, type IssueInput, type MigrationIssue} from './issues.js';
 import type {PageTransferStatus, ResourceTransferState, RunStatus, StateLoadSource} from './state.js';
 
@@ -70,6 +70,12 @@ type EdgeStatusCounts = Record<GraphEdgeStatus, number>;
 
 export interface TransferReportSummary {
   pages: number;
+  returnedDescendants: number;
+  selectedDescendants: number;
+  excludedPages: number;
+  maximumDepth: number;
+  hierarchyGaps: number;
+  hierarchyRepairs: number;
   complete: number;
   partial: number;
   failed: number;
@@ -113,12 +119,23 @@ export interface TransferReportData {
   status: RunStatus;
   dryRun: boolean;
   scope: TransferScope;
+  sourceStatus: SourceStatus;
+  selection: SourceSelection;
   direction: string;
   source: {provider: ProviderKind; profile: string; rootId: string; title: string; url: string};
   destination: {provider: ProviderKind | 'filesystem'; profile?: string; id: string; url?: string; format?: string};
   state: {id: string; path: string; mode: 'automatic' | 'explicit'; source: StateLoadSource; backupPath?: string};
   pages: TransferReportPage[];
   edges: TransferReportEdge[];
+  hierarchyRepairs: Array<{
+    sourceCanonicalId: string;
+    mode: 'moved' | 'recreated';
+    oldParentId?: string;
+    newParentId: string;
+    oldDestinationId: string;
+    newDestinationId: string;
+    verified: boolean;
+  }>;
   warnings: string[];
   errors: string[];
   issues: TransferReportIssue[];
@@ -155,6 +172,12 @@ function countRecord<T extends string>(values: readonly T[]): Record<T, number> 
 function emptySummary(): TransferReportSummary {
   return {
     pages: 0,
+    returnedDescendants: 0,
+    selectedDescendants: 0,
+    excludedPages: 0,
+    maximumDepth: 0,
+    hierarchyGaps: 0,
+    hierarchyRepairs: 0,
     complete: 0,
     partial: 0,
     failed: 0,
@@ -266,12 +289,20 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
     : `${data.summary.inventoriedPages}/${data.summary.pages} pages inspected · ${data.summary.inventoryFailedPages} failed`;
   const sourceCards = [
     statCard('Selected pages', data.summary.pages, 'accessible in selected scope'),
+    statCard('Returned descendants', data.summary.returnedDescendants, `${data.summary.excludedPages} excluded by status`),
+    statCard('Tree depth', data.summary.maximumDepth, `${data.summary.hierarchyGaps} hierarchy gaps · ${data.summary.hierarchyRepairs} repaired`),
     statCard('Files', data.summary.resources, `${data.summary.attachments} attachments · ${data.summary.resourceImages} images`),
     statCard('Source bytes', formatBytes(data.summary.sourceBytes), data.summary.bytesUnknown ? `${data.summary.bytesUnknown} sizes unknown` : 'all sizes known'),
     statCard('Transferred bytes', formatBytes(data.summary.bytes), 'confirmed complete files'),
     statCard('Links', data.summary.links, `${data.summary.images} embedded images`),
     statCard('Structured content', data.summary.tables + data.summary.codeBlocks, `${data.summary.tables} tables · ${data.summary.grids} grids · ${data.summary.codeBlocks} code blocks`),
   ].join('');
+  const excludedRows = data.selection.excluded.map((page) => `<tr><td>${escapeHtml(page.title ?? page.locator)}</td><td><code>${escapeHtml(page.id)}</code></td><td>${escapeHtml(page.status ?? 'non-current')}</td><td>${escapeHtml(page.reason)}</td></tr>`).join('');
+  const gapRows = data.selection.hierarchyGaps.map((gap) => `<tr><td><code>${escapeHtml(gap.pageId)}</code></td><td><code>${escapeHtml(gap.missingParentId ?? 'unknown')}</code></td><td><code>${escapeHtml(gap.selectedParentId)}</code></td><td>${escapeHtml(gap.reason)}</td></tr>`).join('');
+  const repairRows = data.hierarchyRepairs.map((repair) => `<tr><td><code>${escapeHtml(repair.sourceCanonicalId)}</code></td><td>${escapeHtml(repair.mode)}</td><td><code>${escapeHtml(repair.oldParentId ?? 'none')}</code></td><td><code>${escapeHtml(repair.newParentId)}</code></td><td><code>${escapeHtml(repair.oldDestinationId)} → ${escapeHtml(repair.newDestinationId)}</code></td><td>${repair.verified ? 'verified' : 'planned'}</td></tr>`).join('');
+  const selectionDetails = excludedRows || gapRows || repairRows || data.selection.notes.length
+    ? `<section class="panel" aria-labelledby="selection-title"><div class="section-head"><div><h2 id="selection-title">Selection and hierarchy</h2><p>Every source-status exclusion, projected hierarchy gap, and destination repair recorded for this run.</p></div></div>${excludedRows ? `<div class="table-wrap"><h3>Excluded pages</h3><table><thead><tr><th>Page</th><th>Source ID</th><th>Status</th><th>Reason</th></tr></thead><tbody>${excludedRows}</tbody></table></div>` : ''}${gapRows ? `<div class="table-wrap"><h3>Hierarchy gaps</h3><table><thead><tr><th>Page</th><th>Missing parent</th><th>Projected parent</th><th>Reason</th></tr></thead><tbody>${gapRows}</tbody></table></div>` : ''}${repairRows ? `<div class="table-wrap"><h3>Destination repairs</h3><table><thead><tr><th>Source page</th><th>Mode</th><th>Old parent</th><th>New parent</th><th>Destination mapping</th><th>Outcome</th></tr></thead><tbody>${repairRows}</tbody></table></div>` : ''}${data.selection.notes.length ? `<div class="callout"><h3>Provider notes</h3><ul>${data.selection.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul></div>` : ''}</section>`
+    : '';
   const pageOutcomeStatuses: PageTransferStatus[] = ['complete', 'partial', 'failed', 'blocked', 'conflict', 'planned', 'discovered', 'skeleton-created'];
   const resourceOutcomeStatuses: ReportResourceStatus[] = ['complete', 'partial', 'failed', 'planned'];
   const attentionIssues = data.issues.filter((issue) => issue.severity !== 'normalization');
@@ -321,9 +352,10 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
     : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ywtc transfer ${escapeHtml(data.runId)}</title><style>
     :root{font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172033;background:#f4f6fa;color-scheme:light}*{box-sizing:border-box}body{margin:0}a{color:#175cd3}main{max-width:1360px;margin:auto;padding:32px}.head,.section-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.head h1{margin:0}.head p,.section-head p{margin:.25rem 0}.muted{color:#667085}.run-meta,.meta,.mini-stats{display:flex;flex-wrap:wrap;gap:10px 18px}.run-meta{margin-top:18px;padding:14px 0;border-top:1px solid #dfe4ed}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:18px 0}.stat,.page,.panel{background:#fff;border:1px solid #dfe4ed;border-radius:12px;box-shadow:0 1px 2px rgba(16,24,40,.04)}.stat{padding:14px}.stat small,.stat strong,.stat span{display:block}.stat strong{font-size:24px}.stat span{font-size:12px;color:#667085;margin-top:2px}.panel{padding:20px;margin-top:20px;overflow:hidden}.panel h2{margin:0}.count{display:grid;place-items:center;min-width:38px;height:38px;border-radius:20px;background:#eef2f8;font-weight:800}.page{margin:10px 0 10px calc(var(--depth) * 12px);padding:14px;scroll-margin-top:18px}.page:target{outline:3px solid #84adff}.page summary{display:grid;grid-template-columns:120px minmax(180px,1fr) auto;gap:12px;cursor:pointer;align-items:center}.status{display:inline-block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.03em}.ok{color:#087443}.warn{color:#9a6500}.bad{color:#b42318}.meta{margin:14px 0;color:#667085;font-size:13px}.compare{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}.compare section{min-width:0}.compare h3{margin-bottom:0}.compare iframe{width:100%;height:420px;border:1px solid #dfe4ed;border-radius:8px;background:#fff}.table-wrap{overflow:auto;margin-top:14px}table{border-collapse:collapse;width:100%;min-width:680px}th,td{padding:9px;border-bottom:1px solid #e6e9ef;text-align:left;vertical-align:top}th{font-size:12px;text-transform:uppercase;color:#667085}td strong,td small{display:block}.outcomes td strong{font-size:18px;margin-top:3px}.issue-list{list-style:none;padding:0;margin:14px 0 0}.issue{border-left:4px solid #f79009;background:#fffaeb;padding:12px 14px;margin:8px 0;border-radius:6px}.issue.error{border-color:#f04438;background:#fef3f2}.issue.degradation{border-color:#f79009}.issue.normalization{border-color:#98a2b3;background:#f9fafb}.issue>div{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.issue p{margin:.35rem 0}.issue-context,.action{font-size:13px}.retry{font-size:11px;background:#fff0c2;border-radius:12px;padding:2px 7px}.compact .issue{padding:9px 11px}.callout{padding:12px 14px;border-radius:8px;background:#f9fafb;margin:12px 0}.callout.warn{background:#fffaeb}.callout.bad{background:#fef3f2}.empty{padding:14px;border-radius:8px;background:#f9fafb}.attention{border-top:4px solid #f79009}.attention:has(.empty.ok){border-top-color:#12b76a}.context-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}.context-grid dl{margin:0}.context-grid dt{font-size:12px;text-transform:uppercase;color:#667085}.context-grid dd{margin:2px 0 12px;overflow-wrap:anywhere}code{overflow-wrap:anywhere}@media(max-width:760px){main{padding:16px}.page{margin-left:0}.page summary{grid-template-columns:1fr}.compare{grid-template-columns:1fr}.head,.section-head{display:block}.count{margin-top:10px}.stats{grid-template-columns:1fr 1fr}.panel{padding:14px}}@media(max-width:420px){.stats{grid-template-columns:1fr}}
-  </style></head><body><main><header class="head"><div><h1>ywtc transfer report</h1><p>${escapeHtml(data.direction)} · ${escapeHtml(data.scope)} · ${data.dryRun ? 'dry-run' : 'live transfer'}</p></div><div><span class="status ${statusClass(data.status)}">${escapeHtml(data.status)}</span><p class="muted">${escapeHtml(data.runId)}</p></div></header>
+  </style></head><body><main><header class="head"><div><h1>ywtc transfer report</h1><p>${escapeHtml(data.direction)} · ${escapeHtml(data.scope)} · source status ${escapeHtml(data.sourceStatus)} · ${data.dryRun ? 'dry-run' : 'live transfer'}</p></div><div><span class="status ${statusClass(data.status)}">${escapeHtml(data.status)}</span><p class="muted">${escapeHtml(data.runId)}</p></div></header>
   <div class="run-meta"><span>Started <strong>${escapeHtml(data.startedAt)}</strong></span>${data.finishedAt ? `<span>Finished <strong>${escapeHtml(data.finishedAt)}</strong></span>` : ''}<span>Duration <strong>${escapeHtml(formatDuration(data.summary.durationMs))}</strong></span><span>Inventory <strong class="${data.summary.inventoryComplete ? 'ok' : 'warn'}">${escapeHtml(inventoryState)}</strong></span></div>
-  <section class="panel" aria-labelledby="source-title"><div class="section-head"><div><h2 id="source-title">Source scope inventory</h2><p>Accessible content selected by <code>${escapeHtml(data.scope)}</code> scope; this is not the whole source instance.</p></div><span class="status ${data.summary.inventoryComplete ? 'ok' : 'warn'}">${data.summary.inventoryComplete ? 'complete' : 'incomplete'}</span></div><div class="stats">${sourceCards}</div></section>
+  <section class="panel" aria-labelledby="source-title"><div class="section-head"><div><h2 id="source-title">Source scope inventory</h2><p>Root plus ${escapeHtml(data.summary.returnedDescendants)} accessible descendants; ${escapeHtml(data.summary.selectedDescendants)} selected and ${escapeHtml(data.summary.excludedPages)} excluded with source status <code>${escapeHtml(data.sourceStatus)}</code>.</p></div><span class="status ${data.summary.inventoryComplete ? 'ok' : 'warn'}">${data.summary.inventoryComplete ? 'complete' : 'incomplete'}</span></div><div class="stats">${sourceCards}</div></section>
+  ${selectionDetails}
   <section class="panel" aria-labelledby="outcome-title"><div class="section-head"><div><h2 id="outcome-title">Transfer outcomes</h2><p>Every selected page and discovered file is counted in exactly one status.</p></div><span class="count">${data.summary.pages}</span></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${pageOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Pages</th>${statusCells(data.summary.pageStatuses, pageOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${resourceOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Files</th>${statusCells(data.summary.resourceStatuses, resourceOutcomeStatuses)}<td><strong>${data.summary.resources}</strong></td></tr></tbody></table></div></section>
   ${attention}
   <section aria-labelledby="pages-title"><div class="section-head"><div><h2 id="pages-title">Pages</h2><p>Projected hierarchy with exact outcomes, source metrics, resources, issues, and verified previews.</p></div></div>${pageRows || '<p class="empty">No source page was resolved before the run stopped.</p>'}</section>
@@ -338,13 +370,26 @@ export class TransferReport {
   private readonly previews = new Map<string, PreviewPair>();
   private readonly issueCollector = new IssueCollector();
 
-  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'pages' | 'edges' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'>) {
+  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'sourceStatus' | 'selection' | 'pages' | 'edges' | 'hierarchyRepairs' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'> & {sourceStatus?: SourceStatus}) {
+    const sourceStatus = input.sourceStatus ?? 'all';
     this.data = {
       runId: randomUUID(),
       startedAt: new Date().toISOString(),
       status: 'running',
+      sourceStatus,
+      selection: {
+        requestedStatus: sourceStatus,
+        effectiveStatus: sourceStatus,
+        returnedDescendants: 0,
+        selectedDescendants: 0,
+        excluded: [],
+        maximumDepth: 0,
+        hierarchyGaps: [],
+        notes: [],
+      },
       pages: [],
       edges: [],
+      hierarchyRepairs: [],
       warnings: [],
       errors: [],
       issues: [],
@@ -402,6 +447,13 @@ export class TransferReport {
   }
 
   setEdges(edges: TransferReportEdge[]): void { this.data.edges = edges; }
+  setSelection(selection: SourceSelection): void {
+    this.data.selection = selection;
+    this.data.sourceStatus = selection.effectiveStatus;
+  }
+  addHierarchyRepair(repair: TransferReportData['hierarchyRepairs'][number]): void {
+    this.data.hierarchyRepairs.push(repair);
+  }
   issue(input: IssueInput): void { this.issueCollector.add(input); }
   warning(message: string): void { this.issue({code: `warning:${message}`, severity: 'warning', phase: 'report', retryable: false, message}); }
   error(message: string): void { this.issue({code: `error:${message}`, severity: 'error', phase: 'report', retryable: false, message}); }
@@ -438,6 +490,12 @@ export class TransferReport {
     const inventoryFailedPages = this.data.pages.filter((page) => page.inventoryStatus === 'failed').length;
     this.data.summary = {
       pages: this.data.pages.length,
+      returnedDescendants: this.data.selection.returnedDescendants,
+      selectedDescendants: this.data.selection.selectedDescendants,
+      excludedPages: this.data.selection.excluded.length,
+      maximumDepth: this.data.selection.maximumDepth,
+      hierarchyGaps: this.data.selection.hierarchyGaps.length,
+      hierarchyRepairs: this.data.hierarchyRepairs.length,
       complete: pageStatusCounts.complete,
       partial: pageStatusCounts.partial,
       failed: pageStatusCounts.failed,

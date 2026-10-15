@@ -1,6 +1,6 @@
 import {createProviderAdapter} from './adapters/factory.js';
 import type {AppConfig} from './config.js';
-import {assertTransferCapabilities, type TransferScope} from './domain.js';
+import {assertTransferCapabilities, type SourceStatus, type TransferScope} from './domain.js';
 import {discoverPageGraph} from './graph.js';
 import {sameRemoteInstance, type ResolvedLocator, type RemoteLocator} from './locators.js';
 
@@ -8,6 +8,11 @@ export interface DoctorResult {
   source: {profile: string; provider: string; product: string; version?: string; id: string; title: string};
   destination: {profile?: string; provider: string; product: string; version?: string; id: string};
   pages: number;
+  returnedDescendants: number;
+  selectedDescendants: number;
+  excludedPages: number;
+  maximumDepth: number;
+  sourceStatus: SourceStatus;
   links: number;
   warnings: string[];
 }
@@ -17,17 +22,18 @@ export async function runCapabilityDoctor(
   sourceLocator: RemoteLocator,
   destinationLocator: ResolvedLocator,
   scope: TransferScope,
+  sourceStatus: SourceStatus = 'all',
 ): Promise<DoctorResult> {
   const source = createProviderAdapter(sourceLocator.profile, config);
   const destination = destinationLocator.type === 'remote' ? createProviderAdapter(destinationLocator.profile, config) : undefined;
-  assertTransferCapabilities(source, destination, scope);
+  assertTransferCapabilities(source, destination, scope, sourceStatus);
   const [sourcePlatform, destinationPlatform, root, container] = await Promise.all([
     source.preflight(),
     destination?.preflight(),
     source.resolvePage(sourceLocator.value),
     destinationLocator.type === 'remote' && destination ? destination.resolveContainer(destinationLocator.value) : undefined,
   ]);
-  const graph = await discoverPageGraph({adapter: source, root, scope});
+  const graph = await discoverPageGraph({adapter: source, root, scope, sourceStatus});
   if (
     container
     && destinationLocator.type === 'remote'
@@ -55,6 +61,11 @@ export async function runCapabilityDoctor(
         id: container!.id,
       },
     pages: graph.pages.length,
+    returnedDescendants: graph.selection.returnedDescendants,
+    selectedDescendants: graph.selection.selectedDescendants,
+    excludedPages: graph.selection.excluded.length,
+    maximumDepth: graph.selection.maximumDepth,
+    sourceStatus: graph.selection.effectiveStatus,
     links: graph.edges.length,
     warnings: [...sourcePlatform.warnings, ...(destinationPlatform?.warnings ?? []), ...graph.warnings],
   };

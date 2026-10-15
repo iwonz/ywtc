@@ -20,6 +20,7 @@ const graph: PageGraph = {
   pages: [root, child],
   edges: [{from: root.canonicalId, to: child.canonicalId, raw: '/child', status: 'resolved'}],
   warnings: [],
+  selection: {requestedStatus: 'all', effectiveStatus: 'all', returnedDescendants: 1, selectedDescendants: 1, excluded: [], maximumDepth: 1, hierarchyGaps: [], notes: []},
 };
 
 let output: string;

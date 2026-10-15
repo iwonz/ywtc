@@ -40,21 +40,24 @@ const container: DestinationContainer = {
   provider: 'confluence', profile: destinationProfile.name, id: '100', canonicalId: 'destination:confluence:100',
   title: 'Archive', url: 'https://conf.example/confluence/pages/100', space: 'DOC', locator: '100',
 };
-const capabilities = {readPages: true, readHierarchy: true, readResources: true, writePages: true, writeResources: true, verifyWrites: true};
+const capabilities = {readPages: true, readHierarchy: true, readResources: true, writePages: true, writeResources: true, verifyWrites: true, reparentPages: true};
 const logger: Logger = {info: () => undefined, warn: () => undefined, error: () => undefined};
 
 function sha(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root) {
+function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root, includeRootResource = true) {
   let created = 0;
   let updated = 0;
+  let reparented = 0;
   let failUpload = false;
   let failUpdate = false;
   let failCreatedVerification = false;
   let failRecoveryLookup = false;
   let normalizeBootstrapBody = false;
+  let globalTitleConflict = false;
+  let failAttachmentListing = false;
   let downloads = 0;
   let version = 0;
   const verificationReads = new Map<string, number>();
@@ -74,7 +77,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root)
     getPage: async (id: string) => id === fixtureRoot.id ? fixtureRoot : descendants.find((page) => page.id === id) ?? fixtureRoot,
     getDescendants: async () => descendants,
     resolveReference: async () => undefined,
-    listResources: async (page: SourcePage) => page.id === fixtureRoot.id ? [resource] : [],
+    listResources: async (page: SourcePage) => page.id === fixtureRoot.id && includeRootResource ? [resource] : [],
     downloadResource: async (_resource: SourceResource, destination: string) => {
       downloads += 1;
       await mkdir(path.dirname(destination), {recursive: true});
@@ -87,6 +90,9 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root)
     preflight: async () => ({product: 'Confluence', warnings: []}),
     resolveContainer: async () => container,
     findChild: async () => undefined,
+    findTitleConflict: async (_parent: DestinationContainer | DestinationPage, title: string) => globalTitleConflict && title === root.title
+      ? page(title, '<p>Unrelated page</p>', 'unrelated', 'other-parent')
+      : undefined,
     findRecoverablePage: async () => {
       if (failRecoveryLookup) throw new HttpRequestError('No space with key', 404);
       return undefined;
@@ -104,6 +110,13 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root)
       current = page(title, body, selected.id, selected.parentId ?? container.id);
       pages.set(current.id, current);
       return current;
+    },
+    reparentPage: async ({page: selected, parent}: {page: DestinationPage; parent: DestinationContainer | DestinationPage}) => {
+      reparented += 1;
+      const moved = page(selected.title, selected.content ?? '', selected.id, parent.id);
+      pages.set(moved.id, moved);
+      current = moved;
+      return moved;
     },
     verifyPage: async (selected: DestinationPage) => {
       if (missingIds.has(selected.id)) throw new HttpRequestError('No content found', 404);
@@ -132,7 +145,10 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root)
       uploaded.set(selected.id, attachments);
       return value;
     },
-    listUploadedResources: async (selected: DestinationPage) => [...(uploaded.get(selected.id)?.values() ?? [])],
+    listUploadedResources: async (selected: DestinationPage) => {
+      if (failAttachmentListing) throw new Error('attachment listing forbidden');
+      return [...(uploaded.get(selected.id)?.values() ?? [])];
+    },
   } as unknown as DestinationAdapter;
   return {
     source,
@@ -142,6 +158,8 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root)
     setFailCreatedVerification: (value: boolean) => { failCreatedVerification = value; },
     setFailRecoveryLookup: (value: boolean) => { failRecoveryLookup = value; },
     setNormalizeBootstrapBody: (value: boolean) => { normalizeBootstrapBody = value; },
+    setGlobalTitleConflict: (value: boolean) => { globalTitleConflict = value; },
+    setFailAttachmentListing: (value: boolean) => { failAttachmentListing = value; },
     setLegacyPlaceholder: () => {
       current = page(current!.title, legacyTransferPlaceholder('confluence', fixtureRoot), current!.id);
       pages.set(current.id, current);
@@ -149,7 +167,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root)
     setCurrentMissing: () => { missingIds.add(current!.id); },
     setAllCurrentMissing: () => { for (const id of pages.keys()) missingIds.add(id); },
     snapshot: () => ({
-      created, updated, downloads, current, pages: [...pages.values()],
+      created, updated, reparented, downloads, current, pages: [...pages.values()],
       uploaded: [...uploaded.values()].reduce((total, items) => total + items.size, 0),
     }),
   };
@@ -225,6 +243,28 @@ describe('source-derived remote page safety', () => {
     expect(result).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 1, conflicts: 0}});
     const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
     expect(report.pages[0]?.normalizations).toContain('Destination normalized page markup without semantic content changes');
+  });
+
+  it('resolves a space-wide Confluence title conflict before creating a page', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setGlobalTitleConflict(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
+    expect(adapters.snapshot().current?.title).toBe('Root [root]');
+  });
+
+  it('does not require attachment-list permission for a page without transferable resources or a snapshot', async () => {
+    const {config, options} = await setup();
+    const resourceFreeRoot = {...root, rawContent: '# Root\n\nBody', references: []};
+    const adapters = fixture([], resourceFreeRoot, false);
+    adapters.setFailAttachmentListing(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({
+      status: 'completed', hasErrors: false, summary: {complete: 1, resources: 0},
+    });
   });
 
   it('reconciles an existing raw source snapshot when its state mapping is unavailable', async () => {
@@ -343,6 +383,30 @@ describe('source-derived remote page safety', () => {
     expect(after.pages[child.canonicalId]?.previousDestinationIds).toContain(oldChildId);
     expect(adapters.snapshot().pages.find((page) => page.id === newChildId)?.parentId).toBe(newRootId);
     expect(adapters.snapshot()).toMatchObject({created: 4, downloads: 1, uploaded: 2});
+  });
+
+  it('expands an existing state and moves a formerly projected child below its newly selected parent', async () => {
+    const {directory, config, options} = await setup();
+    const intermediate: SourcePage = {
+      ...child, id: '3', canonicalId: 'source:yandex-wiki:3', title: 'Intermediate', locator: 'root/intermediate',
+      parentId: root.id, ancestorIds: [root.id], rawContent: '# Intermediate',
+    };
+    const leaf: SourcePage = {
+      ...child, id: '4', canonicalId: 'source:yandex-wiki:4', title: 'Leaf', locator: 'root/intermediate/leaf',
+      parentId: intermediate.id, ancestorIds: [root.id, intermediate.id], rawContent: '# Leaf',
+    };
+    const descendants = [leaf];
+    const adapters = fixture(descendants);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+    await expect(migrator.run({...options, scope: 'subtree'})).resolves.toMatchObject({status: 'completed'});
+    descendants.unshift(intermediate);
+    const resumed = await migrator.run({...options, scope: 'subtree'});
+    expect(resumed).toMatchObject({status: 'completed', summary: {pages: 3, hierarchyRepairs: 1}});
+    expect(adapters.snapshot().reparented).toBe(1);
+    const stateName = (await readdir(path.join(directory, '.states'))).find((name) => name.endsWith('.json'))!;
+    const state = JSON.parse(await readFile(path.join(directory, '.states', stateName), 'utf8')) as TransferState;
+    expect(state.pages[leaf.canonicalId]?.projectedParentId).toBe(intermediate.canonicalId);
   });
 
   it('fails safely when a recreated page cannot be confirmed by a repeated read', async () => {

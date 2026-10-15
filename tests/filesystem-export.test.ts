@@ -14,7 +14,8 @@ const child: SourcePage & {depth: number; projectedParentId: string} = {
   ...root, id: '2', canonicalId: 'wiki:2', title: 'Child', locator: 'child', url: 'https://wiki.example.com/child',
   rawContent: 'Child body', references: [], depth: 1, projectedParentId: 'wiki:1',
 };
-const graph: PageGraph = {rootId: root.canonicalId, pages: [root, child], edges: [{from: root.canonicalId, to: child.canonicalId, raw: '/child', status: 'resolved'}], warnings: []};
+const selection = {requestedStatus: 'all' as const, effectiveStatus: 'all' as const, returnedDescendants: 1, selectedDescendants: 1, excluded: [], maximumDepth: 1, hierarchyGaps: [], notes: []};
+const graph: PageGraph = {rootId: root.canonicalId, pages: [root, child], edges: [{from: root.canonicalId, to: child.canonicalId, raw: '/child', status: 'resolved'}], warnings: [], selection};
 
 describe('transactional filesystem export', () => {
   it('writes a portable HTML site, local attachments, manifest, backup, and ZIP', async () => {
@@ -55,7 +56,7 @@ describe('transactional filesystem export', () => {
   it('materializes YFM tree directives into selected descendant links', async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-tree-'));
     const treeRoot = {...root, rawContent: '{% tree depth="2" sort="asc" sort_by="title" %}', references: []};
-    const treeGraph: PageGraph = {rootId: treeRoot.canonicalId, pages: [treeRoot, child], edges: [], warnings: []};
+    const treeGraph: PageGraph = {rootId: treeRoot.canonicalId, pages: [treeRoot, child], edges: [], warnings: [], selection};
     const resources = new Map<string, SourceResource[]>([[treeRoot.canonicalId, []], [child.canonicalId, []]]);
     const source = {} as SourceAdapter;
     const exporter = new FilesystemExporter(source, 1);
