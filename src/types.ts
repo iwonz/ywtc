@@ -178,6 +178,7 @@ export interface ConfluenceApi {
   resolveTarget(input: string): Promise<ConfluencePage>;
   getPage(id: string): Promise<ConfluencePage>;
   findPageByTitle(spaceKey: string, title: string): Promise<ConfluencePage | undefined>;
+  findChildPage?(parentId: string, title: string): Promise<ConfluencePage | undefined>;
   createPage(input: {
     spaceKey: string;
     parentId: string;

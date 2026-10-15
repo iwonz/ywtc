@@ -59,6 +59,7 @@ describe('CLI and named profiles', () => {
       command: 'reports-list', workdir: './workspace',
     });
     expect(parseCliArguments(['reports', 'open'])).toEqual({command: 'reports-open'});
+    expect(parseCliArguments(['reports', 'open', 'last'])).toEqual({command: 'reports-open', runId: 'last'});
     expect(parseCliArguments(['reports', 'open', '11111111-1111-4111-8111-111111111111'])).toEqual({
       command: 'reports-open', runId: '11111111-1111-4111-8111-111111111111',
     });
@@ -74,6 +75,7 @@ describe('CLI and named profiles', () => {
     expect(cliHelp('migrate')).toContain('--open-report');
     expect(cliHelp('reports')).toContain('list');
     expect(cliHelp('reports')).toContain('open');
+    expect(cliHelp('reports')).toContain('last');
     expect(cliHelp('migrate')).toContain('configured CWD');
   });
 

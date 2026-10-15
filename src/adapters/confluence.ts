@@ -160,16 +160,18 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   }
 
   async findChild(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined> {
-    const space = container.space;
-    if (!space) return undefined;
-    const found = await this.client.findPageByTitle(space, title);
+    const found = this.client.findChildPage
+      ? await this.client.findChildPage(container.id, title)
+      : container.space
+        ? await this.client.findPageByTitle(container.space, title)
+        : undefined;
     if (!found) return undefined;
-    return destinationPage(this.profile, this.client, await this.client.getPage(found.id));
+    const page = destinationPage(this.profile, this.client, await this.client.getPage(found.id));
+    return page.parentId === container.id ? page : undefined;
   }
 
   async findRecoverablePage(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined> {
-    const found = await this.findChild(container, title);
-    return found?.parentId === container.id ? found : undefined;
+    return this.findChild(container, title);
   }
 
   async createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage> {

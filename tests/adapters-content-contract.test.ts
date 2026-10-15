@@ -74,6 +74,26 @@ describe('source page content contracts', () => {
     };
     await expect(adapter.findRecoverablePage(expectedParent, 'Child')).resolves.toBeUndefined();
     parentId = expectedParent.id;
+    await expect(adapter.findChild(expectedParent, 'Child')).resolves.toMatchObject({id: '2', parentId: '100'});
+    await expect(adapter.findRecoverablePage(expectedParent, 'Child')).resolves.toMatchObject({id: '2', parentId: '100'});
+  });
+
+  it('prefers parent-scoped Confluence recovery lookup when available', async () => {
+    const candidate: ConfluencePage = {
+      id: '2', type: 'page', title: 'Child', space: {key: 'DOC'}, ancestors: [{id: '100'}],
+      body: {storage: {value: '<p>Body</p>', representation: 'storage'}},
+    };
+    const client = {
+      findChildPage: async () => candidate,
+      findPageByTitle: async () => { throw new Error('space lookup must not be used'); },
+      getPage: async () => candidate,
+      pageWebUrl: () => 'https://conf.example/confluence/pages/2',
+    } as unknown as ConfluenceApi;
+    const adapter = new ConfluenceAdapter(confluenceProfile, client);
+    const expectedParent = {
+      provider: 'confluence' as const, profile: 'conf', id: '100', canonicalId: 'conf:100',
+      title: 'Parent', url: 'https://conf.example/confluence/pages/100', space: 'DOC',
+    };
     await expect(adapter.findRecoverablePage(expectedParent, 'Child')).resolves.toMatchObject({id: '2', parentId: '100'});
   });
 });

@@ -5,6 +5,7 @@ import {readWorkspaceConfig, secretValues, validateProfileSecrets} from './confi
 import {resolveDestinationLocator, resolveSourceLocator} from './locators.js';
 import {createLogger, redact} from './logger.js';
 import type {Migrator} from './migrator.js';
+import type {MigrationReportPaths} from './report.js';
 import {runUpdate} from './updater.js';
 import {packageVersion} from './version.js';
 import {
@@ -22,22 +23,23 @@ function heading(label: string): void {
   console.log(`\n${paint(36, '◆')} ${paint(1, label)}`);
 }
 
-function reportBearingError(error: unknown): error is Error & {reportPaths: {html: string}; stateFilename: string} {
+function reportBearingError(error: unknown): error is Error & {reportPaths: MigrationReportPaths; stateFilename: string} {
   return error instanceof Error
     && typeof (error as {reportPaths?: unknown}).reportPaths === 'object'
     && typeof (error as {stateFilename?: unknown}).stateFilename === 'string';
 }
 
-async function printAndMaybeOpenReport(html: string, shouldOpen: boolean): Promise<void> {
-  const {openReportFile} = await import('./report-catalog.js');
-  const {pathToFileURL} = await import('node:url');
-  const url = pathToFileURL(html).href;
-  console.log(`  Report  ${html}`);
-  console.log(`  URL     ${url}`);
+async function printAndMaybeOpenReport(paths: MigrationReportPaths, workdir: string, shouldOpen: boolean): Promise<void> {
+  const {openReportFile, reportAccessDetails} = await import('./report-catalog.js');
+  const access = reportAccessDetails(paths, workdir);
+  console.log(`  Run ID  ${access.runId}`);
+  console.log(`  Report  ${access.report}`);
+  console.log(`  URL     ${access.url}`);
+  console.log(`  Open    ${access.command}`);
   if (!shouldOpen) return;
   try {
-    await openReportFile(html);
-    console.log(`  Opened  ${url}`);
+    await openReportFile(paths.html);
+    console.log(`  Opened  ${access.url}`);
   } catch (error) {
     console.log(`  ${paint(33, 'Warning')} ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -110,6 +112,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
       console.log(`  Status   cancelled by ${signalCode === 130 ? 'SIGINT' : 'SIGTERM'}`);
       console.log(`  Workdir  ${workspace.root}`);
       console.log(`  Reports  ${workspace.reportsDirectory}`);
+      if (reportBearingError(error)) await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
       console.log(`  Resume   ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope} --workdir "${workspace.root}"`);
       return signalCode;
     }
@@ -117,7 +120,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
       heading('Transfer failed');
       console.log(`  Status  failed`);
       console.log(`  State   ${error.stateFilename}`);
-      await printAndMaybeOpenReport(error.reportPaths.html, command.openReport);
+      await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
     }
     throw error;
   } finally {
@@ -128,7 +131,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   heading(result.status === 'completed' ? 'Transfer complete' : 'Transfer finished');
   console.log(`  Status  ${result.status}`);
   console.log(`  State   ${result.stateFilename}`);
-  await printAndMaybeOpenReport(result.reportPaths.html, command.openReport);
+  await printAndMaybeOpenReport(result.reportPaths, workspace.root, command.openReport);
   console.log(`  Source  ${result.summary.pages} pages · ${result.summary.resources} files · ${result.summary.sourceBytes} known bytes${result.summary.bytesUnknown ? ` · ${result.summary.bytesUnknown} sizes unknown` : ''}`);
   console.log(`  Pages   ${result.summary.complete} complete · ${result.summary.partial} partial · ${result.summary.failed} failed · ${result.summary.blocked} blocked · ${result.summary.conflicts} conflicts · ${result.summary.unprocessedPages} unprocessed`);
   console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesPlanned} planned · ${result.summary.bytes} transferred bytes`);

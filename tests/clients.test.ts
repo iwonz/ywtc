@@ -106,6 +106,36 @@ describe('provider clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
+  it('finds a Data Center child by exact title across parent-scoped pages', async () => {
+    const api = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
+      .get('/confluence/rest/api/content/100/child/page')
+      .query({start: 0, limit: 100, expand: 'space,version,ancestors'})
+      .reply(200, {
+        results: [{id: '101', type: 'page', title: 'Other', space: {key: 'DOC'}}],
+        start: 0, limit: 100, size: 1, _links: {next: '/rest/api/content/100/child/page?start=1'},
+      })
+      .get('/confluence/rest/api/content/100/child/page')
+      .query({start: 1, limit: 100, expand: 'space,version,ancestors'})
+      .reply(200, {results: [{id: '102', type: 'page', title: 'Recovered', space: {key: 'DOC'}}], start: 1, limit: 100, size: 1})
+      .get('/confluence/rest/api/content/100/child/page')
+      .query({start: 0, limit: 100, expand: 'space,version,ancestors'})
+      .reply(200, {results: [], start: 0, limit: 100, size: 0});
+    const client = new DataCenterConfluenceClient(dc, 5_000, limits);
+    await expect(client.findChildPage('100', 'Recovered')).resolves.toMatchObject({id: '102'});
+    await expect(client.findChildPage('100', 'Missing')).resolves.toBeUndefined();
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('propagates a Data Center parent-scoped child lookup error', async () => {
+    const api = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
+      .get('/confluence/rest/api/content/100/child/page')
+      .query({start: 0, limit: 100, expand: 'space,version,ancestors'})
+      .reply(403, {message: 'forbidden'});
+    const client = new DataCenterConfluenceClient(dc, 5_000, limits);
+    await expect(client.findChildPage('100', 'Recovered')).rejects.toThrow(/status=403/);
+    expect(api.isDone()).toBe(true);
+  });
+
   it('uses Cloud v2 pages and v1 multipart attachments', async () => {
     const cloud: ConfluenceConnectionProfile = {
       name: 'cloud', type: 'confluence', deployment: 'cloud', authType: 'api-token', baseUrl: 'https://example.atlassian.net',

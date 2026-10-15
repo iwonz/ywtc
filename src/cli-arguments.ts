@@ -146,8 +146,8 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       onCommand({command: 'reports-list', ...(workdir ? {workdir} : {})});
     });
   reports.command('open')
-    .description('Open a report by run ID, or the latest report when omitted')
-    .argument('[run-id]', 'report run ID from "ywtc reports list"')
+    .description('Open a report by run ID, or the latest report with "last" or no selector')
+    .argument('[run-id|last]', 'report run ID from "ywtc reports list", or "last"')
     .option('--workdir <path>', 'workspace containing reports')
     .action((runIdValue: string | undefined, options) => {
       const runId = nonEmpty(runIdValue, 'run-id');

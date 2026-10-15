@@ -133,6 +133,25 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
     });
   }
 
+  async findChildPage(parentId: string, title: string): Promise<ConfluencePage | undefined> {
+    return this.readLimit(async () => {
+      const limit = 100;
+      let start = 0;
+      for (;;) {
+        const response = await this.http.request<ConfluenceList<ConfluencePage>>({
+          method: 'GET',
+          url: `/rest/api/content/${encodeURIComponent(parentId)}/child/page`,
+          params: {start, limit, expand: 'space,version,ancestors'},
+        });
+        const match = response.data.results.find((page) => page.title === title);
+        if (match) return match;
+        const count = response.data.results.length;
+        if (count === 0 || (!response.data._links?.next && count < limit)) return undefined;
+        start += count;
+      }
+    });
+  }
+
   async resolveTarget(input: string): Promise<ConfluencePage> {
     const trimmed = input.trim();
     if (/^\d+$/.test(trimmed)) return this.getPage(trimmed);

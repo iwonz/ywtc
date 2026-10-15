@@ -151,7 +151,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `ywtc doctor [options]` | Проверить workspace; с source и destination выполнить read-only preflight |
 | `ywtc migrate --source <locator> --destination <locator\|directory> [options]` | Перенести или экспортировать выбранный граф страниц |
 | `ywtc reports list [--workdir <path>]` | Показать локальные отчёты от новых к старым |
-| `ywtc reports open [run-id] [--workdir <path>]` | Открыть выбранный или последний отчёт в системном браузере |
+| `ywtc reports open [run-id\|last] [--workdir <path>]` | Открыть выбранный отчёт; `last` или отсутствие аргумента открывает последний корректный |
 | `ywtc update [--install] [--via npm\|brew]` | Проверить или установить обновление безопасным для текущего канала способом |
 | `ywtc --help`, `ywtc <command> --help` | Показать общую или командную справку |
 | `ywtc --version` | Показать версию |
@@ -234,7 +234,7 @@ ywtc migrate --source https://wiki.example.com/team/start \
 
 # Список отчётов и открытие последнего
 ywtc reports list
-ywtc reports open
+ywtc reports open last
 ```
 
 Wizard проверяет только доступность API и авторизацию без страниц и внешних записей. `doctor` принимает те же endpoints, profiles, `scope` и `format`: без endpoints он проверяет workspace, конфигурацию и секреты, а с обоими endpoints выполняет page-specific read-only capability-preflight.
@@ -265,7 +265,7 @@ Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json
 
 ## Отчёты
 
-Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json` и печатает кликабельный `file://` URL. `--open-report` открывает отчёт после миграции; `ywtc reports list` показывает историю, а `ywtc reports open [run-id]` открывает выбранный или последний корректный отчёт.
+Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json`, затем печатает run ID, кликабельный `file://` URL и готовую команду повторного открытия. `--open-report` сразу открывает отчёт; `ywtc reports list` показывает историю, `ywtc reports open <run-id>` открывает конкретный, а `ywtc reports open last` или `ywtc reports open` — последний корректный.
 
 Отчёт отдельно показывает доступный контент выбранного source scope и результат переноса. Количество страниц и файлов сверяется с исчерпывающими статусами; source bytes не смешиваются с подтверждёнными transferred bytes, а неизвестные размеры отмечаются явно. Ошибки, конфликты, retryable failures и деградации привязаны к конкретной странице и файлу, содержат причину и ссылку на дерево с resource-статусами и side-by-side preview. Safe normalizations, HTML/JSON, итог терминала и `reports list` используют одинаковые счётчики.
 

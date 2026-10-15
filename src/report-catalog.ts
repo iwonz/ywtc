@@ -4,6 +4,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import open from 'open';
 import {z} from 'zod';
+import type {MigrationReportPaths} from './report.js';
 
 const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -84,6 +85,29 @@ function timestamp(entry: ReportCatalogEntry): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function shellQuoted(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function reportOpenCommand(runId: string, workdir: string): string {
+  if (!runIdPattern.test(runId)) throw new Error('Report run ID must be a canonical UUID.');
+  return `ywtc reports open ${runId} --workdir ${shellQuoted(path.resolve(workdir))}`;
+}
+
+export function reportAccessDetails(paths: MigrationReportPaths, workdir: string): {
+  runId: string;
+  report: string;
+  url: string;
+  command: string;
+} {
+  return {
+    runId: paths.runId,
+    report: paths.html,
+    url: pathToFileURL(paths.html).href,
+    command: reportOpenCommand(paths.runId, workdir),
+  };
+}
+
 function reportReadError(error: unknown): string {
   if (error instanceof z.ZodError) {
     const first = error.issues[0];
@@ -158,13 +182,14 @@ export async function listReports(reportsDirectory: string): Promise<ReportCatal
 }
 
 export async function selectReport(reportsDirectory: string, runId?: string): Promise<{report: ReportCatalogEntry; warnings: string[]}> {
-  if (runId !== undefined && !runIdPattern.test(runId)) {
-    throw new Error('Report run ID must be a canonical UUID shown by "ywtc reports list".');
+  const latest = runId === undefined || runId === 'last';
+  if (!latest && !runIdPattern.test(runId)) {
+    throw new Error('Report selector must be "last" or a canonical UUID shown by "ywtc reports list".');
   }
   const catalog = await listReports(reportsDirectory);
-  const report = runId ? catalog.reports.find((entry) => entry.runId === runId) : catalog.reports[0];
+  const report = latest ? catalog.reports[0] : catalog.reports.find((entry) => entry.runId === runId);
   if (!report) {
-    throw new Error(runId
+    throw new Error(!latest
       ? `Report ${runId} was not found in ${reportsDirectory}. Run "ywtc reports list" to inspect available reports.`
       : `No valid reports were found in ${reportsDirectory}. Run a migration first.`);
   }

@@ -2,7 +2,14 @@ import {mkdir, mkdtemp, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
-import {listReports, openReportFile, openSelectedReport, selectReport} from '../src/report-catalog.js';
+import {
+  listReports,
+  openReportFile,
+  openSelectedReport,
+  reportAccessDetails,
+  reportOpenCommand,
+  selectReport,
+} from '../src/report-catalog.js';
 
 const older = '11111111-1111-4111-8111-111111111111';
 const newer = '22222222-2222-4222-8222-222222222222';
@@ -51,9 +58,28 @@ describe('report catalog', () => {
     await reportBundle(root, older, '2026-10-15T11:00:00.000Z');
     await reportBundle(root, newer, '2026-10-15T12:00:00.000Z');
     await expect(selectReport(root)).resolves.toMatchObject({report: {runId: newer}});
+    await expect(selectReport(root, 'last')).resolves.toMatchObject({report: {runId: newer}});
     await expect(selectReport(root, older)).resolves.toMatchObject({report: {runId: older}});
-    await expect(selectReport(root, '../outside')).rejects.toThrow(/canonical UUID/);
+    await expect(selectReport(root, '../outside')).rejects.toThrow(/"last" or a canonical UUID/);
     await expect(selectReport(root, '33333333-3333-4333-8333-333333333333')).rejects.toThrow(/was not found/);
+  });
+
+  it('formats a copyable workspace-aware open command', () => {
+    expect(reportOpenCommand(newer, "/tmp/ywtc user's workspace")).toBe(
+      `ywtc reports open ${newer} --workdir '/tmp/ywtc user'\\''s workspace'`,
+    );
+    expect(() => reportOpenCommand('last', '/tmp/ywtc')).toThrow(/canonical UUID/);
+    expect(reportAccessDetails({
+      runId: newer,
+      directory: `/tmp/reports/${newer}`,
+      html: `/tmp/reports/${newer}/index.html`,
+      json: `/tmp/reports/${newer}/report.json`,
+    }, '/tmp/ywtc')).toEqual({
+      runId: newer,
+      report: `/tmp/reports/${newer}/index.html`,
+      url: `file:///tmp/reports/${newer}/index.html`,
+      command: `ywtc reports open ${newer} --workdir '/tmp/ywtc'`,
+    });
   });
 
   it('opens file URLs through an injected opener and reports opener failures with the URL', async () => {

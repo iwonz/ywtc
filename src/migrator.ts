@@ -718,20 +718,50 @@ export class Migrator {
             if (page.projectedParentId) {
               await verifyConfirmedDestinationPage(destination, parent as DestinationPage, this.consistencyOptions);
             }
-            const candidate = await (destination.findRecoverablePage?.(parent, title) ?? destination.findChild(parent, title));
+            const findRecoveryChild = (candidateTitle: string) => destination.findRecoverablePage
+              ? destination.findRecoverablePage(parent, candidateTitle)
+              : destination.findChild(parent, candidateTitle);
+            let candidate: DestinationPage | undefined;
+            let recoveryLookupFailed = false;
+            try {
+              candidate = await findRecoveryChild(title);
+            } catch (lookupError) {
+              recoveryLookupFailed = true;
+              report.issue({
+                code: 'destination-recovery-lookup-failed',
+                severity: 'warning',
+                phase: 'page',
+                pageId: page.canonicalId,
+                retryable: true,
+                message: `${page.title}: recovery lookup failed; bootstrap recreation will be attempted: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
+              });
+            }
             if (candidate && sourceDerivedTextMatches(bootstrap.body, candidate.content, destination.kind, cachedPage)) {
               created = candidate;
             } else {
               let recoveryTitle = title;
-              const occupied = candidate ?? await destination.findChild(parent, recoveryTitle);
-              if (occupied) {
+              if (candidate) {
                 const base = collisionTitle(page);
                 const hash = sha256(page.canonicalId).slice(0, 8);
                 recoveryTitle = base;
                 let sequence = 0;
-                while (await destination.findChild(parent, recoveryTitle)) {
-                  sequence += 1;
-                  recoveryTitle = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
+                while (!recoveryLookupFailed) {
+                  try {
+                    if (!await findRecoveryChild(recoveryTitle)) break;
+                    sequence += 1;
+                    recoveryTitle = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
+                  } catch (lookupError) {
+                    recoveryLookupFailed = true;
+                    recoveryTitle = `${base} [${hash}]`;
+                    report.issue({
+                      code: 'destination-recovery-lookup-failed',
+                      severity: 'warning',
+                      phase: 'page',
+                      pageId: page.canonicalId,
+                      retryable: true,
+                      message: `${page.title}: suffixed-title lookup failed; bootstrap recreation will be attempted: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
+                    });
+                  }
                 }
               }
               created = await destination.createPage({container: parent, title: recoveryTitle, body: bootstrap.body});
@@ -1101,28 +1131,44 @@ export class Migrator {
           await writeFile(snapshotPath, cachedPage.rawContent, {mode: 0o600});
           const snapshotKey = `snapshot:${page.canonicalId}`;
           const existingSnapshot = state.resources[snapshotKey];
+          const snapshotFile = {
+            path: snapshotPath,
+            size: Buffer.byteLength(cachedPage.rawContent),
+            sha256: sha256(cachedPage.rawContent),
+          };
           try {
-            const snapshot = existingSnapshot?.status === 'complete' && existingSnapshot.destinationId
-              ? {
-                id: existingSnapshot.destinationId,
-                name: existingSnapshot.destinationName,
-                ...(existingSnapshot.size !== undefined ? {size: existingSnapshot.size} : {}),
+            const knownSnapshot = remoteResources.find((item) => item.id === existingSnapshot?.destinationId)
+              ?? remoteResources.find((item) => item.name.toLocaleLowerCase() === snapshotName.toLocaleLowerCase());
+            let snapshot = knownSnapshot && await remoteMatches(knownSnapshot, snapshotFile, true)
+              ? knownSnapshot
+              : undefined;
+            if (!snapshot) {
+              try {
+                snapshot = await destination.uploadResource({
+                  page: destinationPage,
+                  name: snapshotName,
+                  filePath: snapshotPath,
+                  size: snapshotFile.size,
+                  mimeType: page.rawFormat === 'yfm' ? 'text/markdown' : 'application/xml',
+                  ...(knownSnapshot ? {existingId: knownSnapshot.id} : {}),
+                });
+              } catch (uploadError) {
+                remoteResources = await destination.listUploadedResources(destinationPage);
+                const uncertain = remoteResources.find((item) => item.name.toLocaleLowerCase() === snapshotName.toLocaleLowerCase());
+                if (uncertain && await remoteMatches(uncertain, snapshotFile, true)) snapshot = uncertain;
+                else throw uploadError;
               }
-              : await destination.uploadResource({
-                page: destinationPage,
-                name: snapshotName,
-                filePath: snapshotPath,
-                size: Buffer.byteLength(cachedPage.rawContent),
-                mimeType: page.rawFormat === 'yfm' ? 'text/markdown' : 'application/xml',
-                ...(existingSnapshot?.destinationId ? {existingId: existingSnapshot.destinationId} : {}),
-              });
+            }
+            if (!remoteResources.some((item) => item.id === snapshot.id)) remoteResources.push(snapshot);
             state.resources[snapshotKey] = {
               sourceId: snapshotKey,
               sourceName: snapshotName,
               destinationId: snapshot.id,
               destinationName: snapshot.name,
               ...(snapshot.size !== undefined ? {size: snapshot.size} : {}),
-              sha256: sha256(cachedPage.rawContent),
+              sha256: snapshotFile.sha256,
+              cachePath: snapshotPath,
+              mimeType: page.rawFormat === 'yfm' ? 'text/markdown' : 'application/xml',
               status: 'complete',
               updatedAt: new Date().toISOString(),
             };
@@ -1158,7 +1204,16 @@ export class Migrator {
             && current.contentFingerprint
             && current.contentFingerprint !== destinationPage.contentFingerprint
           ) {
-            throw new Error(`Destination conflict for ${page.title}: content changed while resources were transferred`);
+            const normalization = verifyDestinationContent(
+              destinationPage.content ?? bootstrap.body,
+              current.content,
+              destination.kind,
+              cachedPage,
+            );
+            if (normalization.status !== 'complete') {
+              throw new Error(`Destination conflict for ${page.title}: content changed while resources were transferred`);
+            }
+            rendered.normalizations.push('Destination normalized page markup without semantic content changes');
           }
           verified = await destination.updatePage({
             page: current,

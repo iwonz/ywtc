@@ -127,6 +127,7 @@ export interface TransferReportData {
 }
 
 export interface MigrationReportPaths {
+  runId: string;
   directory: string;
   html: string;
   json: string;
@@ -485,6 +486,6 @@ export class TransferReport {
     await writeFile(htmlTemporary, renderReport(this.data, this.previews), {mode: 0o600});
     await rename(jsonTemporary, json);
     await rename(htmlTemporary, html);
-    return {directory, html, json};
+    return {runId: this.data.runId, directory, html, json};
   }
 }
