@@ -12,16 +12,27 @@
 
 ## Возможности
 
-| Что переносится | Результат |
+| Исходный материал | Как переносится |
 | --- | --- |
-| Страницы и иерархия | Одна страница, структурное поддерево или граф связанных страниц |
-| Заголовки, текст, списки, цитаты, код и таблицы | Нативная разметка назначения, насколько это допускает формат |
-| Внутренние ссылки и якоря | Переписываются на перенесённые страницы; внешние остаются внешними |
-| Изображения и вложения | Потоковая передача; одинаковые API-имена разрешаются по source URL/ID, файлы сверяются по фактическому размеру и SHA-256 |
-| Yandex notes, cuts, tabs, tree и Grid | Ближайший нативный эквивалент; tree становится children macro/статической навигацией, Grid — статической таблицей |
-| Confluence macros и resource identifiers | Сохраняются напрямую при переносе между Confluence либо преобразуются |
-| Неподдерживаемые vendor-конструкции | Читаемый fallback и raw snapshot в attachment или `_source/` |
-| История, комментарии, пользователи, права и watchers | Не переносятся |
+| Страницы и структура | Одна страница, полное структурное поддерево или граф связанных страниц. Иерархия восстанавливается, циклы обрабатываются без повторного переноса. |
+| Текст и оформление | Заголовки, абзацы, базовое начертание, списки, цитаты, разделители, inline/preformatted code и обычные таблицы преобразуются в нативную или семантически эквивалентную разметку destination. |
+| Ссылки и якоря | Ссылки между выбранными страницами переписываются на destination, якоря сохраняются. Внешние ссылки и ссылки за пределы выбранного набора остаются исходными. |
+| Вложения | Переносятся все доступные через API для скачивания файлы, включая PNG/JPEG/GIF/WebP/SVG, PDF, ZIP, DOC/DOCX, XLS/XLSX и PPT/PPTX. Файлы передаются потоково, совпадения имён разрешаются стабильно, размер и SHA-256 проверяются. |
+| Изображения | Прикреплённые изображения становятся attachments destination или локальными файлами экспорта. Внешние изображения остаются внешними; подписи и размеры сохраняются, если destination это поддерживает. |
+| Специальная разметка Yandex Wiki | Notes становятся `info`/`tip`/`warning`, cuts — `expand`, tabs — статическими секциями с заголовками, tree — `children` macro или статической навигацией, Grid — статической таблицей. |
+| Специальная разметка Confluence | Безопасный Storage Format сохраняется при переносе между Confluence. В других направлениях code становится блоком кода, info/tip/warning/note — callout, expand — раскрываемым или статическим блоком, anchor — якорем; остальные macros получают fallback. |
+| Конструкции без точного эквивалента | Создаётся читаемый fallback и сохраняется raw snapshot. Проверка destination отражает упрощения как degradation или `partial`, поэтому потеря не маскируется успешным статусом. |
+
+### Не переносится
+
+| Ограничение | Поведение ywtc |
+| --- | --- |
+| История версий | Переносится только актуальное содержимое страницы. |
+| Комментарии, реакции, пользователи, watchers, права и ограничения доступа | Не копируются; созданные объекты наследуют правила и права destination. |
+| Удалённые, недоступные или не возвращённые source API страницы | Не восстанавливаются; недоступность и пропуски фиксируются в state и отчёте. |
+| Внешние файлы и изображения, которых нет среди доступных для скачивания ресурсов | Не копируются; сохраняется внешняя или исходная ссылка. |
+| Активные скрипты, iframe, формы и интерактивное поведение embed-объектов | Не исполняются в destination; вместо них сохраняется безопасное статическое представление или raw snapshot. |
+| Пиксельная идентичность и поведение vendor-specific элементов без эквивалента | Используется ближайшее семантическое представление; различия явно отмечаются в отчёте. |
 
 ## Установка
 
@@ -197,49 +208,26 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 ## Частые примеры
 
 ```bash
-# Wizard в отдельном workspace
-ywtc init --interactive --workdir ./migration
+# Перенести всё структурное поддерево
+ywtc migrate --source https://wiki.example.com/team/start \
+  --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123
 
-# Неинтерактивная инициализация для ручного или автоматизированного заполнения YAML
-ywtc init --workdir ./migration
-
-# Yandex Wiki → Confluence: граф связанных страниц
+# Перенести граф рекурсивно связанных страниц
 ywtc migrate --source https://wiki.example.com/team/start \
   --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
   --scope linked
 
-# Только текущие страницы структурного поддерева
+# Перенести только исходную страницу
 ywtc migrate --source https://wiki.example.com/team/start \
   --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
-  --source-status current
+  --scope page
 
-# Confluence → Yandex Wiki
-ywtc migrate --source-profile confluence-prod --source 123456 \
-  --destination-profile wiki-prod --destination team/archive
-
-# Yandex Wiki → Yandex Wiki: одна страница
-ywtc migrate --source-profile wiki-prod --source team/start \
-  --destination-profile wiki-archive --destination archive/start --scope page
-
-# Confluence → Confluence: новый state в отдельном workspace
-ywtc migrate --workdir ./migration --source-profile confluence-prod --source 123456 \
-  --destination-profile confluence-archive --destination 654321 --fresh
-
-# Автономный HTML и ZIP
-ywtc migrate --source-profile confluence-prod --source 123456 \
-  --destination ./exports/knowledge-base --format html --scope linked --archive
-
-# Markdown dry-run
-ywtc migrate --source-profile wiki-prod --source team/start \
-  --destination ./exports/knowledge-base --format markdown --dry-run
-
-# Миграция с автоматическим открытием итогового отчёта
+# Создать автономный HTML-экспорт
 ywtc migrate --source https://wiki.example.com/team/start \
-  --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
-  --open-report
+  --destination ./exports/knowledge-base \
+  --format html
 
-# Список отчётов и открытие последнего
-ywtc reports list
+# Открыть последний корректный отчёт
 ywtc reports open last
 ```
 

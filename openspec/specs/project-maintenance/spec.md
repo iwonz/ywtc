@@ -57,11 +57,15 @@ The README SHALL be concise, provider-neutral, and organized by the fixed inform
 
 #### Scenario: Common command variants are needed
 - **WHEN** an operator needs a frequent workflow beyond the minimum
-- **THEN** the README SHALL provide nearby examples for all remote directions, page/linked scopes, filesystem exports, custom workdirs, and fresh runs without duplicating the parameter reference
+- **THEN** the README SHALL show only a compact set of common remote transfer, scope, static export, and report-opening commands
+- **AND** each example SHALL omit options supplied by defaults or automatic profile resolution
+- **AND** exhaustive direction, profile, workdir, state, and recovery combinations SHALL remain canonical in the compatibility and parameter references rather than being repeated as examples
 
 #### Scenario: Migration coverage is reviewed
-- **WHEN** an operator evaluates what will and will not be transferred
-- **THEN** the README SHALL present supported content, transformations, degradation behavior, and exclusions in a compact table
+- **WHEN** an operator evaluates content fidelity
+- **THEN** the README SHALL separately present a detailed supported-content table and a concise not-transferred table
+- **AND** the supported-content table SHALL describe hierarchy, text styling, tables, code, links, anchors, downloadable attachments and common file types, images, provider-specific constructs, native equivalents, and loss-aware fallback behavior
+- **AND** the not-transferred table SHALL distinguish excluded data from content that is retained as a safe static representation, source link, or raw snapshot
 
 #### Scenario: README readability is reviewed
 - **WHEN** documentation repeats a rule, caveat, or operational instruction across sections
