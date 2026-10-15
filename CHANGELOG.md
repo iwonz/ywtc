@@ -2,6 +2,18 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.0.2](https://github.com/iwonz/ywtc/compare/v2.0.1...v2.0.2) (2026-10-15)
+
+
+### Bug Fixes
+
+* **homebrew:** document required tap trust ([d6d1257](https://github.com/iwonz/ywtc/commit/d6d1257ca4b4777039f899acc168c52d3890a07a))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v2.0.1 ([099f7c4](https://github.com/iwonz/ywtc/commit/099f7c4c42bd2d63069de79890390ce788c2198e))
+
 ## [2.0.1](https://github.com/iwonz/ywtc/compare/v2.0.0...v2.0.1) (2026-10-15)
 
 
