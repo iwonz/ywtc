@@ -117,6 +117,14 @@ describe('release validation', () => {
     expect(packageJson).not.toHaveProperty('private');
   });
 
+  it('pins Homebrew cooldown-eligible runtime dependencies', async () => {
+    const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(packageJson.dependencies?.['@diplodoc/transform']).toBe('4.78.6');
+    expect(packageJson.dependencies?.dotenv).toBe('18.0.7');
+  });
+
   it('includes all release-note sections while preserving product bump types', async () => {
     const config = JSON.parse(await readFile('release-please-config.json', 'utf8')) as {
       packages: Record<string, {"changelog-sections": Array<{type: string}>}>;

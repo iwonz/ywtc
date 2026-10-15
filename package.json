@@ -66,11 +66,11 @@
   "dependencies": {
     "@archiver/archiver": "^0.3.0",
     "@commander-js/extra-typings": "^15.0.0",
-    "@diplodoc/transform": "4.78.7",
+    "@diplodoc/transform": "4.78.6",
     "axios": "1.20.0",
     "cheerio": "1.2.0",
     "commander": "^15.0.0",
-    "dotenv": "18.0.8",
+    "dotenv": "18.0.7",
     "form-data": "4.0.6",
     "linkify-it": "6.1.0",
     "listr2": "^11.2.0",

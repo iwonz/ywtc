@@ -120,6 +120,10 @@ The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywt
 - **WHEN** a formula candidate is generated
 - **THEN** macOS CI SHALL check its style, stage the exact candidate in an isolated non-git tap, and run strict audit, installation, formula test, and functional CLI version checks through the fully qualified formula name before updating `master`
 
+#### Scenario: npm dependency release cooldown
+- **WHEN** Homebrew installs the published npm artifact with its standard release-age protection
+- **THEN** every selected runtime dependency SHALL be old enough to satisfy that protection without disabling the cooldown or adding a persistent package exception
+
 #### Scenario: Formula publication
 - **WHEN** formula verification succeeds
 - **THEN** automation SHALL fast-forward current `master`, create commit `chore(homebrew): update formula to vX.Y.Z`, and push without force so `brew update` and `brew upgrade ywtc` discover it
