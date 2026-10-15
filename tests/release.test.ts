@@ -102,6 +102,10 @@ describe('release validation', () => {
     expect(workflow).toContain('brew audit --strict "$tap_name/ywtc"');
     expect(workflow).toContain('brew install --formula "$tap_name/ywtc"');
     expect(workflow).toContain('brew test "$tap_name/ywtc"');
+    expect(workflow).toContain(
+      'node --import tsx scripts/npm-registry-handoff.ts "@iwonz/ywtc" "$RELEASE_VERSION" "$archive"',
+    );
+    expect(workflow).not.toContain('npm view "@iwonz/ywtc@$RELEASE_VERSION" dist.tarball');
     expect(workflow).not.toContain('brew audit --strict Formula/ywtc.rb');
     expect(workflow).not.toContain('brew install --formula ./Formula/ywtc.rb');
     expect(workflow).toContain('chore(homebrew): update formula to v$RELEASE_VERSION');

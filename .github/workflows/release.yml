@@ -253,9 +253,8 @@ jobs:
         run: |
           npm ci
           mkdir -p Formula
-          registry_url="$(npm view "@iwonz/ywtc@$RELEASE_VERSION" dist.tarball)"
           archive="$RUNNER_TEMP/ywtc-$RELEASE_VERSION.tgz"
-          curl --fail --silent --show-error --location "$registry_url" --output "$archive"
+          registry_url="$(node --import tsx scripts/npm-registry-handoff.ts "@iwonz/ywtc" "$RELEASE_VERSION" "$archive")"
           sha256="$(shasum -a 256 "$archive" | awk '{print $1}')"
           node --import tsx scripts/homebrew-formula.ts "$RELEASE_VERSION" "$registry_url" "$sha256" Formula/ywtc.rb
       - name: Verify formula
