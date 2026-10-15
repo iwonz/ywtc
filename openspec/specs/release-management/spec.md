@@ -108,11 +108,15 @@ The repository SHALL document and support a one-time interactive owner publicati
 - **THEN** README SHALL state the npm CLI prerequisite, interactive bootstrap command, exact trusted publisher command, GitHub Actions PR setting and its permission boundary, and the Release Please merge sequence without exposing credentials
 
 ### Requirement: Same-repository Homebrew distribution
-The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywtc` from the published npm archive so macOS operators can use an explicit same-repository tap. Formula processing SHALL follow every successful npm/GitHub publication job, including authorized manual recovery.
+The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywtc` from the published npm archive so macOS operators can use an explicit same-repository tap. Formula processing SHALL follow every successful npm/GitHub publication job, including authorized manual recovery, and use Homebrew's supported Node/npm installation contract.
 
 #### Scenario: Formula generation
 - **WHEN** npm version `X.Y.Z` is available
 - **THEN** automation SHALL obtain the registry tarball URL and SHA-256, generate a Node formula for `ywtc`, and avoid embedding credentials or local paths
+
+#### Scenario: Canonical npm formula
+- **WHEN** automation renders formula metadata and installation steps
+- **THEN** the formula SHALL use Homebrew's canonical component order, standard npm arguments, and standard `libexec` binary linking
 
 #### Scenario: Formula verification
 - **WHEN** a formula candidate is generated

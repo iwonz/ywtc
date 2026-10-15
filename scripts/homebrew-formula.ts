@@ -18,15 +18,15 @@ export function renderHomebrewFormula(input: FormulaInput): string {
   desc "Transfer Yandex Wiki and Confluence content or export it to files"
   homepage "https://github.com/iwonz/ywtc"
   url "${rubyString(input.url)}"
+  version "${input.version}"
   sha256 "${input.sha256.toLowerCase()}"
   license "MIT"
-  version "${input.version}"
 
   depends_on "node@24"
 
   def install
-    system "npm", "install", "--global", "--prefix", libexec, cached_download
-    bin.install_symlink Dir[libexec/"bin/*"]
+    system "npm", "install", *std_npm_args
+    bin.install_symlink libexec.glob("bin/*")
   end
 
   test do

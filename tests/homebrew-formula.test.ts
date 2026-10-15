@@ -10,8 +10,12 @@ describe('Homebrew formula generation', () => {
     });
     expect(formula).toContain('class Ywtc < Formula');
     expect(formula).toContain('depends_on "node@24"');
-    expect(formula).toContain('cached_download');
+    expect(formula).toContain('system "npm", "install", *std_npm_args');
+    expect(formula).toContain('bin.install_symlink libexec.glob("bin/*")');
     expect(formula).toContain('ywtc --version');
+    expect(formula.indexOf('version "2.0.0"')).toBeLessThan(formula.indexOf('sha256'));
+    expect(formula).not.toContain('cached_download');
+    expect(formula).not.toContain('"--global"');
     expect(formula).not.toContain('CONFLUENCE_TOKEN');
   });
 
