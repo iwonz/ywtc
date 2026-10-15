@@ -2,6 +2,23 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [3.3.0](https://github.com/iwonz/ywtc/compare/v3.2.2...v3.3.0) (2026-10-15)
+
+
+### Features
+
+* **migration:** discover complete source subtrees ([c374df5](https://github.com/iwonz/ywtc/commit/c374df562d30008f1365a699de7f73692ddf2144))
+
+
+### Continuous Integration
+
+* **release:** retrigger validated release workflow ([393b385](https://github.com/iwonz/ywtc/commit/393b38522ab6215202b216df0d3c7a323bab9a9e))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v3.2.2 ([6ac0913](https://github.com/iwonz/ywtc/commit/6ac0913ddc53ddf91c0b5f709f710d10b88df46d))
+
 ## [3.2.2](https://github.com/iwonz/ywtc/compare/v3.2.1...v3.2.2) (2026-10-15)
 
 
