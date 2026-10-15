@@ -18,7 +18,6 @@ export function renderHomebrewFormula(input: FormulaInput): string {
   desc "Transfer Yandex Wiki and Confluence content or export it to files"
   homepage "https://github.com/iwonz/ywtc"
   url "${rubyString(input.url)}"
-  version "${input.version}"
   sha256 "${input.sha256.toLowerCase()}"
   license "MIT"
 

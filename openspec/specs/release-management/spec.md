@@ -110,11 +110,11 @@ The release workflow SHALL generate and maintain `Formula/ywtc.rb` in `iwonz/ywt
 
 #### Scenario: Formula generation
 - **WHEN** npm version `X.Y.Z` is available
-- **THEN** automation SHALL obtain the registry tarball URL and SHA-256, generate a Node formula for `ywtc`, and avoid embedding credentials or local paths
+- **THEN** automation SHALL obtain the version-bearing registry tarball URL and SHA-256, generate a Node formula for `ywtc`, let Homebrew infer the version from that URL without redundant explicit metadata, and avoid embedding credentials or local paths
 
 #### Scenario: Canonical npm formula
 - **WHEN** automation renders formula metadata and installation steps
-- **THEN** the formula SHALL use Homebrew's canonical component order, standard npm arguments, and standard `libexec` binary linking
+- **THEN** the formula SHALL use Homebrew's canonical component order, inferred version metadata, standard npm arguments, and standard `libexec` binary linking
 
 #### Scenario: Formula verification
 - **WHEN** a formula candidate is generated
