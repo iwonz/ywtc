@@ -5,6 +5,7 @@ import path from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import {ZipArchive} from '@archiver/archiver';
 import PQueue from 'p-queue';
+import {z} from 'zod';
 import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml} from './content-model.js';
 import type {ExportFormat, PageGraph, RenderContext, SourceAdapter, SourcePage, SourceResource} from './domain.js';
 import {safeFilename} from './input.js';
@@ -21,7 +22,6 @@ export interface ExportManifestPage {
 }
 
 export interface ExportManifest {
-  schemaVersion: 2;
   tool: 'ywtc';
   identity: string;
   format: ExportFormat;
@@ -29,6 +29,31 @@ export interface ExportManifest {
   rootId: string;
   pages: ExportManifestPage[];
 }
+
+const manifestPageSchema = z.object({
+  sourceCanonicalId: z.string(),
+  sourceUrl: z.string(),
+  title: z.string(),
+  path: z.string(),
+  parentId: z.string().optional(),
+  resources: z.array(z.object({
+    name: z.string(),
+    path: z.string(),
+    size: z.number().nonnegative().optional(),
+    sha256: z.string().optional(),
+  }).strict()),
+  degraded: z.boolean(),
+  warnings: z.array(z.string()),
+}).strict();
+
+const exportManifestSchema = z.object({
+  tool: z.literal('ywtc'),
+  identity: z.string(),
+  format: z.enum(['markdown', 'html']),
+  generatedAt: z.string(),
+  rootId: z.string(),
+  pages: z.array(manifestPageSchema),
+}).strict();
 
 export interface FilesystemExportResult {
   directory: string;
@@ -71,8 +96,8 @@ async function exists(filename: string): Promise<boolean> {
 
 async function managedManifest(directory: string, identity: string): Promise<boolean> {
   try {
-    const parsed = JSON.parse(await readFile(path.join(directory, '.ywtc-export.json'), 'utf8')) as Partial<ExportManifest>;
-    return parsed.schemaVersion === 2 && parsed.tool === 'ywtc' && parsed.identity === identity;
+    const parsed = exportManifestSchema.safeParse(JSON.parse(await readFile(path.join(directory, '.ywtc-export.json'), 'utf8')));
+    return parsed.success && parsed.data.identity === identity;
   } catch {
     return false;
   }
@@ -141,7 +166,6 @@ export class FilesystemExporter {
     const errors: string[] = [];
     const pagePaths = new Map(input.graph.pages.map((page) => [page.canonicalId, pagePath(page, input.format, input.graph.rootId)]));
     const manifest: ExportManifest = {
-      schemaVersion: 2,
       tool: 'ywtc',
       identity: input.identity,
       format: input.format,

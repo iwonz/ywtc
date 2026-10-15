@@ -28,7 +28,7 @@ If implementation reveals a contract or design change, update the OpenSpec artif
 ## Safety and repository hygiene
 
 - Never add tokens, authorization headers, populated secrets, internal organization names, migration-specific domains, user-home paths, downloaded attachments, state, cache, or generated reports to tracked files.
-- Keep runtime data under `.states/` and local credentials only in ignored `.env` files. Examples MUST use empty secrets and `example.com` domains.
+- Keep runtime data under `.states/` and local credentials only in ignored `ywtc.config.yaml` files. Tracked configuration examples MUST use empty secrets and `example.com` domains.
 - Do not delete Confluence content. Preserve resumability and dry-run's no-mutation guarantee.
 - Do not weaken TLS verification or secret redaction.
 - Use `apply_patch` for source edits and preserve unrelated user changes.

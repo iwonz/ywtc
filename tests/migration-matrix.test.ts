@@ -11,11 +11,11 @@ import {Migrator} from '../src/migrator.js';
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 50, burst: 50};
 const wiki = (name: string, host: string, org: string): YandexConnectionProfile => ({
   name, type: 'yandex-wiki', apiUrl: `${host}/v1`, webUrl: host.replace('api.', 'wiki.'), authType: 'oauth',
-  organization: {type: 'yandex360', id: org}, tokenEnv: `${name.toUpperCase()}_TOKEN`, token: `${name}-token`, limits,
+  organization: {type: 'yandex360', id: org}, token: `${name}-token`, limits,
 });
 const confluence = (name: string, host: string): ConfluenceConnectionProfile => ({
   name, type: 'confluence', deployment: 'data-center', baseUrl: `${host}/confluence`, authType: 'pat',
-  tokenEnv: `${name.toUpperCase()}_TOKEN`, token: `${name}-token`, limits,
+  token: `${name}-token`, limits,
 });
 
 function mockWikiSource(profile: YandexConnectionProfile, id = 1, slug = 'root') {
@@ -68,11 +68,9 @@ describe('four remote transfer directions', () => {
       const destinationMock = destinationProfile.type === 'yandex-wiki' ? mockWikiDestination(destinationProfile) : mockConfluenceDestination(destinationProfile);
       const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-matrix-'));
       const config: AppConfig = {
-        schemaVersion: 2,
         profiles: {[sourceProfile.name]: sourceProfile, [destinationProfile.name]: destinationProfile},
         timeoutMs: 5_000,
         concurrency: 2,
-        envFile: path.join(directory, '.env'),
         configFile: path.join(directory, 'ywtc.config.yaml'),
       };
       const source: RemoteLocator = {

@@ -32,11 +32,11 @@ The project SHALL keep a high/critical production dependency audit, TypeScript t
 - **THEN** release hygiene, production dependency audit, typechecking, Biome, Knip, tests, browser checks, build, package verification, and strict OpenSpec validation SHALL all run and fail the command on violations
 
 ### Requirement: Public repository documentation and metadata
-The README SHALL be concise, provider-neutral, and organized by a fixed information architecture covering current installation, operation, configuration, compatibility, credentials, parameters, examples, export, state, reports, and development without historical migration guidance.
+The README SHALL be concise, provider-neutral, and organized by the fixed information architecture covering only current installation, operation, config-only workspaces, compatibility, credentials, parameters, examples, export, state, reports, and development without historical migration guidance.
 
 #### Scenario: First-time setup
-- **WHEN** a new operator reads README and generated templates
-- **THEN** they SHALL be able to create named connections, obtain/configure required credentials, validate with doctor, and run a remote transfer or static export without consulting source code
+- **WHEN** a new operator reads README and the generated template
+- **THEN** they SHALL be able to create named connections with direct credentials, validate with doctor, and run a remote transfer or static export without consulting source code
 
 #### Scenario: Runtime compatibility
 - **WHEN** package metadata, documentation, CI, or the generated Homebrew formula selects a JavaScript runtime
@@ -44,7 +44,7 @@ The README SHALL be concise, provider-neutral, and organized by a fixed informat
 
 #### Scenario: A new operator reads the README
 - **WHEN** the repository README is opened
-- **THEN** it SHALL present the verified full-width header and a concise path to install, initialize, diagnose, dry-run, inspect, and transfer content
+- **THEN** it SHALL present the verified full-width header and a concise path to install, initialize, configure, diagnose, dry-run, inspect, and transfer content
 
 #### Scenario: Stable README information architecture
 - **WHEN** the README's second-level headings are inspected
@@ -53,7 +53,7 @@ The README SHALL be concise, provider-neutral, and organized by a fixed informat
 
 #### Scenario: Minimum migration flow is followed
 - **WHEN** an operator wants the shortest safe path from installation to migration
-- **THEN** the README SHALL provide a checklist containing installation, workspace initialization, profile/secret configuration, a dry run, and the corresponding live run
+- **THEN** the README SHALL provide a checklist containing installation, workspace initialization, direct profile and credential configuration, a dry run, and the corresponding live run
 
 #### Scenario: Common command variants are needed
 - **WHEN** an operator needs a frequent workflow beyond the minimum
@@ -66,7 +66,7 @@ The README SHALL be concise, provider-neutral, and organized by a fixed informat
 #### Scenario: README readability is reviewed
 - **WHEN** documentation repeats a rule, caveat, or operational instruction across sections
 - **THEN** the README SHALL keep one canonical explanation and use concise cross-references elsewhere without losing required information
-- **AND** it SHALL omit obsolete migration instructions and completed one-time setup procedures
+- **AND** it SHALL omit obsolete migration instructions, compatibility guidance, and completed one-time setup procedures
 
 #### Scenario: CLI help is opened
 - **WHEN** an operator runs `ywtc --help`, `ywtc <command> --help`, or `ywtc --version`
@@ -78,26 +78,26 @@ The README SHALL be concise, provider-neutral, and organized by a fixed informat
 
 #### Scenario: Parameters are inspected
 - **WHEN** an operator constructs any supported command or configuration
-- **THEN** the README SHALL provide compact complete tables for commands, CLI options, profile fields, and secret environment variables with requirement conditions, accepted formats, defaults, examples, and descriptions
+- **THEN** the README SHALL provide compact complete tables for commands, CLI options, direct connection/profile fields, defaults, accepted formats, examples, and descriptions
 
 #### Scenario: Token setup is inspected
 - **WHEN** an operator follows authentication instructions
-- **THEN** the README SHALL give short vendor-linked checklists for Yandex OAuth/IAM, Data Center PAT, and Cloud email/API token without real credentials
+- **THEN** the README SHALL give short vendor-linked checklists for obtaining Yandex OAuth/IAM, Data Center PAT, and Cloud email/API token and placing them directly in ignored `ywtc.config.yaml` without real credentials in tracked examples
 
 #### Scenario: Package metadata is inspected
 - **WHEN** npm or release tooling consumes package metadata
 - **THEN** it SHALL name `@iwonz/ywtc`, expose binary `ywtc`, allow public scoped publication, require Node.js 24 and npm 11.5.1 or newer, reference the repository and MIT license, and include only intended publishable files
 
 ### Requirement: Installable package verification
-The public `@iwonz/ywtc` package SHALL include the universal `ywtc` binary, runtime templates, README, license, changelog, and required generated assets while excluding credentials, workdirs, state, cache, exports, reports, and tests.
+The public `@iwonz/ywtc` package SHALL include the universal `ywtc` binary, an empty current configuration template, README, license, changelog, and required generated assets while excluding populated configuration, credentials, workdirs, state, cache, exports, reports, and tests.
 
 #### Scenario: Packed CLI smoke test
 - **WHEN** the tarball is installed in an isolated environment
-- **THEN** `ywtc --version`, help, init, profile validation, and non-mutating example parsing SHALL work on supported Node.js versions
+- **THEN** `ywtc --version`, help, config-only initialization, strict profile validation, and non-mutating example parsing SHALL work on supported Node.js versions
 
 #### Scenario: Package acceptance
 - **WHEN** release validation packs the project
-- **THEN** it SHALL install that archive into an isolated prefix and successfully run `ywtc --version`, `ywtc --help`, and workspace initialization without relying on source-only files
+- **THEN** it SHALL install that archive into an isolated prefix and successfully run `ywtc --version`, `ywtc --help`, and workspace initialization without relying on source-only files or creating `.env` and marker files
 
 ### Requirement: Conventional Commit enforcement
 The project SHALL validate every maintainer and automation commit subject against Conventional Commits and reject generic or work-in-progress subjects.

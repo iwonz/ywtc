@@ -6,23 +6,23 @@ Provide an organization-agnostic, resumable migration library and CLI for moving
 ## Requirements
 
 ### Requirement: CLI configuration and preflight
-The system SHALL expose transfer through `ywtc migrate`, accept `--source` and `--destination`, resolve provider profiles or a filesystem format, validate option combinations, and complete required read-only discovery and capability checks before destination mutation.
+The system SHALL expose transfer through `ywtc migrate`, accept `--source` and `--destination`, resolve provider profiles or a filesystem format from the strict current configuration, validate option combinations, and complete required read-only discovery and capability checks before destination mutation.
 
 #### Scenario: Valid dry-run
 - **WHEN** the operator supplies valid endpoints and `--dry-run`
 - **THEN** the system SHALL discover, normalize, render, and verify the plan without issuing remote mutation requests or replacing filesystem destinations
 
 #### Scenario: Invalid or legacy invocation
-- **WHEN** configuration, locators, profiles, option combinations, `--target`, `--single-page`, or direct invocation without `migrate` is supplied
+- **WHEN** configuration, locators, profiles, option combinations, or command placement is invalid
 - **THEN** the system SHALL exit before mutation with redacted actionable guidance for the current command and options
 
 #### Scenario: Invalid configuration
 - **WHEN** a required credential, organization identifier, profile URL, deployment, authentication type, source, destination, scope, or format is invalid
-- **THEN** the system SHALL exit non-zero before vendor API mutations, identify the invalid fields and corrective action, and SHALL NOT reveal secrets
+- **THEN** the system SHALL exit non-zero before vendor API mutations, identify the invalid field paths and configuration file, and SHALL NOT reveal secrets
 
 #### Scenario: Legacy direct invocation
 - **WHEN** source or destination flags are passed without the `migrate` subcommand
-- **THEN** the system SHALL reject the invocation with the current v2 command guidance
+- **THEN** the system SHALL reject the invocation and show current command usage
 
 ### Requirement: Hierarchical page migration
 The system SHALL create the source root below the selected remote destination, preserve a selected source parent when available, and attach a selected linked page without a selected parent directly below the migrated root.
@@ -105,10 +105,10 @@ The system SHALL apply bounded retries, stream large resources, atomically check
 - **THEN** the system SHALL retry within configured bounds and respect the service cooldown before safe retries continue
 
 ### Requirement: Configurable network guardrails
-The system SHALL enforce independent Yandex Wiki and Confluence request-rate buckets and operation-specific concurrency limits configured through environment variables.
+The system SHALL enforce independent Yandex Wiki and Confluence request-rate buckets and operation-specific concurrency limits configured in each selected connection in `ywtc.config.yaml`.
 
 #### Scenario: Parallel resource discovery
-- **WHEN** migration workers schedule more API operations than the configured service concurrency
+- **WHEN** migration workers schedule more API operations than a selected connection's configured concurrency
 - **THEN** the client SHALL queue excess operations and SHALL NOT exceed the configured limit
 
 #### Scenario: Rate-limit response
@@ -138,14 +138,14 @@ The system MUST NOT delete destination content, adopt unrelated pages implicitly
 - **THEN** the destination page SHALL remain untouched and the report SHALL identify it as stale
 
 ### Requirement: Publication hygiene
-The repository and package SHALL contain only organization-neutral source, examples, specifications, and generated library artifacts and SHALL keep credentials plus automatic state, cache, and reports inside ignored selected workdirs.
+The repository and package SHALL contain only organization-neutral source, empty configuration examples, specifications, and generated library artifacts and SHALL keep populated configuration, credentials, automatic state, cache, and reports inside ignored selected workdirs.
 
 #### Scenario: Public release validation
 - **WHEN** a maintainer runs the release check or inspects the packed package
-- **THEN** it SHALL permit ignored local workspaces but fail when runtime data is tracked, required ignore rules are absent, or publishable files contain private keys, filled credential variables, literal authorization credentials, non-example emails, internal domains, or absolute user-home paths
+- **THEN** it SHALL permit ignored local workspaces but fail when runtime data is tracked, required ignore rules are absent, or publishable files contain populated tokens, literal authorization credentials, non-example emails, internal domains, or absolute user-home paths
 
 ### Requirement: Detailed local migration report
-The system SHALL create a self-contained provider-neutral HTML report and downloadable JSON metadata for every run.
+The system SHALL create a self-contained provider-neutral HTML report and downloadable JSON metadata in one strict current unversioned structure for every run.
 
 #### Scenario: Graph and comparison inspection
 - **WHEN** an operator opens the report
@@ -165,7 +165,7 @@ The system SHALL create a self-contained provider-neutral HTML report and downlo
 
 #### Scenario: Metadata is downloaded
 - **WHEN** an operator activates the JSON download control
-- **THEN** the browser SHALL download metadata for that run without embedding complete source or destination page bodies
+- **THEN** the browser SHALL download metadata for that run without embedding complete source or destination page bodies or an internal schema-version field
 
 #### Scenario: State selection is audited
 - **WHEN** a report is generated
@@ -281,11 +281,19 @@ The system SHALL discover transitive internal page references for linked scope u
 - **THEN** the system SHALL keep or safely degrade the original reference, record its edge status, and SHALL NOT enqueue it as an accessible internal page
 
 ### Requirement: Provider-neutral state and lifecycle
-The system SHALL use state schema v2 with canonical endpoint identity, graph edges, fingerprints, page/resource mappings, object statuses, and run lifecycle, and SHALL reject schema v1 without modifying it.
+The system SHALL persist canonical endpoint identity, graph edges, fingerprints, page/resource mappings, object statuses, and run lifecycle in one strict current state structure without a schema-version field or compatibility branches.
 
 #### Scenario: Equivalent locators and expanded scope
 - **WHEN** repeated runs identify the same endpoints through different supported URL/ID/slug forms or expand the scope
 - **THEN** they SHALL select the same automatic state and reuse only valid mapped objects
+
+#### Scenario: Canonical automatic state identity
+- **WHEN** an automatic state ID is calculated
+- **THEN** it SHALL depend only on canonical source and destination identities, selected profiles, and filesystem format when applicable, and SHALL exclude locator spelling, scope, credentials, and schema labels
+
+#### Scenario: Invalid state structure
+- **WHEN** a selected state file is malformed, incomplete, contains unknown fields, or does not match its canonical transfer identity
+- **THEN** the system SHALL preserve it unchanged, stop before destination mutation, and report a generic invalid-state error with safe current actions but no conversion behavior
 
 #### Scenario: Destination changed outside ywtc
 - **WHEN** a mapped destination fingerprint differs from the last verified value

@@ -1,5 +1,4 @@
 import {readFileSync} from 'node:fs';
-import {parse as parseDotEnv} from 'dotenv';
 import {parse as parseYaml} from 'yaml';
 import {z} from 'zod';
 
@@ -10,14 +9,15 @@ const limitsSchema = z.object({
   uploadConcurrency: z.number().int().min(1).max(32).default(2),
   requestsPerSecond: z.number().int().min(1).max(1_000).default(8),
   burst: z.number().int().min(1).max(1_000).default(8),
-}).partial().default({});
+}).strict().partial().default({});
 
-const baseProfileSchema = z.object({
-  tokenEnv: z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'must be an uppercase environment variable name'),
+const profileBaseShape = {
+  token: z.string().trim().default(''),
   limits: limitsSchema,
-});
+};
 
-const yandexProfileSchema = baseProfileSchema.extend({
+const yandexProfileSchema = z.object({
+  ...profileBaseShape,
   type: z.literal('yandex-wiki'),
   apiUrl: z.url(),
   webUrl: z.url(),
@@ -25,38 +25,35 @@ const yandexProfileSchema = baseProfileSchema.extend({
   organization: z.object({
     type: z.enum(['yandex360', 'cloud']).default('yandex360'),
     id: z.string().trim().min(1),
-  }),
-});
+  }).strict(),
+}).strict();
 
-const confluenceProfileSchema = baseProfileSchema.extend({
+const confluenceProfileSchema = z.object({
+  ...profileBaseShape,
   type: z.literal('confluence'),
   deployment: z.enum(['data-center', 'cloud']),
   baseUrl: z.url(),
   authType: z.enum(['pat', 'api-token']),
-  emailEnv: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
-}).superRefine((profile, context) => {
+  email: z.string().trim().optional(),
+}).strict().superRefine((profile, context) => {
   if (profile.deployment === 'data-center' && profile.authType !== 'pat') {
     context.addIssue({code: 'custom', path: ['authType'], message: 'Data Center requires pat'});
   }
   if (profile.deployment === 'cloud' && profile.authType !== 'api-token') {
     context.addIssue({code: 'custom', path: ['authType'], message: 'Cloud requires api-token'});
   }
-  if (profile.deployment === 'cloud' && !profile.emailEnv) {
-    context.addIssue({code: 'custom', path: ['emailEnv'], message: 'Cloud API token requires emailEnv'});
-  }
 });
 
 const fileSchema = z.object({
-  schemaVersion: z.literal(2),
   defaults: z.object({
     timeoutMs: z.number().int().min(1_000).max(300_000).default(30_000),
     concurrency: z.number().int().min(1).max(64).default(4),
-  }).partial().default({}),
+  }).strict().partial().default({}),
   connections: z.record(z.string().regex(/^[a-z0-9][a-z0-9._-]*$/), z.discriminatedUnion('type', [
     yandexProfileSchema,
     confluenceProfileSchema,
   ])).refine((connections) => Object.keys(connections).length > 0, 'at least one connection is required'),
-});
+}).strict();
 
 export interface NetworkLimits {
   readConcurrency: number;
@@ -69,7 +66,6 @@ export interface NetworkLimits {
 
 interface ProfileBase {
   name: string;
-  tokenEnv: string;
   token: string;
   limits: NetworkLimits;
 }
@@ -87,18 +83,15 @@ export interface ConfluenceConnectionProfile extends ProfileBase {
   deployment: 'data-center' | 'cloud';
   baseUrl: string;
   authType: 'pat' | 'api-token';
-  emailEnv?: string;
   email?: string;
 }
 
 export type ConnectionProfile = YandexConnectionProfile | ConfluenceConnectionProfile;
 
 export interface AppConfig {
-  schemaVersion: 2;
   profiles: Record<string, ConnectionProfile>;
   timeoutMs: number;
   concurrency: number;
-  envFile: string;
   configFile: string;
 }
 
@@ -114,24 +107,12 @@ function withoutTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
-export function loadEnvironment(envFile: string, processEnvironment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  let fileEnvironment: Record<string, string> = {};
-  try {
-    fileEnvironment = parseDotEnv(readFileSync(envFile));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new Error(`Cannot read workspace credentials: ${envFile}`, {cause: error});
-    }
-  }
-  return {...fileEnvironment, ...processEnvironment};
-}
-
 function readYaml(filename: string): unknown {
   try {
     return parseYaml(readFileSync(filename, 'utf8'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new ConfigurationError(['ywtc.config.yaml'], filename);
-    throw new Error(`Cannot parse workspace profile configuration: ${filename}`, {cause: error});
+    throw new Error(`Cannot parse workspace configuration: ${filename}`, {cause: error});
   }
 }
 
@@ -155,20 +136,21 @@ function resolvedLimits(input: {[K in keyof NetworkLimits]?: NetworkLimits[K] | 
   };
 }
 
-export function readWorkspaceConfig(
-  envFile: string,
-  configFile: string,
-  processEnvironment: NodeJS.ProcessEnv = process.env,
-): AppConfig {
+function issueFields(issue: z.core.$ZodIssue): string[] {
+  if (issue.code === 'unrecognized_keys') {
+    return issue.keys.map((key) => [...issue.path, key].map(String).join('.'));
+  }
+  return [issue.path.map(String).join('.') || 'configuration'];
+}
+
+export function readWorkspaceConfig(configFile: string): AppConfig {
   const parsed = fileSchema.safeParse(readYaml(configFile));
   if (!parsed.success) {
-    const fields = [...new Set(parsed.error.issues.map((issue) => issue.path.join('.') || 'configuration'))].sort();
+    const fields = [...new Set(parsed.error.issues.flatMap(issueFields))].sort();
     throw new ConfigurationError(fields, configFile);
   }
-  const environment = loadEnvironment(envFile, processEnvironment);
   const profiles: Record<string, ConnectionProfile> = {};
   for (const [name, profile] of Object.entries(parsed.data.connections)) {
-    const token = environment[profile.tokenEnv]?.trim() ?? '';
     const limits = resolvedLimits(profile.limits);
     if (profile.type === 'yandex-wiki') {
       profiles[name] = {
@@ -178,34 +160,26 @@ export function readWorkspaceConfig(
         webUrl: withoutTrailingSlash(profile.webUrl),
         authType: profile.authType,
         organization: profile.organization,
-        tokenEnv: profile.tokenEnv,
-        token,
+        token: profile.token,
         limits,
       };
     } else {
-      const email = profile.emailEnv ? environment[profile.emailEnv]?.trim() : undefined;
       profiles[name] = {
         name,
         type: profile.type,
         deployment: profile.deployment,
         baseUrl: withoutTrailingSlash(profile.baseUrl),
         authType: profile.authType,
-        tokenEnv: profile.tokenEnv,
-        token,
+        token: profile.token,
         limits,
-        ...(profile.emailEnv ? {emailEnv: profile.emailEnv} : {}),
-        ...(email ? {email} : {}),
+        ...(profile.email !== undefined ? {email: profile.email} : {}),
       };
     }
   }
-  const timeoutOverride = Number(environment.HTTP_TIMEOUT_MS);
-  const concurrencyOverride = Number(environment.MIGRATION_CONCURRENCY);
   return {
-    schemaVersion: 2,
     profiles,
-    timeoutMs: Number.isInteger(timeoutOverride) && timeoutOverride >= 1_000 ? timeoutOverride : parsed.data.defaults.timeoutMs ?? 30_000,
-    concurrency: Number.isInteger(concurrencyOverride) && concurrencyOverride >= 1 ? concurrencyOverride : parsed.data.defaults.concurrency ?? 4,
-    envFile,
+    timeoutMs: parsed.data.defaults.timeoutMs ?? 30_000,
+    concurrency: parsed.data.defaults.concurrency ?? 4,
     configFile,
   };
 }
@@ -213,12 +187,12 @@ export function readWorkspaceConfig(
 /** Validate only the profiles an operation will actually use. */
 export function validateProfileSecrets(config: AppConfig, profiles: ConnectionProfile[]): void {
   const missing = profiles.flatMap((profile) => [
-    ...(!profile.token ? [profile.tokenEnv] : []),
+    ...(!profile.token ? [`connections.${profile.name}.token`] : []),
     ...(profile.type === 'confluence' && profile.deployment === 'cloud' && !profile.email
-      ? [profile.emailEnv ?? 'emailEnv']
+      ? [`connections.${profile.name}.email`]
       : []),
   ]);
-  if (missing.length > 0) throw new ConfigurationError([...new Set(missing)].sort(), config.envFile);
+  if (missing.length > 0) throw new ConfigurationError([...new Set(missing)].sort(), config.configFile);
 }
 
 export function secretValues(config: AppConfig): string[] {

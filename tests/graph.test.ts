@@ -9,7 +9,7 @@ const page = (id: string, references: string[], parentId?: string): SourcePage =
   references: references.map((href) => ({raw: href, href, kind: 'page'})),
 });
 
-describe('provider-neutral graph discovery', () => {
+describe('page graph discovery', () => {
   it('terminates cycles, deduplicates diamonds, and projects missing parents under root', async () => {
     const pages = new Map([
       ['a', page('a', ['/b', '/c'])],

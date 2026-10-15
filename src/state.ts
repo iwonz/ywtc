@@ -1,6 +1,7 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {z} from 'zod';
 import type {ExportFormat, GraphEdgeStatus, ProviderKind} from './domain.js';
 
 export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
@@ -77,7 +78,6 @@ export interface StateRun {
 }
 
 export interface TransferState {
-  version: 2;
   identity: TransferIdentity;
   createdAt: string;
   updatedAt: string;
@@ -116,7 +116,7 @@ function canonicalIdentity(identity: TransferIdentity): unknown {
       objectId: value.objectId,
       ...(value.containerId ? {containerId: value.containerId} : {}),
     };
-  return {schema: 'ywtc-state-v2', source: endpoint(identity.source), destination: endpoint(identity.destination)};
+  return {source: endpoint(identity.source), destination: endpoint(identity.destination)};
 }
 
 export function transferStateId(identity: TransferIdentity): string {
@@ -151,19 +151,94 @@ export function resolveStateLocation(identity: TransferIdentity, options: {state
 
 function emptyState(identity: TransferIdentity): TransferState {
   const now = new Date().toISOString();
-  return {version: 2, identity, createdAt: now, updatedAt: now, pages: {}, graph: {edges: []}, runs: []};
+  return {identity, createdAt: now, updatedAt: now, pages: {}, graph: {edges: []}, runs: []};
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+const endpointIdentitySchema = z.object({
+  profile: z.string(),
+  provider: z.enum(['yandex-wiki', 'confluence']),
+  instance: z.url(),
+  objectId: z.string(),
+  containerId: z.string().optional(),
+}).strict();
+
+const directoryIdentitySchema = z.object({
+  provider: z.literal('filesystem'),
+  path: z.string(),
+  format: z.enum(['markdown', 'html']),
+}).strict();
+
+const transferIdentitySchema = z.object({
+  source: endpointIdentitySchema,
+  destination: z.union([endpointIdentitySchema, directoryIdentitySchema]),
+}).strict();
+
+const resourceStateSchema = z.object({
+  sourceId: z.string(),
+  sourceName: z.string(),
+  destinationId: z.string().optional(),
+  destinationName: z.string(),
+  sha256: z.string().optional(),
+  size: z.number().nonnegative().optional(),
+  status: z.enum(['planned', 'complete', 'partial', 'failed']),
+  lastError: z.string().optional(),
+  updatedAt: z.string(),
+}).strict();
+
+const pageStateSchema = z.object({
+  sourceId: z.string(),
+  sourceCanonicalId: z.string(),
+  sourceLocator: z.string(),
+  sourceTitle: z.string(),
+  projectedParentId: z.string().optional(),
+  destinationId: z.string().optional(),
+  destinationCanonicalId: z.string().optional(),
+  destinationLocator: z.string().optional(),
+  destinationTitle: z.string(),
+  sourceFingerprint: z.string().optional(),
+  destinationFingerprint: z.string().optional(),
+  status: z.enum(['discovered', 'planned', 'skeleton-created', 'complete', 'partial', 'conflict', 'failed', 'blocked']),
+  resources: z.record(z.string(), resourceStateSchema),
+  degradations: z.array(z.string()),
+  lastError: z.string().optional(),
+  updatedAt: z.string(),
+}).strict();
+
+const graphEdgeSchema = z.object({
+  from: z.string(),
+  raw: z.string(),
+  to: z.string().optional(),
+  status: z.enum(['resolved', 'external', 'inaccessible', 'broken', 'cycle', 'unsupported']),
+  message: z.string().optional(),
+}).strict();
+
+const runSchema = z.object({
+  id: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().optional(),
+  status: z.enum(['running', 'completed', 'completed-with-warnings', 'partial', 'failed', 'cancelled', 'interrupted']),
+  scope: z.enum(['page', 'subtree', 'linked']),
+  dryRun: z.boolean(),
+  pages: z.number().int().nonnegative(),
+  warnings: z.number().int().nonnegative(),
+  errors: z.number().int().nonnegative(),
+}).strict();
+
+const transferStateSchema = z.object({
+  identity: transferIdentitySchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  pages: z.record(z.string(), pageStateSchema),
+  graph: z.object({rootId: z.string().optional(), edges: z.array(graphEdgeSchema)}).strict(),
+  runs: z.array(runSchema),
+}).strict();
 
 function identityEquals(left: TransferIdentity, right: TransferIdentity): boolean {
   return JSON.stringify(canonicalIdentity(left)) === JSON.stringify(canonicalIdentity(right));
 }
 
 function help(filename: string): string {
-  return `Restore a v2 backup, choose a matching --state file, omit --state for automatic selection, or use --fresh to preserve "${filename}" and start clean.`;
+  return `Choose a matching --state file, omit --state for automatic selection, or use --fresh to preserve "${filename}" and start clean.`;
 }
 
 async function readState(filename: string): Promise<TransferState | undefined> {
@@ -180,13 +255,9 @@ async function readState(filename: string): Promise<TransferState | undefined> {
   } catch (error) {
     throw new Error(`Transfer state "${filename}" is not valid JSON. ${help(filename)}`, {cause: error});
   }
-  if (isRecord(value) && value.version === 1) {
-    throw new Error(`Transfer state "${filename}" uses unsupported schema v1. It was preserved unchanged. Use a new workdir/state or --fresh; automatic conversion could duplicate remote content.`);
-  }
-  if (!isRecord(value) || value.version !== 2 || !isRecord(value.identity) || !isRecord(value.pages) || !isRecord(value.graph) || !Array.isArray(value.runs)) {
-    throw new Error(`Transfer state "${filename}" has an unsupported or incomplete schema. ${help(filename)}`);
-  }
-  return value as unknown as TransferState;
+  const parsed = transferStateSchema.safeParse(value);
+  if (!parsed.success) throw new Error(`Transfer state "${filename}" is invalid. ${help(filename)}`);
+  return parsed.data as TransferState;
 }
 
 function backupFilename(filename: string): string {

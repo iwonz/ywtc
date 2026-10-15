@@ -35,7 +35,6 @@ export interface TransferReportEdge {
 }
 
 export interface TransferReportData {
-  version: 4;
   runId: string;
   startedAt: string;
   finishedAt?: string;
@@ -111,9 +110,8 @@ export class TransferReport {
   readonly data: TransferReportData;
   private readonly previews = new Map<string, PreviewPair>();
 
-  constructor(input: Omit<TransferReportData, 'version' | 'runId' | 'startedAt' | 'status' | 'pages' | 'edges' | 'warnings' | 'errors' | 'outputs' | 'summary'>) {
+  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'pages' | 'edges' | 'warnings' | 'errors' | 'outputs' | 'summary'>) {
     this.data = {
-      version: 4,
       runId: randomUUID(),
       startedAt: new Date().toISOString(),
       status: 'running',

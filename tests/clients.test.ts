@@ -12,16 +12,16 @@ import type {ConfluenceConnectionProfile, NetworkLimits, YandexConnectionProfile
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 20, burst: 20};
 const wiki: YandexConnectionProfile = {
   name: 'wiki', type: 'yandex-wiki', apiUrl: 'https://api.wiki.yandex.net/v1', webUrl: 'https://wiki.example.com',
-  authType: 'oauth', organization: {type: 'yandex360', id: '42'}, tokenEnv: 'WIKI_TOKEN', token: 'wiki-token', limits,
+  authType: 'oauth', organization: {type: 'yandex360', id: '42'}, token: 'wiki-token', limits,
 };
 const dc: ConfluenceConnectionProfile = {
   name: 'dc', type: 'confluence', deployment: 'data-center', authType: 'pat', baseUrl: 'https://conf.example.test/confluence',
-  tokenEnv: 'CONF_TOKEN', token: 'conf-token', limits,
+  token: 'conf-token', limits,
 };
 
 afterEach(() => nock.cleanAll());
 
-describe('v2 provider clients', () => {
+describe('provider clients', () => {
   it('creates and updates Yandex pages with OAuth organization headers', async () => {
     const api = nock('https://api.wiki.yandex.net', {reqheaders: {authorization: 'OAuth wiki-token', 'x-org-id': '42'}})
       .post('/v1/pages', {slug: 'root/child', title: 'Child', content: 'Body', access_policy: {access_type: 'inherited'}})
@@ -69,7 +69,7 @@ describe('v2 provider clients', () => {
   it('uses Cloud v2 pages and v1 multipart attachments', async () => {
     const cloud: ConfluenceConnectionProfile = {
       name: 'cloud', type: 'confluence', deployment: 'cloud', authType: 'api-token', baseUrl: 'https://example.atlassian.net',
-      tokenEnv: 'CLOUD_TOKEN', token: 'token', emailEnv: 'CLOUD_EMAIL', email: 'person@example.com', limits,
+      token: 'token', email: 'person@example.com', limits,
     };
     const auth = `Basic ${Buffer.from('person@example.com:token').toString('base64')}`;
     const api = nock('https://example.atlassian.net', {reqheaders: {authorization: auth}})

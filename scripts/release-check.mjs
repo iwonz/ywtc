@@ -3,7 +3,6 @@ import {readdir, readFile, stat} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {promisify} from 'node:util';
-import {URL} from 'node:url';
 
 const root = process.cwd();
 const execFileAsync = promisify(execFile);
@@ -49,7 +48,7 @@ async function walk(directory) {
       continue;
     }
     if (!entry.isFile()) continue;
-    if (localRuntimeNames.has(entry.name) || (entry.name.startsWith('.env.') && entry.name !== '.env.example')) continue;
+    if (localRuntimeNames.has(entry.name) || entry.name.startsWith('.env.')) continue;
     if (forbiddenExtensions.has(path.extname(entry.name).toLocaleLowerCase())) {
       add(filename, 'private key or certificate file must not be published');
       continue;
@@ -85,20 +84,10 @@ async function scanText(filename) {
       }
     }
 
-    const environment = line.match(/^\s*(YANDEX_WIKI_TOKEN|CONFLUENCE_TOKEN|YANDEX_WIKI_ORG_ID)\s*=\s*(.*?)\s*$/);
-    if (environment?.[2] && environment[2] !== '...' && !/^<[^>]+>$/.test(environment[2])) {
-      add(filename, `filled ${environment[1]} value`, lineNumber);
-    }
-
-    const confluenceUrl = line.match(/^\s*CONFLUENCE_BASE_URL\s*=\s*(https?:\/\/[^\s#]+)/);
-    if (confluenceUrl) {
-      try {
-        const hostname = new URL(confluenceUrl[1]).hostname;
-        if (!['example.com', 'example.test', 'localhost'].some((allowed) => hostname === allowed || hostname.endsWith(`.${allowed}`))) {
-          add(filename, 'non-example Confluence hostname', lineNumber);
-        }
-      } catch {
-        add(filename, 'invalid Confluence URL', lineNumber);
+    if (path.basename(filename) === 'ywtc.config.example.yaml') {
+      const credential = line.match(/^\s*(token|email):\s*(.*?)\s*$/);
+      if (credential?.[2] && credential[2] !== '""' && credential[2] !== "''") {
+        add(filename, `filled ${credential[1]} value`, lineNumber);
       }
     }
   });
@@ -123,15 +112,55 @@ try {
   for (const tracked of stdout.split('\0').filter(Boolean)) {
     if (
       tracked === '.env'
+      || tracked === '.ywtc-workspace.json'
       || tracked === 'ywtc.config.yaml'
-      || tracked.startsWith('.env.') && tracked !== '.env.example'
+      || tracked.startsWith('.env.')
       || runtimeDirectoryPrefixes.some((prefix) => tracked.startsWith(prefix))
     ) {
-      add(path.join(root, tracked), 'local runtime data is tracked by Git');
+      const filename = path.join(root, tracked);
+      try {
+        await stat(filename);
+        add(filename, 'local runtime data is tracked by Git');
+      } catch (error) {
+        if ((error).code !== 'ENOENT') throw error;
+      }
     }
   }
 } catch {
   // The project may be checked before git init; filesystem and package checks still apply.
+}
+
+const retiredContracts = [
+  ['schemaVersion', 'retired schemaVersion field'],
+  ['ywtc-state-v2', 'retired state schema namespace'],
+  ['.ywtc-workspace.json', 'retired workspace marker'],
+  ['tokenEnv', 'retired token indirection'],
+  ['emailEnv', 'retired email indirection'],
+];
+for (const relativeFilename of ['README.md', 'AGENTS.md', 'package.json', 'ywtc.config.example.yaml']) {
+  const filename = path.join(root, relativeFilename);
+  const content = await readFile(filename, 'utf8');
+  for (const [needle, reason] of retiredContracts) {
+    if (content.includes(needle)) add(filename, reason);
+  }
+}
+for (const directory of ['src']) {
+  const filenames = [];
+  const collect = async (current) => {
+    for (const entry of await readdir(current, {withFileTypes: true})) {
+      const filename = path.join(current, entry.name);
+      if (entry.isDirectory()) await collect(filename);
+      else if (entry.isFile()) filenames.push(filename);
+    }
+  };
+  await collect(path.join(root, directory));
+  for (const filename of filenames) {
+    if (!textExtensions.has(path.extname(filename).toLocaleLowerCase())) continue;
+    const content = await readFile(filename, 'utf8');
+    for (const [needle, reason] of retiredContracts) {
+      if (content.includes(needle)) add(filename, reason);
+    }
+  }
 }
 
 if (findings.length > 0) {

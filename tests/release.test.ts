@@ -137,7 +137,7 @@ describe('release validation', () => {
       dependencies?: Record<string, string>;
     };
     expect(packageJson.dependencies?.['@diplodoc/transform']).toBe('4.78.6');
-    expect(packageJson.dependencies?.dotenv).toBe('18.0.7');
+    expect(packageJson.dependencies).not.toHaveProperty('dotenv');
   });
 
   it('includes all release-note sections while preserving product bump types', async () => {

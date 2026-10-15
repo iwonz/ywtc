@@ -98,7 +98,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .addOption(new Option('--scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
     .addOption(new Option('--format <format>', 'filesystem format').choices(['markdown', 'html']))
     .option('--archive', 'also create a ZIP for filesystem output', false)
-    .option('--workdir <path>', 'workspace (marked CWD, then ~/.ywtc)')
+    .option('--workdir <path>', 'workspace (configured CWD, then ~/.ywtc)')
     .option('--dry-run', 'discover and render without destination writes', false)
     .option('--fresh', 'ignore mappings and preserve existing live state as a backup', false)
     .option('--concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
@@ -142,8 +142,6 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
 }
 
 export function parseCliArguments(argv: string[]): CliCommand {
-  if (argv.includes('--target')) throw new Error('--target was removed in ywtc 2.0. Use --destination.');
-  if (argv.includes('--single-page')) throw new Error('--single-page was removed in ywtc 2.0. Use --scope page.');
   if (argv.length === 0 || (argv.length === 1 && ['--help', '-h'].includes(argv[0]!))) return {command: 'help'};
   if (argv.length === 1 && ['--version', '-v'].includes(argv[0]!)) return {command: 'version'};
   const helpIndex = argv.findIndex((value) => ['--help', '-h'].includes(value));
@@ -157,7 +155,10 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const output: string[] = [];
   const program = createCliProgram((command) => { parsed = command; });
   program.exitOverride();
-  program.configureOutput({writeOut: (value) => output.push(value), writeErr: (value) => output.push(value)});
+  for (const command of program.commands) command.exitOverride();
+  const writers = {writeOut: (value: string) => output.push(value), writeErr: (value: string) => output.push(value)};
+  program.configureOutput(writers);
+  for (const command of program.commands) command.configureOutput(writers);
   try {
     program.parse(['node', 'ywtc', ...argv], {from: 'node'});
   } catch (error) {

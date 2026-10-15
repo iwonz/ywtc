@@ -7,7 +7,13 @@ import {createLogger, redact} from './logger.js';
 import type {Migrator} from './migrator.js';
 import {runUpdate} from './updater.js';
 import {packageVersion} from './version.js';
-import {initializeWorkspace, resolveWorkspace, resolveWorkspacePath, validateWorkspaceMarker} from './workspace.js';
+import {
+  initializeWorkspace,
+  resolveInitWorkspace,
+  resolveWorkspace,
+  resolveWorkspacePath,
+  workspaceIsInitialized,
+} from './workspace.js';
 
 const color = process.stdout.isTTY && !process.env.NO_COLOR;
 const paint = (code: number, value: string) => color ? `\u001b[${code}m${value}\u001b[0m` : value;
@@ -19,8 +25,7 @@ function heading(label: string): void {
 async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {command: 'migrate'}>): Promise<number> {
   const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
   const initialized = await initializeWorkspace(workspace);
-  await validateWorkspaceMarker(workspace);
-  const config = readWorkspaceConfig(workspace.envFile, workspace.configFile);
+  const config = readWorkspaceConfig(workspace.configFile);
   const secrets = secretValues(config);
   const source = resolveSourceLocator(config, command.source, command.sourceProfile);
   const destination = resolveDestinationLocator({
@@ -117,22 +122,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
   if (command.command === 'init') {
-    const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
+    const workspace = resolveInitWorkspace(command.workdir ? {explicit: command.workdir} : {});
     const result = await initializeWorkspace(workspace);
     heading('Workspace ready');
     console.log(`  Path      ${workspace.root}`);
-    console.log(`  Profiles  ${workspace.configFile}`);
-    console.log(`  Secrets   ${workspace.envFile}`);
+    console.log(`  Config    ${workspace.configFile}`);
     console.log(`  State     ${workspace.statesDirectory}`);
     console.log(`  Created   ${result.created.length ? result.created.join(', ') : 'nothing'}`);
     console.log(`  Reused    ${result.existing.length ? result.existing.join(', ') : 'nothing'}`);
-    console.log(`  Next      Fill profiles/secrets, then run: ywtc doctor --workdir "${workspace.root}"`);
+    console.log(`  Next      Fill connection settings and credentials, then run: ywtc doctor --workdir "${workspace.root}"`);
     return 0;
   }
   if (command.command === 'doctor') {
     const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
-    await validateWorkspaceMarker(workspace);
-    const config = readWorkspaceConfig(workspace.envFile, workspace.configFile);
+    if (!await workspaceIsInitialized(workspace)) {
+      throw new Error(`Workspace is not initialized: ${workspace.configFile}. Run: ywtc init --workdir ${JSON.stringify(workspace.root)}.`);
+    }
+    const config = readWorkspaceConfig(workspace.configFile);
     heading('Workspace diagnosis');
     console.log(`  Workdir   ${paint(32, workspace.root)}`);
     console.log(`  Profiles  ${Object.values(config.profiles).map((profile) => `${profile.name}:${profile.type}`).join(', ')}`);

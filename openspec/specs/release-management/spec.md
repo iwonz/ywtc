@@ -6,11 +6,11 @@ Define how ywtc calculates, validates, publishes, and distributes reviewable Sem
 ## Requirements
 
 ### Requirement: SemVer release calculation
-Release automation SHALL derive SemVer from validated Conventional Commits and SHALL publish the pending universal transfer contract as version 2.0.0 because it removes public flags, configuration, and state schema v1.
+Release automation SHALL derive SemVer from validated Conventional Commits, describe only the delivered current product contract, and SHALL NOT require historical schema migration guidance in README, changelog, or generated release notes.
 
 #### Scenario: Universal transfer breaking release
-- **WHEN** the archived change is committed with a breaking `feat!` and the public latest version remains 1.x
-- **THEN** Release Please SHALL propose 2.0.0 and include the CLI/configuration/state migration guidance in changelog and release notes
+- **WHEN** this archived change is committed with a breaking `feat!` while the public latest version is 2.x
+- **THEN** Release Please SHALL propose 3.0.0 and summarize the config-only workspace and unversioned runtime contracts without a migration guide
 
 #### Scenario: Backward-compatible feature
 - **WHEN** unreleased history contains a `feat` commit and no breaking change

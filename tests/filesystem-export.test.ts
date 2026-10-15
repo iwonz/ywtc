@@ -1,4 +1,4 @@
-import {mkdtemp, readFile, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
@@ -31,7 +31,9 @@ describe('transactional filesystem export', () => {
     const exporter = new FilesystemExporter(source, 2);
     const first = await exporter.export({graph, directory: output, format: 'html', identity: 'id', archive: true, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources});
     expect(first.archive).toMatch(/\.zip$/);
-    expect(JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8'))).toMatchObject({schemaVersion: 2, pages: [{title: 'Root'}, {title: 'Child'}]});
+    const manifest = JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8')) as Record<string, unknown>;
+    expect(manifest).toMatchObject({tool: 'ywtc', pages: [{title: 'Root'}, {title: 'Child'}]});
+    expect(manifest).not.toHaveProperty('schemaVersion');
     expect(await readFile(path.join(output, 'index.html'), 'utf8')).toContain('pages/child-');
     const second = await exporter.export({graph, directory: output, format: 'html', identity: 'id', archive: false, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources});
     expect(second.backup).toContain('.backup-');
@@ -48,5 +50,25 @@ describe('transactional filesystem export', () => {
     const result = await new FilesystemExporter(source, 1).export({graph, directory: output, format: 'markdown', identity: 'id', archive: false, dryRun: true, cacheDirectory: temporary});
     expect(result.manifest.pages).toHaveLength(2);
     await expect(readFile(path.join(output, '.ywtc-export.json'))).rejects.toThrow();
+  });
+
+  it('preserves an export with an unknown manifest field instead of adopting it', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-invalid-'));
+    const output = path.join(temporary, 'site');
+    const resources = new Map<string, SourceResource[]>([[root.canonicalId, [{provider: 'yandex-wiki', id: 'a', pageId: '1', name: 'image.png', size: 5, mimeType: 'image/png', kind: 'image'}]], [child.canonicalId, []]]);
+    const source = {
+      downloadResource: async (_resource: SourceResource, destination: string) => {
+        await writeFile(destination, 'hello');
+        return {path: destination, size: 5, sha256: 'hash', mimeType: 'image/png'};
+      },
+    } as unknown as SourceAdapter;
+    const exporter = new FilesystemExporter(source, 1);
+    await exporter.export({graph, directory: output, format: 'markdown', identity: 'id', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources});
+    const manifestPath = path.join(output, '.ywtc-export.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(manifestPath, `${JSON.stringify({...manifest, schemaVersion: 2})}\n`);
+    await expect(exporter.export({graph, directory: output, format: 'markdown', identity: 'id', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources})).rejects.toThrow(/unmanaged destination/);
+    await expect(stat(output)).resolves.toMatchObject({});
+    await expect(readFile(manifestPath, 'utf8')).resolves.toContain('schemaVersion');
   });
 });

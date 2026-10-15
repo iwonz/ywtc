@@ -1,26 +1,12 @@
 import {constants} from 'node:fs';
-import {access, chmod, mkdir, readFile, writeFile} from 'node:fs/promises';
+import {access, mkdir, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-export const WORKSPACE_MARKER = '.ywtc-workspace.json';
-export const WORKSPACE_ENV = '.env';
 export const WORKSPACE_CONFIG = 'ywtc.config.yaml';
 export const WORKSPACE_STATES = '.states';
 
-export const ENV_TEMPLATE = `# Secrets referenced by ywtc.config.yaml
-YANDEX_WIKI_TOKEN=
-CONFLUENCE_TOKEN=
-CONFLUENCE_EMAIL=
-
-# Optional global overrides
-HTTP_TIMEOUT_MS=30000
-MIGRATION_CONCURRENCY=4
-`;
-
-export const CONFIG_TEMPLATE = `schemaVersion: 2
-
-defaults:
+export const CONFIG_TEMPLATE = `defaults:
   timeoutMs: 30000
   concurrency: 4
 
@@ -30,7 +16,7 @@ connections:
     apiUrl: https://api.wiki.yandex.net/v1
     webUrl: https://wiki.example.com
     authType: oauth
-    tokenEnv: YANDEX_WIKI_TOKEN
+    token: ""
     organization:
       type: yandex360
       id: ""
@@ -47,7 +33,7 @@ connections:
     deployment: data-center
     baseUrl: https://confluence.example.com/confluence
     authType: pat
-    tokenEnv: CONFLUENCE_TOKEN
+    token: ""
     limits:
       readConcurrency: 4
       writeConcurrency: 2
@@ -59,8 +45,6 @@ connections:
 
 export interface Workspace {
   root: string;
-  marker: string;
-  envFile: string;
   configFile: string;
   statesDirectory: string;
   cacheDirectory: string;
@@ -90,12 +74,14 @@ async function exists(filename: string): Promise<boolean> {
   }
 }
 
+export async function workspaceIsInitialized(workspace: Workspace): Promise<boolean> {
+  return exists(workspace.configFile);
+}
+
 function workspaceAt(root: string, source: Workspace['source']): Workspace {
   const statesDirectory = path.join(root, WORKSPACE_STATES);
   return {
     root,
-    marker: path.join(root, WORKSPACE_MARKER),
-    envFile: path.join(root, WORKSPACE_ENV),
     configFile: path.join(root, WORKSPACE_CONFIG),
     statesDirectory,
     cacheDirectory: path.join(statesDirectory, 'cache'),
@@ -104,11 +90,22 @@ function workspaceAt(root: string, source: Workspace['source']): Workspace {
   };
 }
 
+function normalizedExplicitRoot(explicit: string, cwd: string, homeDirectory: string): string {
+  return path.resolve(cwd, expandHome(explicit, homeDirectory));
+}
+
 export async function resolveWorkspace(options: {explicit?: string; cwd?: string; homeDirectory?: string} = {}): Promise<Workspace> {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const homeDirectory = path.resolve(options.homeDirectory ?? os.homedir());
-  if (options.explicit) return workspaceAt(path.resolve(cwd, expandHome(options.explicit, homeDirectory)), 'explicit');
-  if (await exists(path.join(cwd, WORKSPACE_MARKER))) return workspaceAt(cwd, 'current');
+  if (options.explicit) return workspaceAt(normalizedExplicitRoot(options.explicit, cwd, homeDirectory), 'explicit');
+  if (await exists(path.join(cwd, WORKSPACE_CONFIG))) return workspaceAt(cwd, 'current');
+  return workspaceAt(path.join(homeDirectory, '.ywtc'), 'default');
+}
+
+export function resolveInitWorkspace(options: {explicit?: string; cwd?: string; homeDirectory?: string} = {}): Workspace {
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const homeDirectory = path.resolve(options.homeDirectory ?? os.homedir());
+  if (options.explicit) return workspaceAt(normalizedExplicitRoot(options.explicit, cwd, homeDirectory), 'explicit');
   return workspaceAt(path.join(homeDirectory, '.ywtc'), 'default');
 }
 
@@ -126,40 +123,14 @@ export async function initializeWorkspace(workspace: Workspace): Promise<Workspa
   const created: string[] = [];
   const existing: string[] = [];
   await mkdir(workspace.root, {recursive: true, mode: 0o700});
-  const artifacts: Array<[string, string, number]> = [
-    [workspace.marker, `${JSON.stringify({schemaVersion: 2, tool: 'ywtc'}, null, 2)}\n`, 0o600],
-    [workspace.envFile, ENV_TEMPLATE, 0o600],
-    [workspace.configFile, CONFIG_TEMPLATE, 0o600],
-  ];
-  for (const [filename, content, mode] of artifacts) {
-    const artifactCreated = await createExclusive(filename, content, mode);
-    (artifactCreated ? created : existing).push(filename);
-    if (artifactCreated) await chmod(filename, mode);
-  }
+  const configCreated = await createExclusive(workspace.configFile, CONFIG_TEMPLATE, 0o600);
+  (configCreated ? created : existing).push(workspace.configFile);
   for (const directory of [workspace.statesDirectory, workspace.cacheDirectory, workspace.reportsDirectory]) {
     const existed = await exists(directory);
     await mkdir(directory, {recursive: true, mode: 0o700});
     (existed ? existing : created).push(directory);
   }
   return {workspace, created, existing};
-}
-
-export async function validateWorkspaceMarker(workspace: Workspace): Promise<void> {
-  let raw: string;
-  try {
-    raw = await readFile(workspace.marker, 'utf8');
-  } catch (error) {
-    throw new Error(`Workspace marker is missing or unreadable: ${workspace.marker}`, {cause: error});
-  }
-  try {
-    const value = JSON.parse(raw) as {schemaVersion?: unknown; tool?: unknown};
-    if (value.schemaVersion === 1) {
-      throw new Error('schema v1 is not supported; create ywtc.config.yaml and a schema v2 marker or use a new workdir');
-    }
-    if (value.schemaVersion !== 2 || value.tool !== 'ywtc') throw new Error('unsupported marker');
-  } catch (error) {
-    throw new Error(`Workspace marker is invalid: ${workspace.marker}. ${error instanceof Error ? error.message : 'Run ywtc init after repairing it.'}`, {cause: error});
-  }
 }
 
 export function resolveWorkspacePath(workspace: Workspace, value: string): string {

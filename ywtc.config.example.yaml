@@ -1,5 +1,3 @@
-schemaVersion: 2
-
 defaults:
   timeoutMs: 30000
   concurrency: 4
@@ -10,7 +8,7 @@ connections:
     apiUrl: https://api.wiki.yandex.net/v1
     webUrl: https://wiki.example.com
     authType: oauth
-    tokenEnv: YANDEX_WIKI_TOKEN
+    token: ""
     organization:
       type: yandex360
       id: example-organization-id
@@ -27,7 +25,7 @@ connections:
     deployment: data-center
     baseUrl: https://confluence.example.com/confluence
     authType: pat
-    tokenEnv: CONFLUENCE_TOKEN
+    token: ""
     limits:
       readConcurrency: 4
       writeConcurrency: 2
@@ -41,8 +39,8 @@ connections:
   #   deployment: cloud
   #   baseUrl: https://example.atlassian.net
   #   authType: api-token
-  #   tokenEnv: CONFLUENCE_CLOUD_TOKEN
-  #   emailEnv: CONFLUENCE_CLOUD_EMAIL
+  #   token: ""
+  #   email: ""
   #   limits:
   #     readConcurrency: 4
   #     writeConcurrency: 2

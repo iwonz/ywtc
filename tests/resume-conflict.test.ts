@@ -18,11 +18,11 @@ import type {TransferState} from '../src/state.js';
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 50, burst: 50};
 const sourceProfile: YandexConnectionProfile = {
   name: 'source', type: 'yandex-wiki', apiUrl: 'https://api.wiki.example/v1', webUrl: 'https://wiki.example',
-  authType: 'oauth', organization: {type: 'yandex360', id: 'org'}, tokenEnv: 'SOURCE_TOKEN', token: 'token', limits,
+  authType: 'oauth', organization: {type: 'yandex360', id: 'org'}, token: 'token', limits,
 };
 const destinationProfile: ConfluenceConnectionProfile = {
   name: 'destination', type: 'confluence', deployment: 'data-center', baseUrl: 'https://conf.example/confluence',
-  authType: 'pat', tokenEnv: 'DESTINATION_TOKEN', token: 'token', limits,
+  authType: 'pat', token: 'token', limits,
 };
 const root: SourcePage = {
   provider: 'yandex-wiki', profile: sourceProfile.name, id: '1', canonicalId: 'source:yandex-wiki:1', title: 'Root',
@@ -81,8 +81,8 @@ function fixture() {
 async function setup() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-resume-'));
   const config: AppConfig = {
-    schemaVersion: 2, profiles: {source: sourceProfile, destination: destinationProfile}, timeoutMs: 5_000, concurrency: 2,
-    envFile: path.join(directory, '.env'), configFile: path.join(directory, 'ywtc.config.yaml'),
+    profiles: {source: sourceProfile, destination: destinationProfile}, timeoutMs: 5_000, concurrency: 2,
+    configFile: path.join(directory, 'ywtc.config.yaml'),
   };
   const source: RemoteLocator = {type: 'remote', profile: sourceProfile, value: 'root'};
   const destination: RemoteLocator = {type: 'remote', profile: destinationProfile, value: '100'};
