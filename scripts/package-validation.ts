@@ -11,6 +11,28 @@ interface PackResult {
   files: Array<{path: string}>;
 }
 
+function readPackResult(output: string): PackResult {
+  const parsed = JSON.parse(output) as unknown;
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object'
+      ? Object.values(parsed)
+      : [];
+  const result = candidates.length === 1 ? candidates[0] : undefined;
+  if (
+    !result ||
+    typeof result !== 'object' ||
+    !('filename' in result) ||
+    typeof result.filename !== 'string' ||
+    !result.filename ||
+    !('files' in result) ||
+    !Array.isArray(result.files)
+  ) {
+    throw new Error('npm pack returned no single valid artifact');
+  }
+  return result as PackResult;
+}
+
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-package-'));
 const npmEnvironment = {...process.env, npm_config_cache: path.join(temporary, 'npm-cache')};
 const packed = await execFileAsync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', temporary], {
@@ -18,8 +40,7 @@ const packed = await execFileAsync('npm', ['pack', '--ignore-scripts', '--json',
   encoding: 'utf8',
   env: npmEnvironment,
 });
-const packResult = (JSON.parse(packed.stdout) as PackResult[])[0];
-if (!packResult) throw new Error('npm pack returned no artifact');
+const packResult = readPackResult(packed.stdout);
 const archive = path.join(temporary, packResult.filename);
 await stat(archive);
 

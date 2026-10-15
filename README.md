@@ -245,16 +245,25 @@ npm run check
 
 `npm run check` запускает release/hygiene checks, аудит production-зависимостей (high/critical), TypeScript, Biome, Knip, тесты, сборку, проверку устанавливаемого tarball и строгую OpenSpec-валидацию. Изменения оформляются полным OpenSpec-циклом согласно [`AGENTS.md`](AGENTS.md).
 
-## Первый релиз (для сопровождающего)
+## Релизы (для сопровождающего)
 
-Обычные релизы формирует Release Please из Conventional Commits. До первого релиза один раз:
+Release Please формирует PR из Conventional Commits. После его проверки и merge workflow повторяет полный quality gate, создаёт GitHub Release, публикует npm-пакет с OIDC provenance и обновляет проверенную Homebrew-формулу. Версии `package.json`, lock-файла и changelog вручную не меняются; регулярные релизы не требуют npm OTP или `NPM_TOKEN`.
 
-- [ ] Установите npm `>=11.15`, выполните `npm login` и проверьте владельца: `npm whoami` должен вернуть `iwonz`.
-- [ ] Опубликуйте минимальный пакет с интерактивной 2FA: `npm run release:bootstrap`. OTP не записывайте в команду, файл или CI.
-- [ ] Свяжите пакет с workflow: `npm trust github @iwonz/ywtc --file release.yml --repo iwonz/ywtc --allow-publish`.
-- [ ] В GitHub откройте **Settings → Actions → General → Workflow permissions** и включите **Allow GitHub Actions to create and approve pull requests**. Настройка действует на workflows репозитория; фактические возможности всё равно ограничены `permissions` каждого job.
-- [ ] Перезапустите `CI and Release`, проверьте Release Please PR для `2.0.0` и слейте его. Workflow опубликует npm-пакет с provenance, GitHub Release и проверенную Homebrew-формулу.
+Если GitHub Release уже создан, а публикация остановилась, повторите существующий тег идемпотентным recovery:
 
-Требования и синтаксис: [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) и [`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust/). Версии `package.json`, lock-файла и changelog вручную не меняются.
+```bash
+gh workflow run release.yml --repo iwonz/ywtc -f release_tag=vX.Y.Z
+```
+
+Recovery проверяет неизменённый tag актуальным trusted validator, не перезаписывает существующую npm-версию и восстанавливает только недостающие artifacts, release notes и Homebrew-формулу.
+
+Одноразовая инициализация нового npm-пакета выполняется так:
+
+- [ ] Установить npm `>=11.15`, выполнить `npm login` и проверить владельца через `npm whoami`.
+- [ ] Опубликовать placeholder с интерактивной 2FA: `npm run release:bootstrap`; не передавать OTP в файлах, командах или CI.
+- [ ] Выполнить `npm trust github @iwonz/ywtc --file release.yml --repo iwonz/ywtc --allow-publish`.
+- [ ] В **Settings → Actions → General → Workflow permissions** включить **Allow GitHub Actions to create and approve pull requests**; возможности каждого job дополнительно ограничены его `permissions`.
+
+Для `@iwonz/ywtc` эта инициализация уже выполнена. Подробности: [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) и [`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
 
 Лицензия: [MIT](LICENSE).

@@ -134,6 +134,21 @@ jobs:
         with:
           ref: ${{ steps.context.outputs.tag }}
           fetch-depth: 0
+      - name: Load current release tools for manual recovery
+        if: github.event_name == 'workflow_dispatch'
+        id: recovery-tools
+        shell: bash
+        run: |
+          validator_dir="$RUNNER_TEMP/release-validator"
+          mkdir -p "$validator_dir"
+          git fetch --no-tags origin master
+          validator_commit="$(git rev-parse FETCH_HEAD)"
+          git show "${validator_commit}:scripts/release-validation.ts" > "$validator_dir/release-validation.ts"
+          git show "${validator_commit}:scripts/validate-release-tag.ts" > "$validator_dir/validate-release-tag.ts"
+          git show "${validator_commit}:scripts/package-validation.ts" > "$validator_dir/package-validation.ts"
+          echo "entry=$validator_dir/validate-release-tag.ts" >> "$GITHUB_OUTPUT"
+          echo "package_verifier=$validator_dir/package-validation.ts" >> "$GITHUB_OUTPUT"
+          echo "commit=$validator_commit" >> "$GITHUB_OUTPUT"
       - name: Set up Node.js and npm trusted publishing
         uses: actions/setup-node@v7
         with:
@@ -143,10 +158,25 @@ jobs:
       - name: Install current npm
         run: npm install --global npm@12.2.0
       - name: Install and validate release
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.tag }}
+          RECOVERY_VALIDATOR: ${{ steps.recovery-tools.outputs.entry }}
+          RECOVERY_PACKAGE_VERIFIER: ${{ steps.recovery-tools.outputs.package_verifier }}
         run: |
           npm ci
-          npm run release:validate -- "${{ steps.context.outputs.tag }}"
+          if [[ -n "$RECOVERY_PACKAGE_VERIFIER" ]]; then
+            cp "$RECOVERY_PACKAGE_VERIFIER" scripts/package-validation.ts
+          fi
+          if [[ -n "$RECOVERY_VALIDATOR" ]]; then
+            node --import tsx "$RECOVERY_VALIDATOR" "$RELEASE_TAG"
+          else
+            npm run release:validate -- "$RELEASE_TAG"
+          fi
           npm run check
+          if [[ -n "$RECOVERY_PACKAGE_VERIFIER" ]]; then
+            git restore --source=HEAD -- scripts/package-validation.ts
+            git diff --exit-code -- scripts/package-validation.ts
+          fi
       - name: Pack exact publication artifact
         id: pack
         env:
@@ -156,7 +186,7 @@ jobs:
           release_dir="$RUNNER_TEMP/ywtc-release"
           mkdir -p "$release_dir"
           npm pack --ignore-scripts --json --pack-destination "$release_dir" > "$release_dir/pack.json"
-          archive_name="$(node -e "const p=require(process.argv[1]); process.stdout.write(p[0].filename)" "$release_dir/pack.json")"
+          archive_name="$(node -e "const p=require(process.argv[1]); const values=Array.isArray(p)?p:Object.values(p); const result=values.length===1?values[0]:undefined; if(!result||typeof result.filename!=='string'||!result.filename) throw new Error('npm pack returned no single valid artifact'); process.stdout.write(result.filename)" "$release_dir/pack.json")"
           archive="$release_dir/$archive_name"
           shasum -a 256 "$archive" > "$archive.sha256"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"

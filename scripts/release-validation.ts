@@ -103,9 +103,16 @@ export function validateReleaseTag(
     }
   }
 
-  const changelogHeading = new RegExp(`^## \\[${escapeRegExp(version.raw)}\\] - \\d{4}-\\d{2}-\\d{2}$`, 'm');
+  const escapedVersion = escapeRegExp(version.raw);
+  const isoDate = '\\d{4}-\\d{2}-\\d{2}';
+  const changelogHeading = new RegExp(
+    `^## \\[${escapedVersion}\\](?: - ${isoDate}|\\([^\\r\\n)]+\\) \\(${isoDate}\\))$`,
+    'm',
+  );
   if (!changelogHeading.test(metadata.changelog)) {
-    throw new Error(`CHANGELOG.md must contain a dated "## [${version.raw}] - YYYY-MM-DD" heading.`);
+    throw new Error(
+      `CHANGELOG.md must contain a dated "## [${version.raw}](comparison-url) (YYYY-MM-DD)" or "## [${version.raw}] - YYYY-MM-DD" heading.`,
+    );
   }
 
   const previousVersions = priorTags
