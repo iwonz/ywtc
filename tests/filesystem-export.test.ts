@@ -52,6 +52,21 @@ describe('transactional filesystem export', () => {
     await expect(readFile(path.join(output, '.ywtc-export.json'))).rejects.toThrow();
   });
 
+  it('materializes YFM tree directives into selected descendant links', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-tree-'));
+    const treeRoot = {...root, rawContent: '{% tree depth="2" sort="asc" sort_by="title" %}', references: []};
+    const treeGraph: PageGraph = {rootId: treeRoot.canonicalId, pages: [treeRoot, child], edges: [], warnings: []};
+    const resources = new Map<string, SourceResource[]>([[treeRoot.canonicalId, []], [child.canonicalId, []]]);
+    const source = {} as SourceAdapter;
+    const exporter = new FilesystemExporter(source, 1);
+    const markdown = path.join(temporary, 'markdown');
+    await exporter.export({graph: treeGraph, directory: markdown, format: 'markdown', identity: 'tree-md', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources});
+    expect(await readFile(path.join(markdown, 'index.md'), 'utf8')).toMatch(/- \[Child\]\(pages\/child-[a-f0-9]+\.md\)/);
+    const html = path.join(temporary, 'html');
+    await exporter.export({graph: treeGraph, directory: html, format: 'html', identity: 'tree-html', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources});
+    expect(await readFile(path.join(html, 'index.html'), 'utf8')).toContain('aria-label="Child pages"');
+  });
+
   it('preserves an export with an unknown manifest field instead of adopting it', async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-invalid-'));
     const output = path.join(temporary, 'site');

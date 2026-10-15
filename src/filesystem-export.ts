@@ -6,9 +6,9 @@ import {pipeline} from 'node:stream/promises';
 import {ZipArchive} from '@archiver/archiver';
 import PQueue from 'p-queue';
 import {z} from 'zod';
-import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml} from './content-model.js';
+import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml, setSourceResourceBinding, sourceResourceBindings} from './content-model.js';
 import type {ExportFormat, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
-import {safeFilename} from './input.js';
+import {DestinationNameAllocator} from './resource-reconciliation.js';
 
 export interface ExportManifestPage {
   sourceCanonicalId: string;
@@ -202,15 +202,16 @@ export class FilesystemExporter {
         if (input.signal?.aborted) throw input.signal.reason ?? new Error('Export cancelled');
         const resources = input.resourcesByPage?.get(page.canonicalId) ?? await this.source.listResources(page);
         resourcesByPage.set(page.canonicalId, resources);
-        const pageResources = new Map<string, RenderResourceBinding>();
+        const pageResources = sourceResourceBindings(page, resources);
+        const nameAllocator = new DestinationNameAllocator();
         const manifestResources: ExportManifestPage['resources'] = [];
         for (const resource of resources.filter((item) => item.kind !== 'grid')) {
-          const name = safeFilename(resource.name);
+          const name = nameAllocator.allocate(resource);
           const relative = `attachments/${stableSegment(page)}/${name}`;
           const destination = path.join(staging, relative);
           await mkdir(path.dirname(destination), {recursive: true});
           const downloaded = await this.source.downloadResource(resource, destination);
-          pageResources.set(name.toLocaleLowerCase(), {kind: 'file', path: relative, name});
+          setSourceResourceBinding(pageResources, page, resources, resource, {kind: 'file', path: relative, name});
           manifestResources.push({name, path: relative, size: downloaded.size, sha256: downloaded.sha256});
           input.onItem?.(`attachment ${name}`);
         }

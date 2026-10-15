@@ -10,7 +10,10 @@ import {
   renderMarkdown,
   renderStaticHtml,
   renderYfm,
+  setSourceResourceBinding,
   sourceResourceBindings,
+  stripAnsi,
+  verifyDestinationContent,
 } from '../src/content-model.js';
 import type {DestinationPage, RenderContext, SourcePage, SourceResource} from '../src/domain.js';
 
@@ -112,6 +115,72 @@ describe('normalized content pipeline', () => {
     const uploadedStorage = await renderConfluenceStorage(normalizePageContent(page), page, uploadedContext, 'DOC');
     expect(uploadedStorage.body).toContain('<ri:attachment ri:filename="diagram.png"');
     expect(uploadedStorage.body).toContain('<ri:attachment ri:filename="manual.pdf"');
+  });
+
+  it('resolves duplicate API names through exact download aliases and rewrites each resource independently', async () => {
+    const page = source('![First](/root/.files/image.png)\n\n![Second](/root/.files/image-1.png)');
+    const resources: SourceResource[] = [
+      {
+        provider: 'yandex-wiki', id: 'one', pageId: page.id, name: 'image.png', preferredName: 'image.png',
+        downloadUrl: '/root/.files/image.png', referenceAliases: ['/root/.files/image.png'], kind: 'image',
+      },
+      {
+        provider: 'yandex-wiki', id: 'two', pageId: page.id, name: 'image.png', preferredName: 'image-1.png',
+        downloadUrl: '/root/.files/image-1.png', referenceAliases: ['/root/.files/image-1.png'], kind: 'image',
+      },
+    ];
+    const bindings = sourceResourceBindings(page, resources);
+    setSourceResourceBinding(bindings, page, resources, resources[0]!, {kind: 'uploaded', resource: {id: 'd1', name: 'image.png'}});
+    setSourceResourceBinding(bindings, page, resources, resources[1]!, {kind: 'uploaded', resource: {id: 'd2', name: 'image-1.png'}});
+    const context: RenderContext = {
+      pages: new Map(),
+      resources: bindings, sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const rendered = await renderConfluenceStorage(normalizePageContent(page), page, context, 'DOC');
+    expect(rendered.body).toContain('ri:filename="image.png"');
+    expect(rendered.body).toContain('ri:filename="image-1.png"');
+  });
+
+  it('records empty headings as safe normalization and verifies provider-safe serialization changes', async () => {
+    const page = source('#\n\n## Named\n\nBody');
+    const document = normalizePageContent(page);
+    expect(document.normalizations).toEqual([expect.stringContaining('empty heading')]);
+    expect(document.warnings.join(' ')).not.toMatch(/Header without title/i);
+    expect(stripAnsi('\u001B[33mHeader without title\u001B[0m')).toBe('Header without title');
+    expect(verifyDestinationContent('<h1></h1><h2>Named</h2><p>Body</p>', '<h2 data-provider="true">Named</h2><p>Body</p>', 'confluence', page))
+      .toEqual({status: 'complete', differences: []});
+    expect(verifyDestinationContent('<h2>Named</h2><p>Body</p>', '<p>Named</p><p>Body</p>', 'confluence', page).status).toBe('partial');
+    expect(verifyDestinationContent('<table><tr><td>A</td></tr></table>', '<table><tr><td></td></tr></table>', 'confluence', page).status).toBe('failed');
+    expect(verifyDestinationContent('<pre><code>x</code></pre>', '<p>x</p>', 'confluence', page).status).toBe('failed');
+    expect(verifyDestinationContent('<a href="https://example.com">Link</a>', '<p>Link</p>', 'confluence', page).status).toBe('failed');
+  });
+
+  it('renders supported YFM tree directives natively and as static navigation', async () => {
+    const page = {...source('{% tree depth="2" sort="asc" sort_by="title" %}'), depth: 0};
+    const child = {...source('Child body'), id: '2', canonicalId: 'source:2', title: 'Child', projectedParentId: page.canonicalId, depth: 1};
+    const context: RenderContext = {
+      pages: new Map([[child.canonicalId, {path: 'pages/child.md', title: child.title}]]),
+      resources: new Map(), sourcePages: new Map([[page.canonicalId, page], [child.canonicalId, child]]),
+      currentPageId: page.canonicalId, currentPath: 'index.md',
+    };
+    const document = normalizePageContent(page);
+    const storage = await renderConfluenceStorage(document, page, context, 'DOC');
+    expect(storage.body).toContain('ac:name="children"');
+    expect(storage.body).toContain('ac:name="depth">2');
+    expect(storage.degraded).toBe(false);
+    await expect(renderMarkdown(document, context)).resolves.toMatchObject({body: expect.stringContaining('[Child](pages/child.md)')});
+    await expect(renderStaticHtml(document, context)).resolves.toMatchObject({body: expect.stringContaining('aria-label="Child pages"')});
+    await expect(renderYfm(document, context)).resolves.toMatchObject({body: expect.stringContaining('{% tree depth="2"')});
+  });
+
+  it('keeps Confluence storage void elements XML-safe after heading normalization', async () => {
+    const page = source('#\n\nLine one\\\nLine two\n\n---');
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const storage = await renderConfluenceStorage(normalizePageContent(page), page, context, 'DOC');
+    expect(storage.body).not.toMatch(/<(?:br|hr)>/);
+    expect(storage.body).toMatch(/<(?:br|hr)\s*\/>/);
   });
 
   it('provides complete raw fallback and rejects empty, truncated, or legacy placeholder bodies', () => {

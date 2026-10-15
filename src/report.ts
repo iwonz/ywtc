@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdir, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {GraphEdgeStatus, ProviderKind, TransferScope} from './domain.js';
+import {IssueCollector, type IssueInput, type MigrationIssue} from './issues.js';
 import type {RunStatus, StateLoadSource} from './state.js';
 
 export interface TransferReportPage {
@@ -16,7 +17,8 @@ export interface TransferReportPage {
   depth: number;
   status: string;
   resources: number;
-  bytes: number;
+  bytes?: number;
+  bytesUnknown?: number;
   links: number;
   images: number;
   tables: number;
@@ -24,6 +26,7 @@ export interface TransferReportPage {
   degraded: boolean;
   resourceFallbacks: Array<{name: string; error: string}>;
   warnings: string[];
+  normalizations?: string[];
   error?: string;
 }
 
@@ -50,8 +53,12 @@ export interface TransferReportData {
   edges: TransferReportEdge[];
   warnings: string[];
   errors: string[];
+  issues: MigrationIssue[];
   outputs: Array<{label: string; value: string}>;
-  summary: {pages: number; complete: number; partial: number; failed: number; resources: number; bytes: number; links: number; cycles: number};
+  summary: {
+    pages: number; complete: number; partial: number; failed: number; resources: number; bytes: number; bytesUnknown: number;
+    links: number; cycles: number; normalizations: number; degradations: number; warnings: number; errors: number; retryableFailures: number;
+  };
 }
 
 export interface MigrationReportPaths {
@@ -89,30 +96,40 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
   const cards = [
     ['Pages', data.summary.pages], ['Complete', data.summary.complete], ['Partial', data.summary.partial],
     ['Failed', data.summary.failed], ['Resources', data.summary.resources], ['Bytes', data.summary.bytes],
-    ['Links', data.summary.links], ['Cycles', data.summary.cycles],
+    ['Unknown sizes', data.summary.bytesUnknown], ['Links', data.summary.links], ['Cycles', data.summary.cycles],
+    ['Warnings', data.summary.warnings], ['Errors', data.summary.errors],
   ].map(([label, value]) => `<div class="stat"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('');
   const pageRows = data.pages.map((page) => {
     const source = safeHttpUrl(page.sourceUrl);
     const destination = safeHttpUrl(page.destinationUrl);
     const preview = previews.get(page.sourceCanonicalId);
     return `<details class="page" style="margin-left:${Math.min(page.depth, 8) * 14}px"><summary><span class="status ${statusClass(page.status)}">${escapeHtml(page.status)}</span><strong>${escapeHtml(page.sourceTitle)}</strong><span>${page.resources} files · ${page.links} links · depth ${page.depth}</span></summary>
-      <div class="meta">${source ? `<a href="${escapeHtml(source)}" target="_blank" rel="noreferrer">source</a>` : ''}${destination ? `<a href="${escapeHtml(destination)}" target="_blank" rel="noreferrer">destination</a>` : ''}<span>${escapeHtml(page.sourceCanonicalId)}</span></div>
+      <div class="meta">${source ? `<a href="${escapeHtml(source)}" target="_blank" rel="noreferrer">source</a>` : ''}${destination ? `<a href="${escapeHtml(destination)}" target="_blank" rel="noreferrer">destination</a>` : ''}<span>${escapeHtml(page.sourceCanonicalId)}</span>${page.bytes === undefined ? '<span>size unknown</span>' : `<span>${page.bytes} bytes${page.bytesUnknown ? ` + ${page.bytesUnknown} unknown` : ''}</span>`}</div>
       ${preview ? `<div class="compare"><section><h3>Source</h3><iframe sandbox srcdoc="${escapeHtml(preview.source)}"></iframe></section><section><h3>Destination</h3><iframe sandbox srcdoc="${escapeHtml(preview.destination)}"></iframe></section></div>` : ''}
       ${page.resourceFallbacks.length ? `<div class="fallbacks"><h3>Resource fallbacks</h3><ul>${page.resourceFallbacks.map((item) => `<li><strong>${escapeHtml(item.name)}</strong> — ${escapeHtml(item.error)}</li>`).join('')}</ul></div>` : ''}
+      ${(page.normalizations ?? []).length ? `<div><h3>Safe normalizations</h3><ul>${(page.normalizations ?? []).map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>` : ''}
       ${page.warnings.length ? `<ul class="warnings">${page.warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}${page.error ? `<p class="error">${escapeHtml(page.error)}</p>` : ''}</details>`;
   }).join('');
   const edgeRows = data.edges.map((edge) => `<tr><td>${escapeHtml(edge.status)}</td><td>${escapeHtml(edge.from)}</td><td>${escapeHtml(edge.to ?? '—')}</td><td>${escapeHtml(edge.raw)}</td></tr>`).join('');
   const outputRows = data.outputs.map((output) => `<li><strong>${escapeHtml(output.label)}</strong> <code>${escapeHtml(output.value)}</code></li>`).join('');
+  const issueSection = (title: string, issues: MigrationIssue[], className = ''): string => issues.length
+    ? `<section class="panel"><h2>${escapeHtml(title)}</h2><ul class="${className}">${issues.map((issue) => `<li><strong>${escapeHtml(issue.code)}</strong> · ${escapeHtml(issue.phase)}${issue.occurrences > 1 ? ` · ${issue.occurrences} attempts` : ''} — ${escapeHtml(issue.message)}</li>`).join('')}</ul></section>`
+    : '';
+  const normalizations = issueSection('Safe normalizations', data.issues.filter((issue) => issue.severity === 'normalization'));
+  const degradations = issueSection('Degradations', data.issues.filter((issue) => issue.severity === 'degradation'), 'warnings');
+  const retryable = issueSection('Retryable failures', data.issues.filter((issue) => issue.retryable), 'warnings');
+  const finalErrors = issueSection('Final errors', data.issues.filter((issue) => issue.severity === 'error'), 'error');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ywtc transfer ${escapeHtml(data.runId)}</title><style>
     :root{font:15px/1.5 system-ui,sans-serif;color:#182033;background:#f3f5f9}body{margin:0}main{max-width:1280px;margin:auto;padding:32px}.head{display:flex;justify-content:space-between;gap:20px;align-items:end}.muted{color:#697386}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:24px 0}.stat,.page,.panel{background:#fff;border:1px solid #dfe4ed;border-radius:10px}.stat{padding:14px}.stat small,.stat strong{display:block}.stat strong{font-size:24px}.page{margin:10px 0;padding:12px}.page summary{display:grid;grid-template-columns:100px minmax(180px,1fr) auto;gap:12px;cursor:pointer}.status{font-size:12px;font-weight:700;text-transform:uppercase}.ok{color:#087443}.warn{color:#9a6500}.bad{color:#b42318}.meta{display:flex;gap:14px;margin:12px 0;color:#697386}.compare{display:grid;grid-template-columns:1fr 1fr;gap:12px}.compare section{min-width:0}.compare iframe{width:100%;height:420px;border:1px solid #dfe4ed;border-radius:8px;background:#fff}.panel{padding:18px;margin-top:24px;overflow:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px;border-bottom:1px solid #e6e9ef;text-align:left}.warnings{color:#805800}.error{color:#b42318}code{overflow-wrap:anywhere}@media(max-width:760px){main{padding:18px}.page summary{grid-template-columns:1fr}.compare{grid-template-columns:1fr}.head{display:block}}
-  </style></head><body><main><header class="head"><div><h1>ywtc transfer report</h1><p>${escapeHtml(data.direction)} · ${escapeHtml(data.scope)} · ${data.dryRun ? 'dry-run' : 'live'}</p></div><div><span class="status ${statusClass(data.status)}">${escapeHtml(data.status)}</span><p class="muted">${escapeHtml(data.runId)}</p></div></header><div class="stats">${cards}</div><section><h2>Pages</h2>${pageRows || '<p>No pages.</p>'}</section><section class="panel"><h2>Link graph</h2><table><thead><tr><th>Status</th><th>From</th><th>To</th><th>Reference</th></tr></thead><tbody>${edgeRows}</tbody></table></section><section class="panel"><h2>Outputs</h2><ul>${outputRows}</ul><a download="report.json" href="report.json">Download report JSON</a></section>${data.errors.length ? `<section class="panel"><h2>Errors</h2><ul class="error">${data.errors.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></section>` : ''}${data.warnings.length ? `<section class="panel"><h2>Warnings</h2><ul class="warnings">${data.warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></section>` : ''}</main></body></html>`;
+  </style></head><body><main><header class="head"><div><h1>ywtc transfer report</h1><p>${escapeHtml(data.direction)} · ${escapeHtml(data.scope)} · ${data.dryRun ? 'dry-run' : 'live'}</p></div><div><span class="status ${statusClass(data.status)}">${escapeHtml(data.status)}</span><p class="muted">${escapeHtml(data.runId)}</p></div></header><div class="stats">${cards}</div><section><h2>Pages</h2>${pageRows || '<p>No pages.</p>'}</section><section class="panel"><h2>Link graph</h2><table><thead><tr><th>Status</th><th>From</th><th>To</th><th>Reference</th></tr></thead><tbody>${edgeRows}</tbody></table></section><section class="panel"><h2>Outputs</h2><ul>${outputRows}</ul><a download="report.json" href="report.json">Download report JSON</a></section>${normalizations}${degradations}${retryable}${finalErrors}</main></body></html>`;
 }
 
 export class TransferReport {
   readonly data: TransferReportData;
   private readonly previews = new Map<string, PreviewPair>();
+  private readonly issueCollector = new IssueCollector();
 
-  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'pages' | 'edges' | 'warnings' | 'errors' | 'outputs' | 'summary'>) {
+  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'pages' | 'edges' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'>) {
     this.data = {
       runId: randomUUID(),
       startedAt: new Date().toISOString(),
@@ -121,36 +138,51 @@ export class TransferReport {
       edges: [],
       warnings: [],
       errors: [],
+      issues: [],
       outputs: [],
-      summary: {pages: 0, complete: 0, partial: 0, failed: 0, resources: 0, bytes: 0, links: 0, cycles: 0},
+      summary: {pages: 0, complete: 0, partial: 0, failed: 0, resources: 0, bytes: 0, bytesUnknown: 0, links: 0, cycles: 0, normalizations: 0, degradations: 0, warnings: 0, errors: 0, retryableFailures: 0},
       ...input,
     };
   }
 
   addPage(page: TransferReportPage, previews?: PreviewPair): void {
+    page.warnings = [...new Set(page.warnings)];
+    page.normalizations = [...new Set(page.normalizations ?? [])];
     const index = this.data.pages.findIndex((item) => item.sourceCanonicalId === page.sourceCanonicalId);
     if (index >= 0) this.data.pages[index] = page;
     else this.data.pages.push(page);
     if (previews) this.previews.set(page.sourceCanonicalId, previews);
+    for (const message of page.normalizations) this.issue({code: `normalization:${message}`, severity: 'normalization', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
+    for (const message of page.warnings) this.issue({code: `warning:${message}`, severity: page.degraded ? 'degradation' : 'warning', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
   }
 
   setEdges(edges: TransferReportEdge[]): void { this.data.edges = edges; }
-  warning(message: string): void { this.data.warnings.push(message); }
-  error(message: string): void { this.data.errors.push(message); }
+  issue(input: IssueInput): void { this.issueCollector.add(input); }
+  warning(message: string): void { this.issue({code: `warning:${message}`, severity: 'warning', phase: 'report', retryable: false, message}); }
+  error(message: string): void { this.issue({code: `error:${message}`, severity: 'error', phase: 'report', retryable: false, message}); }
   output(label: string, value: string): void { this.data.outputs.push({label, value}); }
 
   finish(status: RunStatus): void {
     this.data.status = status;
     this.data.finishedAt = new Date().toISOString();
+    this.data.issues = this.issueCollector.list();
+    this.data.warnings = this.data.issues.filter((issue) => issue.severity === 'warning' || issue.severity === 'degradation').map((issue) => issue.message);
+    this.data.errors = this.data.issues.filter((issue) => issue.severity === 'error').map((issue) => issue.message);
     this.data.summary = {
       pages: this.data.pages.length,
       complete: this.data.pages.filter((page) => /complete|created|updated|planned/.test(page.status)).length,
       partial: this.data.pages.filter((page) => /partial|conflict/.test(page.status)).length,
       failed: this.data.pages.filter((page) => /failed|blocked/.test(page.status)).length,
       resources: this.data.pages.reduce((total, page) => total + page.resources, 0),
-      bytes: this.data.pages.reduce((total, page) => total + page.bytes, 0),
+      bytes: this.data.pages.reduce((total, page) => total + (page.bytes ?? 0), 0),
+      bytesUnknown: this.data.pages.reduce((total, page) => total + (page.bytesUnknown ?? 0), 0),
       links: this.data.pages.reduce((total, page) => total + page.links, 0),
       cycles: this.data.edges.filter((edge) => edge.status === 'cycle').length,
+      normalizations: this.issueCollector.count('normalization'),
+      degradations: this.issueCollector.count('degradation'),
+      warnings: this.issueCollector.count('warning') + this.issueCollector.count('degradation'),
+      errors: this.issueCollector.count('error'),
+      retryableFailures: this.issueCollector.countRetryableFailures(),
     };
   }
 

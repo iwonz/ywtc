@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {mkdtemp, readdir, readFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readdir, readFile, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
@@ -7,6 +7,7 @@ import type {AppConfig, ConfluenceConnectionProfile, ConnectionProfile, NetworkL
 import {legacyTransferPlaceholder} from '../src/content-model.js';
 import type {DestinationAdapter, DestinationContainer, DestinationPage, SourceAdapter, SourcePage, SourceResource, UploadedResource} from '../src/domain.js';
 import type {Logger} from '../src/logger.js';
+import {HttpRequestError} from '../src/http.js';
 import type {RemoteLocator} from '../src/locators.js';
 import {Migrator} from '../src/migrator.js';
 import type {TransferState} from '../src/state.js';
@@ -45,12 +46,16 @@ function fixture() {
   let updated = 0;
   let failUpload = false;
   let failUpdate = false;
+  let failCreatedVerification = false;
+  let downloads = 0;
   let version = 0;
   let current: DestinationPage | undefined;
-  const uploaded = new Map<string, UploadedResource>();
-  const page = (title: string, body: string): DestinationPage => ({
-    provider: 'confluence', profile: destinationProfile.name, id: '200', canonicalId: 'destination:confluence:200',
-    title, url: 'https://conf.example/confluence/pages/200', locator: '200', space: 'DOC',
+  const pages = new Map<string, DestinationPage>();
+  const missingIds = new Set<string>();
+  const uploaded = new Map<string, Map<string, UploadedResource>>();
+  const page = (title: string, body: string, id = current?.id ?? '200'): DestinationPage => ({
+    provider: 'confluence', profile: destinationProfile.name, id, canonicalId: `destination:confluence:${id}`,
+    title, url: `https://conf.example/confluence/pages/${id}`, locator: id, space: 'DOC', parentId: container.id,
     fingerprint: `version-${++version}`, content: body, contentFingerprint: sha(body), contentLength: Buffer.byteLength(body),
   });
   const source = {
@@ -61,7 +66,12 @@ function fixture() {
     getDescendants: async () => [],
     resolveReference: async () => undefined,
     listResources: async () => [resource],
-    downloadResource: async (_resource: SourceResource, destination: string) => ({path: destination, size: 4, sha256: sha('file'), mimeType: 'application/pdf'}),
+    downloadResource: async (_resource: SourceResource, destination: string) => {
+      downloads += 1;
+      await mkdir(path.dirname(destination), {recursive: true});
+      await writeFile(destination, 'file');
+      return {path: destination, size: 4, sha256: sha('file'), mimeType: 'application/pdf'};
+    },
   } as unknown as SourceAdapter;
   const destination = {
     profile: destinationProfile, kind: 'confluence', capabilities,
@@ -70,31 +80,44 @@ function fixture() {
     findChild: async () => undefined,
     createPage: async ({title, body}: {title: string; body: string}) => {
       created += 1;
-      current = page(title, body);
+      current = page(title, body, String(199 + created));
+      pages.set(current.id, current);
+      if (failCreatedVerification) missingIds.add(current.id);
       return current;
     },
-    updatePage: async ({title, body}: {title: string; body: string}) => {
+    updatePage: async ({page: selected, title, body}: {page: DestinationPage; title: string; body: string}) => {
       updated += 1;
       if (failUpdate) throw new Error('destination update unavailable');
-      current = page(title, body);
+      current = page(title, body, selected.id);
+      pages.set(current.id, current);
       return current;
     },
-    verifyPage: async () => current!,
-    uploadResource: async ({name}: {name: string}) => {
+    verifyPage: async (selected: DestinationPage) => {
+      if (missingIds.has(selected.id)) throw new HttpRequestError('No content found', 404);
+      return pages.get(selected.id) ?? current!;
+    },
+    uploadResource: async ({page: selected, name}: {page: DestinationPage; name: string}) => {
       if (failUpload) throw new Error('attachment upload unavailable');
       const value = {id: `uploaded-${name}`, name, size: 4};
-      uploaded.set(value.id, value);
+      const attachments = uploaded.get(selected.id) ?? new Map<string, UploadedResource>();
+      attachments.set(value.id, value);
+      uploaded.set(selected.id, attachments);
       return value;
     },
-    listUploadedResources: async () => [...uploaded.values()],
+    listUploadedResources: async (selected: DestinationPage) => [...(uploaded.get(selected.id)?.values() ?? [])],
   } as unknown as DestinationAdapter;
   return {
     source,
     destination,
     setFailUpload: (value: boolean) => { failUpload = value; },
     setFailUpdate: (value: boolean) => { failUpdate = value; },
-    setLegacyPlaceholder: () => { current = page(current!.title, legacyTransferPlaceholder('confluence', root)); },
-    snapshot: () => ({created, updated, current, uploaded: uploaded.size}),
+    setFailCreatedVerification: (value: boolean) => { failCreatedVerification = value; },
+    setLegacyPlaceholder: () => {
+      current = page(current!.title, legacyTransferPlaceholder('confluence', root), current!.id);
+      pages.set(current.id, current);
+    },
+    setCurrentMissing: () => { missingIds.add(current!.id); },
+    snapshot: () => ({created, updated, downloads, current, uploaded: [...uploaded.values()].reduce((total, items) => total + items.size, 0)}),
   };
 }
 
@@ -162,5 +185,41 @@ describe('source-derived remote page safety', () => {
     expect(adapters.snapshot().created).toBe(1);
     expect(adapters.snapshot().current?.content).toContain('Important body');
     expect(adapters.snapshot().current?.content).not.toContain('ywtc transfer in progress');
+  });
+
+  it('recreates a persistently missing confirmed page with bootstrap content and destination history', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5});
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed'});
+    const oldId = adapters.snapshot().current!.id;
+    adapters.setCurrentMissing();
+
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed-with-warnings', hasErrors: false});
+    expect(adapters.snapshot().created).toBe(2);
+    expect(adapters.snapshot().uploaded).toBe(2);
+    expect(adapters.snapshot().downloads).toBe(1);
+    expect(adapters.snapshot().current?.id).not.toBe(oldId);
+    expect(adapters.snapshot().current?.content).toContain('Important body');
+    const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
+    const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
+    expect(state.pages[root.canonicalId]?.previousDestinationIds).toContain(oldId);
+  });
+
+  it('fails safely when a recreated page cannot be confirmed by a repeated read', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5});
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed'});
+    adapters.setCurrentMissing();
+    adapters.setFailCreatedVerification(true);
+
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true});
+    const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
+    const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
+    expect(state.pages[root.canonicalId]).toMatchObject({status: 'failed'});
+    expect(adapters.snapshot().created).toBe(2);
   });
 });

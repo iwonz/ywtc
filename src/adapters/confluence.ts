@@ -67,6 +67,7 @@ function destinationPage(profile: ConfluenceConnectionProfile, client: Confluenc
     url: client.pageWebUrl(page),
     locator: page.id,
     space: page.space.key,
+    ...(page.ancestors?.at(-1)?.id ? {parentId: page.ancestors.at(-1)!.id} : {}),
     ...(page.version?.number ? {version: String(page.version.number)} : {}),
     fingerprint: fingerprint(page),
     content,
@@ -135,6 +136,9 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
       id: attachment.id,
       pageId: page.id,
       name: attachment.title,
+      preferredName: attachment.title,
+      referenceAliases: [attachment.title, `attachment:${attachment.title}`, attachment._links?.download]
+        .filter((value): value is string => Boolean(value)),
       ...(attachment.extensions?.fileSize !== undefined ? {size: attachment.extensions.fileSize} : {}),
       ...(attachment.metadata?.mediaType ? {mimeType: attachment.metadata.mediaType} : {}),
       ...(attachment._links?.download ? {downloadUrl: attachment._links.download} : {}),
@@ -161,6 +165,11 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     const found = await this.client.findPageByTitle(space, title);
     if (!found) return undefined;
     return destinationPage(this.profile, this.client, await this.client.getPage(found.id));
+  }
+
+  async findRecoverablePage(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined> {
+    const found = await this.findChild(container, title);
+    return found?.parentId === container.id ? found : undefined;
   }
 
   async createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage> {
@@ -203,6 +212,15 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
       ...(attachment.extensions?.fileSize !== undefined ? {size: attachment.extensions.fileSize} : {}),
       ...(attachment._links?.download ? {url: attachment._links.download} : {}),
     }));
+  }
+
+  async downloadUploadedResource(input: {page: DestinationPage; resource: UploadedResource; destination: string}) {
+    return this.client.downloadAttachment(input.page.id, {
+      id: input.resource.id,
+      title: input.resource.name,
+      ...(input.resource.size !== undefined ? {extensions: {fileSize: input.resource.size}} : {}),
+      ...(input.resource.url ? {_links: {download: input.resource.url}} : {}),
+    }, input.destination);
   }
 
   async verifyPage(page: DestinationPage): Promise<DestinationPage> {

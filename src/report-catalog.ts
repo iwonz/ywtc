@@ -22,6 +22,8 @@ const reportListSchema = z.object({
     complete: z.number().nonnegative(),
     partial: z.number().nonnegative(),
     failed: z.number().nonnegative(),
+    warnings: z.number().nonnegative().optional(),
+    errors: z.number().nonnegative().optional(),
   }),
 });
 
@@ -83,8 +85,8 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     complete: parsed.summary.complete,
     partial: parsed.summary.partial,
     failed: parsed.summary.failed,
-    warnings: parsed.warnings.length,
-    errors: parsed.errors.length,
+    warnings: parsed.summary.warnings ?? parsed.warnings.length,
+    errors: parsed.summary.errors ?? parsed.errors.length,
     directory,
     html,
     json,

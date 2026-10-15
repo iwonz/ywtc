@@ -62,6 +62,7 @@ function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): 
 function destinationPage(profile: YandexConnectionProfile, page: YandexPageDetails): DestinationPage {
   const content = page.content ?? '';
   const fingerprint = createHash('sha256').update(`${page.title}\0${content}\0${page.attributes?.modified_at ?? ''}`).digest('hex');
+  const parent = parentId(page);
   return {
     provider: 'yandex-wiki',
     profile: profile.name,
@@ -70,6 +71,7 @@ function destinationPage(profile: YandexConnectionProfile, page: YandexPageDetai
     title: page.title,
     url: pageUrl(profile, page.slug),
     locator: normalizeWikiSlug(page.slug),
+    ...(parent ? {parentId: parent} : {}),
     ...(page.attributes?.modified_at ? {version: page.attributes.modified_at} : {}),
     fingerprint,
     content,
@@ -98,7 +100,7 @@ function slugSegment(value: string): string {
 }
 
 function attachmentSize(value: string | number): number | undefined {
-  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : undefined;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
   const match = value.trim().match(/^(\d+(?:[.,]\d+)?)\s*(B|KB|KIB|MB|MIB|GB|GIB)?$/i);
   if (!match?.[1]) return undefined;
   const number = Number(match[1].replace(',', '.'));
@@ -110,16 +112,29 @@ function attachmentSize(value: string | number): number | undefined {
           : unit === 'GB' ? 1_000_000_000
             : unit === 'GIB' ? 1_073_741_824
               : 1;
-  return Number.isFinite(number) ? Math.round(number * multiplier) : undefined;
+  const bytes = Math.round(number * multiplier);
+  return Number.isFinite(bytes) && bytes > 0 ? bytes : undefined;
 }
 
 function attachmentResource(profile: YandexConnectionProfile, page: SourcePage, attachment: YandexAttachment): SourceResource {
   const numericSize = attachmentSize(attachment.size);
+  let preferredName = attachment.name;
+  let pathname: string | undefined;
+  try {
+    const url = new URL(attachment.download_url, page.url);
+    pathname = decodeURIComponent(url.pathname);
+    preferredName = pathname.split('/').filter(Boolean).at(-1) ?? attachment.name;
+  } catch {
+    // Keep the API name when a provider returns a non-URL download reference.
+  }
   return {
     provider: 'yandex-wiki',
     id: String(attachment.id),
     pageId: page.id,
     name: attachment.name,
+    preferredName,
+    referenceAliases: [attachment.name, preferredName, attachment.download_url, pathname]
+      .filter((value): value is string => Boolean(value)),
     ...(numericSize !== undefined ? {size: numericSize} : {}),
     ...(attachment.mimetype ? {mimeType: attachment.mimetype} : {}),
     ...(attachment.download_url ? {downloadUrl: attachment.download_url} : {}),
@@ -214,6 +229,10 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     }
   }
 
+  findRecoverablePage(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined> {
+    return this.findChild(container, title);
+  }
+
   async createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage> {
     const created = await this.client.createPage({slug: this.childSlug(input.container, input.title), title: input.title, content: input.body});
     return destinationPage(this.profile, created);
@@ -244,6 +263,10 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
         ...(attachment.download_url ? {url: attachment.download_url} : {}),
       };
     });
+  }
+
+  async downloadUploadedResource(input: {page: DestinationPage; resource: UploadedResource; destination: string}) {
+    return this.client.download(Number(input.page.id), Number(input.resource.id), input.destination);
   }
 
   async verifyPage(page: DestinationPage): Promise<DestinationPage> {

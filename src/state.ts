@@ -33,6 +33,8 @@ export interface ResourceTransferState {
   destinationName: string;
   sha256?: string;
   size?: number;
+  cachePath?: string;
+  mimeType?: string;
   status: 'planned' | 'complete' | 'partial' | 'failed';
   lastError?: string;
   updatedAt: string;
@@ -48,6 +50,7 @@ export interface PageTransferState {
   destinationCanonicalId?: string;
   destinationLocator?: string;
   destinationTitle: string;
+  previousDestinationIds?: string[];
   sourceFingerprint?: string;
   destinationFingerprint?: string;
   status: PageTransferStatus;
@@ -180,6 +183,8 @@ const resourceStateSchema = z.object({
   destinationName: z.string(),
   sha256: z.string().optional(),
   size: z.number().nonnegative().optional(),
+  cachePath: z.string().optional(),
+  mimeType: z.string().optional(),
   status: z.enum(['planned', 'complete', 'partial', 'failed']),
   lastError: z.string().optional(),
   updatedAt: z.string(),
@@ -195,6 +200,7 @@ const pageStateSchema = z.object({
   destinationCanonicalId: z.string().optional(),
   destinationLocator: z.string().optional(),
   destinationTitle: z.string(),
+  previousDestinationIds: z.array(z.string()).optional(),
   sourceFingerprint: z.string().optional(),
   destinationFingerprint: z.string().optional(),
   status: z.enum(['discovered', 'planned', 'skeleton-created', 'complete', 'partial', 'conflict', 'failed', 'blocked']),

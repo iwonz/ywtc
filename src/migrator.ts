@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import PQueue from 'p-queue';
 import {createProviderAdapter} from './adapters/factory.js';
@@ -14,8 +14,11 @@ import {
   renderedPreviewHtml,
   renderConfluenceStorage,
   renderYfm,
+  setSourceResourceBinding,
   sourceResourceBindings,
+  verifyDestinationContent,
 } from './content-model.js';
+import {ConfirmedDestinationMissingError, type ConsistencyRetryOptions, verifyConfirmedDestinationPage} from './consistency.js';
 import type {
   DestinationAdapter,
   DestinationContainer,
@@ -32,11 +35,11 @@ import type {
 import {assertTransferCapabilities} from './domain.js';
 import {FilesystemExporter, type FilesystemExportResult} from './filesystem-export.js';
 import {discoverPageGraph} from './graph.js';
-import {safeFilename} from './input.js';
 import type {Logger} from './logger.js';
 import type {DirectoryLocator, RemoteLocator, ResolvedLocator} from './locators.js';
 import {profileBaseUrl, sameRemoteInstance} from './locators.js';
 import {TransferReport, type MigrationReportPaths, type TransferReportPage} from './report.js';
+import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
 import {
   resolveStateLocation,
   StateStore,
@@ -154,7 +157,37 @@ function collisionTitle(page: SourcePage): string {
 function cachePath(cacheDirectory: string, page: SourcePage, resource: SourceResource): string {
   const pageKey = sha256(page.canonicalId).slice(0, 12);
   const resourceKey = sha256(`${resource.id}:${resource.name}`).slice(0, 12);
-  return path.join(cacheDirectory, pageKey, `${resourceKey}-${safeFilename(resource.name)}`);
+  return path.join(cacheDirectory, pageKey, `${resourceKey}-${preferredDestinationName(resource)}`);
+}
+
+function containedCachePath(cacheDirectory: string, candidate: string | undefined): string | undefined {
+  if (!candidate) return undefined;
+  const relative = path.relative(path.resolve(cacheDirectory), path.resolve(candidate));
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+    ? path.resolve(candidate)
+    : undefined;
+}
+
+function resetResourceDestinations(resources: PageTransferState['resources']): PageTransferState['resources'] {
+  return Object.fromEntries(Object.entries(resources).map(([id, resource]) => [id, {
+    sourceId: resource.sourceId,
+    sourceName: resource.sourceName,
+    destinationName: resource.destinationName,
+    ...(resource.sha256 ? {sha256: resource.sha256} : {}),
+    ...(resource.size !== undefined ? {size: resource.size} : {}),
+    ...(resource.cachePath ? {cachePath: resource.cachePath} : {}),
+    ...(resource.mimeType ? {mimeType: resource.mimeType} : {}),
+    status: 'planned' as const,
+    updatedAt: new Date().toISOString(),
+  }]));
+}
+
+function sourceDerivedTextMatches(expectedBody: string, actualBody: string | undefined, provider: SourcePage['provider'], page: SourcePage): boolean {
+  if (actualBody === undefined) return false;
+  const result = verifyDestinationContent(expectedBody, actualBody, provider, page);
+  if (result.status === 'complete') return true;
+  const text = (value: string): string => renderedPreviewHtml(value, provider).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text(expectedBody) === text(actualBody);
 }
 
 function destinationFromState(state: PageTransferState, adapter: DestinationAdapter): DestinationPage {
@@ -181,8 +214,13 @@ function reportPage(input: {
   document: NormalizedDocument;
   resourceFallbacks?: Array<{name: string; error: string}>;
   warnings?: string[];
+  normalizations?: string[];
+  resourceSizes?: Record<string, {size?: number}>;
   error?: string;
 }): TransferReportPage {
+  const transferable = input.resources.filter((resource) => resource.kind !== 'grid');
+  const sizes = transferable.map((resource) => input.resourceSizes?.[resource.id]?.size ?? resource.size);
+  const knownBytes = sizes.reduce<number>((total, size) => total + (size ?? 0), 0);
   return {
     sourceCanonicalId: input.page.canonicalId,
     sourceId: input.page.id,
@@ -196,15 +234,17 @@ function reportPage(input: {
     ...(input.page.projectedParentId ? {parentId: input.page.projectedParentId} : {}),
     depth: input.page.depth,
     status: input.status,
-    resources: input.resources.filter((resource) => resource.kind !== 'grid').length,
-    bytes: input.resources.reduce((total, resource) => total + (resource.size ?? 0), 0),
+    resources: transferable.length,
+    ...(transferable.length === 0 || sizes.some((size) => size !== undefined) ? {bytes: knownBytes} : {}),
+    bytesUnknown: sizes.filter((size) => size === undefined).length,
     links: input.document.metrics.links,
     images: input.document.metrics.images,
     tables: input.document.metrics.tables,
     codeBlocks: input.document.metrics.codeBlocks,
     degraded: input.document.degraded || (input.resourceFallbacks?.length ?? 0) > 0,
     resourceFallbacks: input.resourceFallbacks ?? [],
-    warnings: [...input.document.warnings, ...(input.warnings ?? [])],
+    warnings: [...new Set([...input.document.warnings, ...(input.warnings ?? [])])],
+    normalizations: [...new Set([...(input.document.normalizations ?? []), ...(input.normalizations ?? [])])],
     ...(input.error ? {error: input.error} : {}),
   };
 }
@@ -249,6 +289,7 @@ export class Migrator {
     private readonly config: AppConfig,
     private readonly logger: Logger,
     private readonly adapterFactory: typeof createProviderAdapter = createProviderAdapter,
+    private readonly consistencyOptions: ConsistencyRetryOptions = {},
   ) {}
 
   async run(options: TransferOptions): Promise<TransferResult> {
@@ -328,13 +369,17 @@ export class Migrator {
       report.error(message);
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {pages: 0, warnings: 0, errors: 1});
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
+        pages: 0,
+        warnings: report.data.summary.warnings,
+        errors: report.data.summary.errors,
+      });
       throw new MigrationRunError(message, reportPaths, stateLocation.filename, {cause: error});
     }
 
     const resourcesByPage = new Map<string, SourceResource[]>();
     const inventoryQueue = new PQueue({concurrency: options.concurrency});
-    const inventory = {resources: 0, bytes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0};
+    const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0};
     status(`Inspecting content and resources for ${graph.pages.length} pages`);
     const inventoryErrors: string[] = [];
     await Promise.all(graph.pages.map((page) => inventoryQueue.add(async () => {
@@ -351,6 +396,7 @@ export class Migrator {
         );
         inventory.resources += resources.filter((resource) => resource.kind !== 'grid').length;
         inventory.bytes += resources.reduce((total, resource) => total + (resource.size ?? 0), 0);
+        inventory.unknownSizes += resources.filter((resource) => resource.kind !== 'grid' && resource.size === undefined).length;
         inventory.grids += resources.filter((resource) => resource.kind === 'grid').length;
         inventory.links += document.metrics.links;
         inventory.images += document.metrics.images;
@@ -367,29 +413,29 @@ export class Migrator {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {pages: graph.pages.length, warnings: graph.warnings.length, errors: inventoryErrors.length});
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
+        pages: graph.pages.length,
+        warnings: report.data.summary.warnings,
+        errors: report.data.summary.errors,
+      });
       throw new MigrationRunError('Resource preflight failed before destination mutation', reportPaths, stateLocation.filename);
     }
-    const planSummary = `Plan ready: ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} bytes) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks`;
+    const planSummary = `Plan ready: ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks`;
     status(planSummary);
     this.logger.info(planSummary);
 
     let output: string | undefined;
     let archive: string | undefined;
-    let transferErrors = 0;
-    let transferWarnings = graph.warnings.length;
     try {
       if (options.destination.type === 'directory') {
         const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage);
         output = result.directory;
         archive = result.archive;
-        transferErrors += result.errors.length;
-        transferWarnings += result.warnings.length;
         report.output('directory', result.directory);
         if (result.archive) report.output('archive', result.archive);
         if (result.backup) report.output('backup', result.backup);
       } else {
-        const result = await this.transferRemote({
+        await this.transferRemote({
           source,
           destination: destination!,
           container: container!,
@@ -400,26 +446,29 @@ export class Migrator {
           sourceFingerprints,
           resourcesByPage,
         });
-        transferErrors += result.errors;
-        transferWarnings += result.warnings;
         output = container!.url;
         report.output('destination', container!.url);
       }
-      const finalStatus = runStatus(transferErrors, transferWarnings);
+      report.finish('completed');
+      const finalStatus = runStatus(report.data.summary.errors, report.data.summary.warnings);
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {pages: graph.pages.length, warnings: transferWarnings, errors: transferErrors});
-      status(`${finalStatus}: ${graph.pages.length} pages · ${transferErrors} errors · ${transferWarnings} warnings`);
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
+        pages: graph.pages.length,
+        warnings: report.data.summary.warnings,
+        errors: report.data.summary.errors,
+      });
+      status(`${finalStatus}: ${graph.pages.length} pages · ${report.data.summary.errors} errors · ${report.data.summary.warnings} warnings`);
       return {
         status: finalStatus,
-        hasErrors: transferErrors > 0,
+        hasErrors: report.data.summary.errors > 0,
         reportPaths,
         stateId: stateLocation.id,
         stateFilename: stateLocation.filename,
         ...(store.loadInfo.backupFilename ? {stateBackupFilename: store.loadInfo.backupFilename} : {}),
         ...(output ? {output} : {}),
         ...(archive ? {archive} : {}),
-        summary: {...report.data.summary, warnings: transferWarnings, errors: transferErrors},
+        summary: report.data.summary,
       };
     } catch (error) {
       const cancelled = options.signal?.aborted;
@@ -428,7 +477,11 @@ export class Migrator {
       report.error(message);
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {pages: graph.pages.length, warnings: transferWarnings, errors: transferErrors + 1});
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
+        pages: graph.pages.length,
+        warnings: report.data.summary.warnings,
+        errors: report.data.summary.errors,
+      });
       this.logger.error(`${message}. Report: ${reportPaths.html}`);
       throw new MigrationRunError(message, reportPaths, stateLocation.filename, {cause: error});
     }
@@ -473,16 +526,22 @@ export class Migrator {
       const document = await loadCachedDocument(options.cacheDirectory, page.canonicalId);
       const manifestPage = result.manifest.pages.find((item) => item.sourceCanonicalId === page.canonicalId);
       const previous = store.value.pages[page.canonicalId];
-      const resources = Object.fromEntries((manifestPage?.resources ?? []).map((resource, index) => [String(index), {
-        sourceId: String(index),
-        sourceName: resource.name,
+      const sourceResources = resourcesByPage.get(page.canonicalId) ?? [];
+      const transferableResources = sourceResources.filter((resource) => resource.kind !== 'grid');
+      const resources = Object.fromEntries((manifestPage?.resources ?? []).map((resource, index) => {
+        const sourceResource = transferableResources[index];
+        const sourceId = sourceResource?.id ?? String(index);
+        return [sourceId, {
+        sourceId,
+        sourceName: sourceResource?.name ?? resource.name,
         destinationId: resource.path,
         destinationName: resource.name,
         ...(resource.sha256 ? {sha256: resource.sha256} : {}),
         ...(resource.size !== undefined ? {size: resource.size} : {}),
         status: 'complete' as const,
         updatedAt: new Date().toISOString(),
-      }]));
+      }];
+      }));
       await store.setPage({
         sourceId: page.id,
         sourceCanonicalId: page.canonicalId,
@@ -503,8 +562,9 @@ export class Migrator {
       report.addPage(reportPage({
         page,
         status: options.dryRun ? 'planned' : result.errors.length ? 'partial' : 'complete',
-        resources: resourcesByPage.get(page.canonicalId) ?? [],
+        resources: sourceResources,
         document,
+        resourceSizes: resources,
         ...(manifestPage?.warnings ? {warnings: manifestPage.warnings} : {}),
       }), {source: normalizedPreviewHtml(document), destination: normalizedPreviewHtml(document)});
     }
@@ -523,13 +583,11 @@ export class Migrator {
     report: TransferReport;
     sourceFingerprints: Map<string, string>;
     resourcesByPage: Map<string, SourceResource[]>;
-  }): Promise<{errors: number; warnings: number}> {
+  }): Promise<void> {
     const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage} = input;
     const destinationPages = new Map<string, DestinationPage>();
     const sourcePages = new Map(graph.pages.map((page) => [page.canonicalId, page]));
     const bootstrapBodies = new Map<string, RenderedDocument>();
-    let errors = 0;
-    let warnings = 0;
     const totalResources = [...resourcesByPage.values()].reduce(
       (total, resources) => total + resources.filter((resource) => resource.kind !== 'grid').length,
       0,
@@ -567,7 +625,6 @@ export class Migrator {
       const parent = page.projectedParentId ? destinationPages.get(page.projectedParentId) : container;
       if (!parent) {
         const message = `Destination parent is unavailable for ${page.title}`;
-        errors += 1;
         report.error(message);
         progress.staged += 1;
         updateProgress(message);
@@ -578,11 +635,63 @@ export class Migrator {
         const bootstrap = bootstrapBodies.get(page.canonicalId)!;
         let created: DestinationPage;
         let title = saved?.destinationTitle ?? page.title;
+        let resourcesForState = saved?.resources ?? {};
+        let previousDestinationIds = saved?.previousDestinationIds ?? [];
+        let mappingRecovered = false;
         if (saved?.destinationId) {
-          created = await destination.verifyPage(destinationFromState(saved, destination));
+          const mapped = destinationFromState(saved, destination);
+          try {
+            created = await verifyConfirmedDestinationPage(destination, mapped, {
+              ...this.consistencyOptions,
+              onRetry: (attempt, delayMs) => report.issue({
+                code: 'destination-consistency-retry',
+                severity: 'warning',
+                phase: 'verification',
+                pageId: page.canonicalId,
+                retryable: true,
+                message: `${page.title}: destination page ${mapped.id} returned 404; consistency retry ${attempt} in ${delayMs} ms`,
+              }),
+            });
+          } catch (error) {
+            if (!(error instanceof ConfirmedDestinationMissingError) || options.dryRun) throw error;
+            if (page.projectedParentId) {
+              await verifyConfirmedDestinationPage(destination, parent as DestinationPage, this.consistencyOptions);
+            }
+            const candidate = await (destination.findRecoverablePage?.(parent, title) ?? destination.findChild(parent, title));
+            if (candidate && sourceDerivedTextMatches(bootstrap.body, candidate.content, destination.kind, cachedPage)) {
+              created = candidate;
+            } else {
+              let recoveryTitle = title;
+              const occupied = candidate ?? await destination.findChild(parent, recoveryTitle);
+              if (occupied) {
+                const base = collisionTitle(page);
+                const hash = sha256(page.canonicalId).slice(0, 8);
+                recoveryTitle = base;
+                let sequence = 0;
+                while (await destination.findChild(parent, recoveryTitle)) {
+                  sequence += 1;
+                  recoveryTitle = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
+                }
+              }
+              created = await destination.createPage({container: parent, title: recoveryTitle, body: bootstrap.body});
+              created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
+              assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
+            }
+            previousDestinationIds = [...new Set([...previousDestinationIds, mapped.id])];
+            resourcesForState = resetResourceDestinations(saved.resources);
+            mappingRecovered = true;
+            report.issue({
+              code: 'destination-mapping-recovered',
+              severity: 'warning',
+              phase: 'page',
+              pageId: page.canonicalId,
+              retryable: false,
+              message: `${page.title}: replaced unavailable destination mapping ${mapped.id} with ${created.id}`,
+            });
+          }
           const generatedPlaceholder = created.title === saved.destinationTitle
             && isLegacyTransferPlaceholder(created.content, destination.kind, cachedPage);
-          if (['complete', 'partial'].includes(saved.status) && saved.destinationFingerprint && created.fingerprint !== saved.destinationFingerprint && !generatedPlaceholder) {
+          if (!mappingRecovered && ['complete', 'partial'].includes(saved.status) && saved.destinationFingerprint && created.fingerprint !== saved.destinationFingerprint && !generatedPlaceholder) {
             throw new Error(`Destination conflict for ${page.title}: content changed since the last verified run`);
           }
           if (generatedPlaceholder && !options.dryRun) {
@@ -592,7 +701,7 @@ export class Migrator {
               body: bootstrap.body,
               ...(created.fingerprint ? {expectedFingerprint: created.fingerprint} : {}),
             });
-            created = await destination.verifyPage(created);
+            created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
             assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
           }
         } else if (options.dryRun) {
@@ -620,7 +729,7 @@ export class Migrator {
             }
           }
           created = await destination.createPage({container: parent, title, body: bootstrap.body});
-          created = await destination.verifyPage(created);
+          created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
           assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
         }
         destinationPages.set(page.canonicalId, created);
@@ -634,17 +743,17 @@ export class Migrator {
           destinationCanonicalId: created.canonicalId,
           destinationLocator: created.url,
           destinationTitle: created.title,
+          ...(previousDestinationIds.length > 0 ? {previousDestinationIds} : {}),
           sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
           ...(created.fingerprint ? {destinationFingerprint: created.fingerprint} : {}),
           status: options.dryRun ? 'planned' : saved?.status ?? 'skeleton-created',
-          resources: saved?.resources ?? {},
+          resources: resourcesForState,
           degradations: saved?.degradations ?? [],
           updatedAt: new Date().toISOString(),
         };
         await store.setPage(next);
         options.onStatus?.(`${options.dryRun ? 'Planned' : 'Staged content for'} ${page.title}`);
       } catch (error) {
-        errors += 1;
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         report.error(message);
         const savedState = store.value.pages[page.canonicalId];
@@ -678,23 +787,33 @@ export class Migrator {
       const state = store.value.pages[page.canonicalId]!;
       const bootstrap = bootstrapBodies.get(page.canonicalId)!;
       const bindings = sourceResourceBindings(cachedPage, resources);
+      const transferableResources = resources.filter((item) => item.kind !== 'grid');
       const resourceProblems: string[] = [];
       const failedResourceIds = new Set<string>();
       const recordResourceFailure = async (resource: SourceResource, detail: string): Promise<void> => {
         if (!failedResourceIds.has(resource.id)) {
           failedResourceIds.add(resource.id);
-          errors += 1;
           resourceProblems.push(detail);
-          report.error(`${page.title}: ${detail}`);
+          report.issue({
+            code: 'resource-transfer-failed',
+            severity: 'error',
+            phase: 'resource',
+            pageId: page.canonicalId,
+            resourceId: resource.id,
+            retryable: true,
+            message: `${page.title}: ${detail}`,
+          });
         }
         const previous = state.resources[resource.id];
         state.resources[resource.id] = {
           sourceId: resource.id,
           sourceName: resource.name,
           ...(previous?.destinationId ? {destinationId: previous.destinationId} : {}),
-          destinationName: previous?.destinationName ?? safeFilename(resource.name),
+          destinationName: previous?.destinationName ?? preferredDestinationName(resource),
           ...(previous?.sha256 ? {sha256: previous.sha256} : {}),
           ...(previous?.size !== undefined ? {size: previous.size} : resource.size !== undefined ? {size: resource.size} : {}),
+          ...(previous?.cachePath ? {cachePath: previous.cachePath} : {}),
+          ...(previous?.mimeType ? {mimeType: previous.mimeType} : {}),
           status: 'failed',
           lastError: detail,
           updatedAt: new Date().toISOString(),
@@ -702,24 +821,37 @@ export class Migrator {
         await store.setPage({...state, status: 'partial', lastError: detail, updatedAt: new Date().toISOString()});
       };
       try {
-        for (const resource of resources.filter((item) => item.kind !== 'grid')) {
-          const key = resource.name.toLocaleLowerCase();
-          const existing = state.resources[resource.id];
-          if (existing?.status === 'complete' && existing.destinationId) {
-            bindings.set(key, {kind: 'uploaded', resource: {
-              id: existing.destinationId,
-              name: existing.destinationName,
-              ...(existing.size !== undefined ? {size: existing.size} : {}),
-              ...(existing.sha256 ? {fingerprint: existing.sha256} : {}),
-            }});
-            progress.resources += 1;
-            updateProgress(`reused ${resource.name}`);
-            continue;
+        let remoteResources = options.dryRun ? [] : await destination.listUploadedResources(destinationPage);
+        const nameAllocator = new DestinationNameAllocator(remoteResources.map((resource) => resource.name));
+        for (const resourceState of Object.values(state.resources)) {
+          if (resourceState.status === 'complete') nameAllocator.reserve(resourceState.destinationName);
+        }
+        const fallbackBinding = (resource: SourceResource) => [...sourceResourceBindings(cachedPage, [resource]).values()][0]!;
+        const remoteMatches = async (
+          remote: (typeof remoteResources)[number],
+          downloaded: {path: string; size: number; sha256: string},
+          trustedMapping = false,
+        ): Promise<boolean> => {
+          if (remote.size !== undefined && remote.size !== downloaded.size) return false;
+          if (!destination.downloadUploadedResource) {
+            return remote.fingerprint === downloaded.sha256
+              || (trustedMapping && (remote.size === undefined || remote.size === downloaded.size));
           }
+          const comparisonPath = `${downloaded.path}.destination-${sha256(remote.id).slice(0, 8)}`;
+          try {
+            const actual = await destination.downloadUploadedResource({page: destinationPage, resource: remote, destination: comparisonPath});
+            return actual.size === downloaded.size && actual.sha256 === downloaded.sha256;
+          } finally {
+            await rm(comparisonPath, {force: true});
+          }
+        };
+        for (const resource of transferableResources) {
+          const existing = state.resources[resource.id];
           if (options.dryRun) {
-            bindings.set(key, {kind: 'uploaded', resource: {
+            const destinationName = nameAllocator.allocate(resource, existing?.status === 'complete' ? existing.destinationName : undefined);
+            setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: {
               id: `dry-run:${resource.id}`,
-              name: safeFilename(resource.name),
+              name: destinationName,
               ...(resource.size !== undefined ? {size: resource.size} : {}),
             }});
             progress.resources += 1;
@@ -727,17 +859,106 @@ export class Migrator {
             continue;
           }
           try {
-            const filename = cachePath(options.cacheDirectory, page, resource);
-            const downloaded = await source.downloadResource(resource, filename);
-            const result = await destination.uploadResource({
-              page: destinationPage,
-              name: safeFilename(resource.name),
-              filePath: downloaded.path,
+            const filename = containedCachePath(options.cacheDirectory, existing?.cachePath)
+              ?? cachePath(options.cacheDirectory, page, resource);
+            const cached = await verifiedCacheFile(filename, existing?.sha256 ? {
+              sha256: existing.sha256,
+              ...(existing.size !== undefined ? {size: existing.size} : {}),
+              ...(existing.mimeType ? {mimeType: existing.mimeType} : {}),
+            } : undefined);
+            const downloaded = cached ?? await source.downloadResource(resource, filename);
+            const mimeType = downloaded.mimeType ?? existing?.mimeType ?? resource.mimeType;
+            const mappedRemote = existing?.destinationId
+              ? remoteResources.find((item) => item.id === existing.destinationId)
+              : undefined;
+            if (mappedRemote && await remoteMatches(mappedRemote, downloaded, true)) {
+              setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: mappedRemote});
+              state.resources[resource.id] = {
+                sourceId: resource.id,
+                sourceName: resource.name,
+                destinationId: mappedRemote.id,
+                destinationName: mappedRemote.name,
+                sha256: downloaded.sha256,
+                size: downloaded.size,
+                cachePath: downloaded.path,
+                ...(mimeType ? {mimeType} : {}),
+                status: 'complete',
+                updatedAt: new Date().toISOString(),
+              };
+              await store.setPage({...state, updatedAt: new Date().toISOString()});
+              updateProgress(`reused ${resource.name}`);
+              continue;
+            }
+            const reconciliationNames = new Set([
+              preferredDestinationName(resource),
+              ...(existing?.sha256 ? [existing.destinationName] : []),
+            ].map((name) => name.toLocaleLowerCase()));
+            const reconciled = remoteResources.find((item) => reconciliationNames.has(item.name.toLocaleLowerCase()));
+            if (reconciled && await remoteMatches(reconciled, downloaded)) {
+              setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: reconciled});
+              state.resources[resource.id] = {
+                sourceId: resource.id,
+                sourceName: resource.name,
+                destinationId: reconciled.id,
+                destinationName: reconciled.name,
+                sha256: downloaded.sha256,
+                size: downloaded.size,
+                cachePath: downloaded.path,
+                ...(mimeType ? {mimeType} : {}),
+                status: 'complete',
+                updatedAt: new Date().toISOString(),
+              };
+              await store.setPage({...state, updatedAt: new Date().toISOString()});
+              updateProgress(`reconciled ${resource.name}`);
+              continue;
+            }
+            const updateExisting = existing?.status === 'complete' && mappedRemote ? mappedRemote : undefined;
+            const destinationName = updateExisting?.name ?? nameAllocator.allocate(
+              resource,
+              existing?.status === 'complete' && !nameAllocator.isOccupied(existing.destinationName) ? existing.destinationName : undefined,
+            );
+            state.resources[resource.id] = {
+              sourceId: resource.id,
+              sourceName: resource.name,
+              destinationName,
+              sha256: downloaded.sha256,
               size: downloaded.size,
-              ...(downloaded.mimeType ?? resource.mimeType ? {mimeType: downloaded.mimeType ?? resource.mimeType} : {}),
-              ...(existing?.destinationId ? {existingId: existing.destinationId} : {}),
-            });
-            bindings.set(key, {kind: 'uploaded', resource: result});
+              cachePath: downloaded.path,
+              ...(mimeType ? {mimeType} : {}),
+              status: 'planned',
+              updatedAt: new Date().toISOString(),
+            };
+            await store.setPage({...state, updatedAt: new Date().toISOString()});
+            const matchingName = remoteResources.find((item) => item.name.toLocaleLowerCase() === destinationName.toLocaleLowerCase());
+            let result = matchingName && await remoteMatches(matchingName, downloaded) ? matchingName : undefined;
+            if (!result) {
+              try {
+                result = await destination.uploadResource({
+                  page: destinationPage,
+                  name: destinationName,
+                  filePath: downloaded.path,
+                  size: downloaded.size,
+                  ...(mimeType ? {mimeType} : {}),
+                  ...(updateExisting ? {existingId: updateExisting.id} : {}),
+                });
+              } catch (uploadError) {
+                remoteResources = await destination.listUploadedResources(destinationPage);
+                const uncertain = remoteResources.find((item) => item.name.toLocaleLowerCase() === destinationName.toLocaleLowerCase());
+                if (uncertain && await remoteMatches(uncertain, downloaded)) result = uncertain;
+                else {
+                  const retryName = nameAllocator.allocate(resource);
+                  result = await destination.uploadResource({
+                    page: destinationPage,
+                    name: retryName,
+                    filePath: downloaded.path,
+                    size: downloaded.size,
+                    ...(mimeType ? {mimeType} : {}),
+                  }).catch((retryError: unknown) => { throw new Error(`${retryError instanceof Error ? retryError.message : String(retryError)} (initial upload: ${uploadError instanceof Error ? uploadError.message : String(uploadError)})`); });
+                }
+              }
+            }
+            if (!remoteResources.some((item) => item.id === result.id)) remoteResources.push(result);
+            setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: result});
             state.resources[resource.id] = {
               sourceId: resource.id,
               sourceName: resource.name,
@@ -745,6 +966,8 @@ export class Migrator {
               destinationName: result.name,
               sha256: downloaded.sha256,
               size: downloaded.size,
+              cachePath: downloaded.path,
+              ...(mimeType ? {mimeType} : {}),
               status: 'complete',
               updatedAt: new Date().toISOString(),
             };
@@ -758,19 +981,18 @@ export class Migrator {
           }
         }
 
-        if (!options.dryRun && resources.some((resource) => resource.kind !== 'grid')) {
+        if (!options.dryRun && transferableResources.length > 0) {
           try {
-            const remoteResources = await destination.listUploadedResources(destinationPage);
-            for (const resource of resources.filter((item) => item.kind !== 'grid')) {
+            remoteResources = await destination.listUploadedResources(destinationPage);
+            for (const resource of transferableResources) {
               const transferred = state.resources[resource.id];
               if (transferred?.status !== 'complete') continue;
               const remote = remoteResources.find((item) => item.id === transferred.destinationId || item.name === transferred.destinationName);
-              const sizeMismatch = destination.kind === 'confluence'
-                && transferred.size !== undefined
+              const sizeMismatch = transferred.size !== undefined
                 && remote?.size !== undefined
                 && transferred.size !== remote.size;
               if (!remote || sizeMismatch) {
-                bindings.set(resource.name.toLocaleLowerCase(), sourceResourceBindings(cachedPage, [resource]).get(resource.name.toLocaleLowerCase())!);
+                setSourceResourceBinding(bindings, cachedPage, resources, resource, fallbackBinding(resource));
                 await recordResourceFailure(
                   resource,
                   !remote
@@ -778,13 +1000,13 @@ export class Migrator {
                     : `Verification size mismatch for ${resource.name}: ${transferred.size} source bytes, ${remote.size} destination bytes`,
                 );
               } else {
-                bindings.set(resource.name.toLocaleLowerCase(), {kind: 'uploaded', resource: remote});
+                setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: remote});
               }
             }
           } catch (error) {
-            for (const resource of resources.filter((item) => item.kind !== 'grid')) {
+            for (const resource of transferableResources) {
               if (state.resources[resource.id]?.status !== 'complete') continue;
-              bindings.set(resource.name.toLocaleLowerCase(), sourceResourceBindings(cachedPage, [resource]).get(resource.name.toLocaleLowerCase())!);
+              setSourceResourceBinding(bindings, cachedPage, resources, resource, fallbackBinding(resource));
               await recordResourceFailure(resource, `Destination resource verification failed for ${resource.name}: ${error instanceof Error ? error.message : String(error)}`);
             }
           }
@@ -797,7 +1019,6 @@ export class Migrator {
           currentPageId: page.canonicalId,
         };
         const rendered = await renderRemoteDocument({destination, container, document, page: cachedPage, context});
-        warnings += rendered.warnings.length;
         if (rendered.degraded && !options.dryRun) {
           const extension = page.rawFormat === 'yfm' ? 'yfm' : 'storage.xml';
           const snapshotName = `ywtc-source-${sha256(page.canonicalId).slice(0, 8)}.${extension}`;
@@ -833,7 +1054,6 @@ export class Migrator {
             };
           } catch (error) {
             const detail = `Raw source snapshot was not transferred: ${error instanceof Error ? error.message : String(error)}`;
-            errors += 1;
             resourceProblems.push(detail);
             report.error(`${page.title}: ${detail}`);
             state.resources[snapshotKey] = {
@@ -845,11 +1065,12 @@ export class Migrator {
               updatedAt: new Date().toISOString(),
             };
           }
-          state.degradations = [...new Set([...state.degradations, ...rendered.warnings, ...resourceProblems])];
+          state.degradations = [...new Set([...rendered.warnings, ...resourceProblems])];
         }
         let verified = destinationPage;
+        let verificationDegradations: string[] = [];
         if (!options.dryRun) {
-          const current = await destination.verifyPage(destinationPage);
+          const current = await verifyConfirmedDestinationPage(destination, destinationPage, this.consistencyOptions);
           if (
             destinationPage.contentFingerprint
             && current.contentFingerprint
@@ -867,10 +1088,11 @@ export class Migrator {
             state.destinationFingerprint = verified.fingerprint;
             await store.setPage({...state, updatedAt: new Date().toISOString()});
           }
-          verified = await destination.verifyPage(verified);
-          assertDestinationContent(rendered.body, verified.content, destination.kind, cachedPage);
+          verified = await verifyConfirmedDestinationPage(destination, verified, this.consistencyOptions);
+          const verification = assertDestinationContent(rendered.body, verified.content, destination.kind, cachedPage);
+          verificationDegradations = verification.status === 'partial' ? verification.differences : [];
         }
-        const partial = rendered.degraded || resourceProblems.length > 0;
+        const partial = rendered.degraded || resourceProblems.length > 0 || verificationDegradations.length > 0;
         const lastResourceProblem = resourceProblems.at(-1);
         const clearedState = {...state};
         delete clearedState.lastError;
@@ -882,7 +1104,7 @@ export class Migrator {
           destinationTitle: verified.title,
           ...(verified.fingerprint ? {destinationFingerprint: verified.fingerprint} : {}),
           status: options.dryRun ? 'planned' : partial ? 'partial' : 'complete',
-          degradations: [...new Set([...state.degradations, ...rendered.warnings, ...resourceProblems])],
+          degradations: [...new Set([...rendered.warnings, ...resourceProblems, ...verificationDegradations])],
           ...(lastResourceProblem ? {lastError: lastResourceProblem} : {}),
           updatedAt: new Date().toISOString(),
         };
@@ -899,17 +1121,18 @@ export class Migrator {
           status: finalState.status,
           resources,
           document,
+          resourceSizes: finalState.resources,
           resourceFallbacks: fallbackDetails,
-          warnings: [...rendered.warnings, ...resourceProblems],
+          warnings: [...rendered.warnings, ...verificationDegradations],
+          normalizations: rendered.normalizations,
         }), {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(verified.content ?? rendered.body, destination.kind)});
       } catch (error) {
-        errors += 1;
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         let failureStatus: PageTransferState['status'] = /conflict/i.test(message) ? 'conflict' : 'failed';
         let actual: DestinationPage | undefined;
         if (failureStatus !== 'conflict' && !options.dryRun) {
           try {
-            actual = await destination.verifyPage(destinationPage);
+            actual = await verifyConfirmedDestinationPage(destination, destinationPage, this.consistencyOptions);
             assertDestinationContent(bootstrap.body, actual.content, destination.kind, cachedPage);
             failureStatus = 'partial';
           } catch {
@@ -937,6 +1160,7 @@ export class Migrator {
             status: failureStatus,
             resources,
             document,
+            resourceSizes: state.resources,
             resourceFallbacks: fallbackDetails,
             warnings: resourceProblems,
             error: message,
@@ -952,6 +1176,5 @@ export class Migrator {
     await contentQueue.onIdle();
     const rejected = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (rejected) throw rejected.reason;
-    return {errors, warnings};
   }
 }

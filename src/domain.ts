@@ -35,6 +35,10 @@ export interface SourceResource {
   id: string;
   pageId: string;
   name: string;
+  /** Provider-derived filename that best matches references in source content. */
+  preferredName?: string;
+  /** Exact provider references that may identify this resource in source markup. */
+  referenceAliases?: string[];
   size?: number;
   mimeType?: string;
   downloadUrl?: string;
@@ -62,6 +66,7 @@ export interface DestinationPage {
   url: string;
   locator?: string;
   space?: string;
+  parentId?: string;
   version?: string;
   fingerprint?: string;
   content?: string;
@@ -111,6 +116,7 @@ export interface DestinationAdapter {
   preflight(): Promise<{product: string; version?: string; warnings: string[]}>;
   resolveContainer(locator: string): Promise<DestinationContainer>;
   findChild(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined>;
+  findRecoverablePage?(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined>;
   createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage>;
   updatePage(input: {page: DestinationPage; title: string; body: string; expectedFingerprint?: string}): Promise<DestinationPage>;
   uploadResource(input: {
@@ -122,6 +128,7 @@ export interface DestinationAdapter {
     existingId?: string;
   }): Promise<UploadedResource>;
   listUploadedResources(page: DestinationPage): Promise<UploadedResource[]>;
+  downloadUploadedResource?(input: {page: DestinationPage; resource: UploadedResource; destination: string}): Promise<{path: string; size: number; sha256: string; mimeType?: string}>;
   verifyPage(page: DestinationPage): Promise<DestinationPage>;
   renderPageReference(page: DestinationPage, label: string, anchor?: string): string;
   renderResourceReference(resource: UploadedResource, label: string, image: boolean): string;
@@ -161,11 +168,12 @@ export interface NormalizedReference {
 }
 
 export interface NormalizedNode {
-  type: 'document' | 'html' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback';
+  type: 'document' | 'html' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback' | 'tree-directive';
   value?: string;
   children?: NormalizedNode[];
   reference?: NormalizedReference;
   vendor?: ProviderKind;
+  tree?: {depth?: number; sort?: 'asc' | 'desc'; sortBy?: 'title'};
 }
 
 export interface NormalizedDocument {
@@ -174,6 +182,7 @@ export interface NormalizedDocument {
   rawFormat: RawContentFormat;
   references: NormalizedReference[];
   warnings: string[];
+  normalizations: string[];
   degraded: boolean;
   metrics: {
     links: number;
@@ -194,6 +203,7 @@ export interface RenderContext {
 export interface RenderedDocument {
   body: string;
   warnings: string[];
+  normalizations: string[];
   degraded: boolean;
   representedReferences: number;
 }
