@@ -166,4 +166,7 @@ await stat(generatedPaths.json);
 if (!installedHtml.includes('Content-Security-Policy') || !installedHtml.includes('data:image/png;base64,')) {
   throw new Error('Installed package did not generate a complete autonomous report');
 }
+if (!installedHtml.includes('data:font/woff2;base64,') || /https?:[^\s"')]+\.(?:woff2?|ttf|otf)/iu.test(installedHtml)) {
+  throw new Error('Installed package did not embed its autonomous report font');
+}
 process.stdout.write(`Package verified: ${packResult.filename}\n`);

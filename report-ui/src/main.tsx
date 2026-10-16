@@ -2,7 +2,10 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import type {ReportPresentationPayload} from '../../src/report-contract';
 import {App, ReportLoadError} from './App';
+import {installReportFonts} from './fonts';
 import './styles.css';
+
+installReportFonts();
 
 function readPayload(): ReportPresentationPayload {
   const element = document.getElementById('ywtc-report-data');
