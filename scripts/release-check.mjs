@@ -104,6 +104,14 @@ const readmeHeadings = [...readme.matchAll(/^##[ \t]+(.+?)[ \t]*$/gm)].map((matc
 if (JSON.stringify(readmeHeadings) !== JSON.stringify(expectedReadmeHeadings)) {
   add(readmeFilename, `second-level headings must be exactly: ${expectedReadmeHeadings.join(' → ')}`);
 }
+const minimumScenario = readme.match(/^## Минимальный сценарий\s*$([\s\S]*?)(?=^## )/m)?.[1] ?? '';
+if ((minimumScenario.match(/^- \[ \] /gm) ?? []).length !== 3) {
+  add(readmeFilename, 'minimum scenario must contain exactly three checklist steps');
+}
+const commonExamples = readme.match(/^## Частые примеры\s*$([\s\S]*?)(?=^## )/m)?.[1] ?? '';
+if ((commonExamples.match(/^# (?:Перенести|Создать|Открыть)/gm) ?? []).length !== 4) {
+  add(readmeFilename, 'common examples must contain exactly four labelled commands');
+}
 for (const [needle, reason] of [
   ['ywtc init --interactive', 'interactive initialization is not documented'],
   ['ywtc migrate --interactive', 'interactive migration is not documented'],

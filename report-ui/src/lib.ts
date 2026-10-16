@@ -1,7 +1,8 @@
 export function safeLink(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
-    const url = new URL(value, window.location.href);
+    const base = typeof window === 'undefined' ? 'file:///' : window.location.href;
+    const url = new URL(value, base);
     return ['http:', 'https:', 'file:'].includes(url.protocol) ? url.toString() : undefined;
   } catch {
     return undefined;

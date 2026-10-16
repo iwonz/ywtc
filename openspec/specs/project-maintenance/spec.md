@@ -58,7 +58,7 @@ The README SHALL be concise, provider-neutral, and organized by the fixed inform
 
 #### Scenario: Common command variants are needed
 - **WHEN** an operator needs a frequent workflow beyond the minimum
-- **THEN** the README SHALL show only a compact set of common remote transfer, scope, static export, and report-opening commands
+- **THEN** the README SHALL show exactly four concise examples covering a remote transfer, scope selection, static export, and report opening
 - **AND** each example SHALL omit options supplied by defaults or automatic profile resolution
 - **AND** exhaustive direction, profile, workdir, state, and recovery combinations SHALL remain canonical in the compatibility and parameter references rather than being repeated as examples
 
@@ -130,6 +130,7 @@ The README header SHALL accurately depict Yandex Wiki and Confluence as sources 
 - **THEN** both remote providers SHALL be identifiable as possible sources
 - **AND** both remote providers and both static formats SHALL be identifiable as possible destinations
 - **AND** directional connectors SHALL communicate convergence into and branching out of `ywtc`
+- **AND** the central transferable-content tiles SHALL remain visually unchanged except that no small arrows SHALL appear between adjacent tiles
 
 #### Scenario: Header is read without images
 - **WHEN** the header image is unavailable or interpreted by assistive technology
@@ -240,11 +241,12 @@ The project SHALL compile and package the report dashboard as a self-contained g
 - **THEN** it SHALL find exactly one data-injection marker and SHALL fail rather than emit a partial report when that invariant is violated
 
 ### Requirement: Provider-neutral report illustration
-The package SHALL include a transparent provider-neutral report illustration that identifies both remote sources, the transferable content classes, and all remote and static destinations without changing the README header.
+The package SHALL include a transparent provider-neutral report illustration that identifies both remote sources, the transferable content classes, and all remote and static destinations while matching the README header composition.
 
 #### Scenario: Illustration is rendered in either theme
 - **WHEN** the dashboard uses light or dark mode on desktop or mobile
 - **THEN** the illustration SHALL remain legible, preserve transparency, fit without clipping, and contain no migration-specific organization data
+- **AND** it SHALL preserve the input and output connectors while omitting only the small arrows between adjacent central content tiles
 
 ### Requirement: Interactive report quality gates
 Project checks SHALL validate reconciled adaptation and degradation accounting in addition to offline behavior, accessibility, localization, theming, responsiveness, privacy, and packaging.
@@ -322,22 +324,30 @@ The README SHALL explain current mapped-object authority and compact report beha
 - **THEN** it SHALL describe the single compact overview, hierarchy diagnostics, per-page problem details, icon-only language/theme controls, JSON download, and existing report-opening commands without a new second-level section
 
 ### Requirement: Compact report presentation
-The interactive report SHALL prioritize non-zero outcomes, actionable diagnostics, and transfer completeness while omitting empty metrics and controls whose absence is unambiguous.
+The interactive report SHALL prioritize non-zero outcomes, actionable diagnostics, and transfer completeness in a flat document layout while omitting empty metrics and redundant controls.
 
 #### Scenario: Overview contains zero-valued optional metrics
 - **WHEN** a report has no excluded pages, failures, conflicts, comments, attachments, or other optional metric values
-- **THEN** the overview SHALL omit those zero-value counters instead of rendering repeated `0` labels
-- **AND** it SHALL retain the total pages, overall status, progress, direction, source, destination, and report identity needed to understand the run
+- **THEN** the overview SHALL omit those zero-value counters and any resulting empty category
+- **AND** it SHALL retain the total pages, overall status, canonical source and destination, and report identity needed to understand the run
+- **AND** an unavailable required inventory value SHALL use a concise textual empty state rather than a numeric zero
 
 #### Scenario: A non-zero outcome requires attention
 - **WHEN** a page, resource, comment archive, quality category, or inventory dimension has a non-zero outcome
 - **THEN** the report SHALL display that metric with its semantic label and visual impact treatment
 - **AND** the hierarchy and details view SHALL expose the affected object and available corrective action
 
+#### Scenario: Main report layout is inspected
+- **WHEN** the report overview and hierarchy render
+- **THEN** they SHALL use flat sections, spacing, and separators without outer cards, borders, shadows, blur, rounded islands, or a separate tree container
+- **AND** complete hierarchy rows SHALL remain transparent while non-complete rows MAY use a light full-width semantic tint
+- **AND** the functional modal MAY remain a distinct overlay surface
+
 #### Scenario: Page details contain empty sections
 - **WHEN** a page has no resources, comments, preview, conflicts, or issues for an optional detail category
 - **THEN** the details interface SHALL omit the empty category or present one concise empty state only when the absence itself is useful
 - **AND** it SHALL NOT repeat zero counters, placeholder definition rows, or unavailable identifiers across the view
+- **AND** definition data and technical diagnostics SHALL use flat lists rather than nested tiles
 
 #### Scenario: Offline report interactions are used
 - **WHEN** a generated report is opened through `file://` on desktop or mobile

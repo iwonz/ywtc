@@ -4,15 +4,12 @@ import {
   Badge,
   Box,
   Button,
-  Card,
   Code,
   Collapse,
   Container,
   Group,
   MantineProvider,
   Modal,
-  Paper,
-  Progress,
   ScrollArea,
   Select,
   SimpleGrid,
@@ -198,9 +195,19 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
   const summary = report.summary;
   const sourceBytes = summary.sourceBytes + summary.commentBytes;
   const sections = visibleSummarySections(summary);
-  const rows: Array<{id: string; icon: ReactNode; label: string; source?: ReactNode; destination?: ReactNode}> = [
+  const rows: Array<{
+    id: string;
+    icon: ReactNode;
+    label: string;
+    source?: ReactNode;
+    destination?: ReactNode;
+    sourceRequired?: boolean;
+    destinationRequired?: boolean;
+  }> = [
     {
       id: 'pages', icon: <FolderTree size={16} />, label: t('pages'),
+      sourceRequired: true,
+      destinationRequired: true,
       source: countText([
         [summary.returnedDescendants + 1, t('found')],
         [summary.pages, t('selected')],
@@ -250,16 +257,19 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
   return (
     <Stack gap="sm">
       <Box className="summary-table-container">
-        <Table className="summary-table" verticalSpacing="sm" highlightOnHover>
-          <Table.Thead>
-            <Table.Tr><Table.Th>{t('metric')}</Table.Th><Table.Th>{t('source')}</Table.Th><Table.Th>{t('destination')}</Table.Th></Table.Tr>
-          </Table.Thead>
+        <Table className="summary-table" verticalSpacing="sm" aria-label={t('summary')}>
           <Table.Tbody>
             {rows.map((row) => (
               <Table.Tr key={row.id}>
                 <Table.Td><Group gap="xs" wrap="nowrap" className="metric-label">{row.icon}<Text fw={600} size="sm">{row.label}</Text></Group></Table.Td>
-                <Table.Td><Text size="sm">{row.source}</Text></Table.Td>
-                <Table.Td>{row.destination}</Table.Td>
+                <Table.Td>
+                  <span className="visually-hidden">{t('source')}: </span>
+                  {row.source ?? (row.sourceRequired ? <Text component="span" size="sm" c="dimmed">{t('notAvailable')}</Text> : null)}
+                </Table.Td>
+                <Table.Td>
+                  <span className="visually-hidden">{t('destination')}: </span>
+                  {row.destination ?? (row.destinationRequired ? <Text component="span" size="sm" c="dimmed">{t('notAvailable')}</Text> : null)}
+                </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
@@ -299,7 +309,7 @@ function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTr
     [node.page.links, t('links')],
   ]) : undefined;
   return (
-    <Paper
+    <Box
       role="treeitem"
       aria-level={node.depth + 1}
       aria-expanded={hasChildren ? expanded : undefined}
@@ -339,7 +349,7 @@ function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTr
         {counters && <Text size="xs" c="dimmed" mt={3}>{counters}</Text>}
         {node.excluded && <Text size="xs" c="dimmed" mt={3}>{node.excluded.reason}{node.excluded.sourceStatus ? ` · ${node.excluded.sourceStatus}` : ''}</Text>}
       </Box>
-    </Paper>
+    </Box>
   );
 }
 
@@ -357,7 +367,7 @@ function Hierarchy({report, t, selectedId, onSelect}: {report: TransferReportDat
     label: value === 'all' ? t('all') : value === 'problems' ? `${t('problems')} (${problemCount(report)})` : statusTranslation(value) ? t(statusTranslation(value)!) : value,
   }));
   return (
-    <Card component="section" aria-labelledby="hierarchy-title" withBorder radius="lg" shadow="xs" className="report-card">
+    <Box component="section" aria-labelledby="hierarchy-title" className="report-section hierarchy-section">
       <Stack gap="md">
         <Group justify="space-between" align="end" gap="md" className="hierarchy-header">
           <Box>
@@ -413,7 +423,7 @@ function Hierarchy({report, t, selectedId, onSelect}: {report: TransferReportDat
         )}
         {selectedId && <span className="visually-hidden" aria-live="polite">{selectedId}</span>}
       </Stack>
-    </Card>
+    </Box>
   );
 }
 
@@ -425,14 +435,14 @@ function DefinitionGrid({items}: {items: DefinitionItem[]}) {
   const visible = items.filter(([, value]) => hasDefinitionValue(value));
   if (visible.length === 0) return null;
   return (
-    <SimpleGrid cols={{base: 1, sm: 2}} spacing="sm" component="dl" className="definition-grid">
+    <Box component="dl" className="definition-list">
       {visible.map(([label, value]) => (
-        <Paper key={label} component="div" withBorder radius="md" p="sm" className="definition-item">
+        <Box key={label} component="div" className="definition-item">
           <Text component="dt" size="xs" fw={700} c="dimmed" tt="uppercase">{label}</Text>
-          <Box component="dd" mt={4} className="definition-value">{value}</Box>
-        </Paper>
+          <Box component="dd" className="definition-value">{value}</Box>
+        </Box>
       ))}
-    </SimpleGrid>
+    </Box>
   );
 }
 
@@ -482,11 +492,11 @@ function IssueList({issues, locale, t}: {issues: TransferReportIssue[]; locale: 
                   {t('technical')}
                 </Button>
                 <Collapse expanded={opened}>
-                  <Paper withBorder radius="md" p="sm" mt="xs" className="technical-diagnostics">
+                  <Box mt="xs" className="technical-diagnostics">
                     <Text size="xs"><strong>ID:</strong> {issue.objectId ?? issue.pageId ?? 'run'}</Text>
                     {issue.rootCauseId && <Text size="xs"><strong>Root cause:</strong> {issue.rootCauseId}</Text>}
                     <Text size="xs" className="diagnostic-message"><strong>Message:</strong> {issue.message}</Text>
-                  </Paper>
+                  </Box>
                 </Collapse>
               </Box>
             </Stack>
@@ -521,7 +531,7 @@ function ResourcesTable({node, t}: {node: ReportTreeNode; t: Translate}) {
               </Table.Td>
               <Table.Td><Text size="sm">{resource.kind}</Text></Table.Td>
               <Table.Td>
-                {resource.sourceBytes !== undefined && <Text size="sm">{formatBytes(resource.sourceBytes)}</Text>}
+                {resource.sourceBytes !== undefined && resource.sourceBytes > 0 && <Text size="sm">{formatBytes(resource.sourceBytes)}</Text>}
                 {resource.sha256 && <Code className="hash-code" title={resource.sha256}>{resource.sha256}</Code>}
               </Table.Td>
               <Table.Td><StatusBadge status={resource.status} t={t} /></Table.Td>
@@ -632,7 +642,7 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
                 [t('sourceParent'), page?.sourceParentId ?? excluded?.sourceParentId],
                 [t('expectedParent'), page?.projectedParentId ?? page?.parentId ?? excluded?.projectedParentId],
                 [t('actualParent'), page?.destinationParentId],
-                [t('depth'), String(node.depth)],
+                [t('depth'), node.depth > 0 ? String(node.depth) : undefined],
                 [t('inventory'), inventory ?? excluded?.reason],
                 [t('status'), <StatusBadge key="page-status" status={node.status} t={t} />],
                 [t('conflictEvidence'), page?.conflictEvidence ? `${page.conflictEvidence.reason}: ${page.conflictEvidence.candidateIds.join(', ')}` : undefined],
@@ -664,60 +674,55 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
   );
 }
 
-function ReportOverview({report, locale, theme, progress, accountedPages, setLocale, setTheme, t}: {
+function MetadataLink({href, fallback}: {href?: string | undefined; fallback: string}) {
+  const safe = safeLink(href);
+  if (!safe) return <Text component="span" size="sm" c="dimmed">{href || fallback}</Text>;
+  return (
+    <Text component="a" href={safe} target="_blank" rel="noreferrer" size="sm" className="metadata-link">
+      {href}
+      <ExternalLink size={13} aria-hidden="true" />
+    </Text>
+  );
+}
+
+function ReportOverview({report, locale, theme, setLocale, setTheme, t}: {
   report: TransferReportData;
   locale: Locale;
   theme: Theme;
-  progress: number;
-  accountedPages: number;
   setLocale: (locale: Locale) => void;
   setTheme: (theme: Theme) => void;
   t: Translate;
 }) {
-  const [technicalOpen, setTechnicalOpen] = useState(false);
   const nextLocale: Locale = locale === 'ru' ? 'en' : 'ru';
   const nextTheme: Theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system';
   const localeLabel = `${t('language')}: ${locale === 'ru' ? 'Русский' : 'English'}; ${t('next')}: ${nextLocale === 'ru' ? 'Русский' : 'English'}`;
   const themeLabel = `${t('theme')}: ${t(theme)}; ${t('next')}: ${t(nextTheme)}`;
-  const resultUrl = safeLink(report.destination.url);
-  const hasTechnicalDetails = Boolean(report.state.path || report.outputs.length > 0);
   return (
-    <Card component="section" aria-labelledby="report-title" withBorder radius="lg" shadow="xs" className="report-card overview-card">
+    <Box component="section" aria-labelledby="report-title" className="report-section overview-section">
+      <Title order={1} id="report-title" className="visually-hidden">{t('report')}</Title>
       <Group justify="flex-end" gap="xs" className="preference-controls">
         <PreferenceButton label={localeLabel} onClick={() => setLocale(nextLocale)}>{locale === 'ru' ? <RussianFlag /> : <EnglishFlag />}</PreferenceButton>
         <PreferenceButton label={themeLabel} onClick={() => setTheme(nextTheme)}>{theme === 'system' ? <Monitor size={17} /> : theme === 'light' ? <Sun size={17} /> : <Moon size={17} />}</PreferenceButton>
       </Group>
       <img src={reportHeader} className="report-header" alt="Yandex Wiki and Confluence sources pass pages, hierarchy, links, tables, images, comments, and attachments through ywtc to Confluence, Yandex Wiki, Markdown, and HTML" />
-      <Stack align="center" gap="xs" className="report-heading">
-        <Group justify="center" gap="sm" wrap="wrap"><Title order={1} id="report-title">{t('report')}</Title><StatusBadge status={report.status} t={t} /></Group>
-        <Text size="sm" c="dimmed" ta="center">{report.direction} · {report.source.profile} → {report.destination.profile ?? report.destination.format ?? report.destination.provider} · {report.scope} · {report.sourceStatus} · {report.dryRun ? t('dryRun') : t('live')}</Text>
-        <Group justify="center" gap="lg" wrap="wrap" className="run-meta">
+      <Stack align="center" gap="xs" className="run-status">
+        <StatusBadge status={report.status} t={t} />
+        <Group justify="center" gap="lg" wrap="wrap">
           <Text size="xs" c="dimmed">{t('started')}: <strong>{formatDate(report.startedAt, locale)}</strong></Text>
           {report.finishedAt && <Text size="xs" c="dimmed">{t('finished')}: <strong>{formatDate(report.finishedAt, locale)}</strong></Text>}
-          <Text size="xs" c="dimmed">{t('runId')}: <Code>{report.runId}</Code></Text>
         </Group>
-        <Box className="report-progress">
-          <Progress value={progress} aria-label={`${accountedPages}/${report.summary.pages}`} size="sm" radius="xl" />
-          <Text size="xs" c="dimmed" ta="center" mt={5}>{accountedPages}/{report.summary.pages} {t('pages').toLocaleLowerCase()} · {progress}%</Text>
-        </Box>
       </Stack>
       <Box className="overview-summary"><SummaryTable report={report} t={t} /></Box>
-      <Group justify="center" gap="sm" mt="lg" wrap="wrap">
-        {resultUrl && <Button component="a" href={resultUrl} target="_blank" rel="noreferrer" variant="light" leftSection={<ExternalLink size={16} />}>{t('resultLink')}</Button>}
-        <Button component="a" href="report.json" download="report.json" variant="default" leftSection={<Download size={16} />}>{t('downloadJson')}</Button>
-        {hasTechnicalDetails && <Button type="button" variant="subtle" color="gray" onClick={() => setTechnicalOpen((value) => !value)}>{t('technicalDetails')}</Button>}
+      <Box component="dl" className="run-details">
+        <Box component="div" className="run-detail"><Text component="dt">{t('runId')}</Text><Text component="dd" className="metadata-code">{report.runId}</Text></Box>
+        <Box component="div" className="run-detail"><Text component="dt">{t('state')}</Text><Text component="dd" className="metadata-code">{report.state.path}</Text></Box>
+        <Box component="div" className="run-detail"><Text component="dt">{t('source')}</Text><Box component="dd"><MetadataLink href={report.source.url} fallback={report.source.title || t('notAvailable')} /></Box></Box>
+        <Box component="div" className="run-detail"><Text component="dt">{t('destination')}</Text><Box component="dd"><MetadataLink href={report.destination.url} fallback={report.destination.id || t('notAvailable')} /></Box></Box>
+      </Box>
+      <Group justify="flex-start" mt="md">
+        <Button component="a" href="report.json" download="report.json" variant="subtle" leftSection={<Download size={16} />}>{t('downloadJson')}</Button>
       </Group>
-      {hasTechnicalDetails && (
-        <Collapse expanded={technicalOpen}>
-          <Paper withBorder radius="md" p="md" mt="md" className="technical-output">
-            <Stack gap="sm">
-              {report.state.path && <Box><Text size="xs" fw={700} c="dimmed" tt="uppercase">{t('state')}</Text><Code block>{report.state.path}</Code></Box>}
-              {report.outputs.map((output) => <Box key={`${output.label}:${output.value}`}><Text size="xs" fw={700} c="dimmed" tt="uppercase">{output.label}</Text><Code block>{output.value}</Code></Box>)}
-            </Stack>
-          </Paper>
-        </Collapse>
-      )}
-    </Card>
+    </Box>
   );
 }
 
@@ -750,15 +755,11 @@ function ReportApplication({payload}: {payload: ReportPresentationPayload}) {
     guardedStorageSet('ywtc-report-theme', theme);
   }, [effectiveTheme, theme]);
   const report = payload.report;
-  const accountedPages = report.status === 'running'
-    ? report.summary.complete + report.summary.partial + report.summary.failed + report.summary.blocked + report.summary.conflicts
-    : report.summary.pages;
-  const progress = report.summary.pages === 0 ? 0 : Math.round((accountedPages / report.summary.pages) * 100);
   return (
     <MantineProvider theme={reportTheme} forceColorScheme={effectiveTheme} defaultColorScheme="light" deduplicateInlineStyles>
       <Box className="report-background">
         <Container component="main" fluid className="report-shell">
-          <ReportOverview report={report} locale={locale} theme={theme} progress={progress} accountedPages={accountedPages} setLocale={setLocale} setTheme={setTheme} t={t} />
+          <ReportOverview report={report} locale={locale} theme={theme} setLocale={setLocale} setTheme={setTheme} t={t} />
           <Hierarchy report={report} t={t} selectedId={selectedId} onSelect={setSelectedId} />
         </Container>
         <PageDialog node={selectedNode} payload={payload} locale={locale} t={t} onOpenChange={(open) => { if (!open) setSelectedId(undefined); }} />
