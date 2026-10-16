@@ -2,6 +2,20 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.1.0](https://github.com/iwonz/ywtc/compare/v4.0.1...v4.1.0) (2026-10-16)
+
+
+### Features
+
+* **cli:** add interactive migration wizard ([b185d42](https://github.com/iwonz/ywtc/commit/b185d421ec1ed46643a9e0d899a4d8c47e259bd5))
+* **reports:** replace report UI with Mantine ([8ca093d](https://github.com/iwonz/ywtc/commit/8ca093de620fdfb762a6946a04ee868c14a11b0f))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.0.1 ([e3d7aa6](https://github.com/iwonz/ywtc/commit/e3d7aa6450d78c23fbab33b6ba14d96baf919f81))
+* **release:** retry validated release workflow ([b1fca35](https://github.com/iwonz/ywtc/commit/b1fca35926dccb8616d04d4b5901263f99f2ec74))
+
 ## [4.0.1](https://github.com/iwonz/ywtc/compare/v4.0.0...v4.0.1) (2026-10-16)
 
 
