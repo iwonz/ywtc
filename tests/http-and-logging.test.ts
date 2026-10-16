@@ -33,7 +33,7 @@ describe('HTTP retry and log safety', () => {
     [401, /authentication rejected/],
     [403, /permission denied/],
     [404, /resource or API route not found/],
-    [409, /destination conflict/],
+    [409, /provider rejected the current revision or request state/],
     [413, /payload too large/],
     [429, /rate limited after bounded retries/],
   ] as const)('adds corrective guidance for HTTP %s', async (status, message) => {

@@ -307,6 +307,17 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
         ...(input.page.version ? {version: Number(input.page.version)} : {}),
       }));
     } catch (error) {
+      if (possibleTitleConflict(error)) {
+        let occupied: DestinationPage | undefined;
+        try {
+          occupied = await this.findTitleConflict(input.page, input.title);
+        } catch {
+          // Preserve revision/provider classification when lookup cannot prove a title collision.
+        }
+        if (occupied && occupied.id !== input.page.id) {
+          throw new DestinationTitleConflictError(input.title, error.status!, {cause: error});
+        }
+      }
       if (error instanceof HttpRequestError && error.status === 409) {
         throw new DestinationRevisionConflictError('page', input.page.id, {cause: error});
       }
@@ -391,10 +402,13 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
 
   async findArchiveComment(page: DestinationPage, fingerprint?: string): Promise<DestinationComment | undefined> {
     const comments = await this.client.getPageComments(page.id);
-    const matches = comments.filter((comment) => (comment.body?.storage?.value ?? '').includes('Архив комментариев из'));
-    const match = fingerprint
-      ? matches.find((comment) => (comment.body?.storage?.value ?? '').includes(fingerprint))
-      : matches.at(-1);
+    const matches = comments
+      .filter((comment) => (comment.body?.storage?.value ?? '').includes('Архив комментариев из'))
+      .sort((left, right) => String(left.id).localeCompare(String(right.id), undefined, {numeric: true}));
+    const candidates = fingerprint
+      ? matches.filter((comment) => (comment.body?.storage?.value ?? '').includes(fingerprint))
+      : matches;
+    const match = candidates.at(-1);
     return match ? destinationComment(page.id, match) : undefined;
   }
 

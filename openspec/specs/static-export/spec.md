@@ -2,9 +2,7 @@
 
 ## Purpose
 Define portable, transactional, and loss-aware Markdown/HTML exports for page graphs and their attachments.
-
 ## Requirements
-
 ### Requirement: Portable filesystem destinations
 The system SHALL export a selected source graph to either Markdown or static HTML when `--destination` is a directory and `--format markdown|html` is supplied, and SHALL describe the result with one strict unversioned manifest.
 
@@ -17,11 +15,19 @@ The system SHALL export a selected source graph to either Markdown or static HTM
 - **THEN** the export SHALL contain an index, page routes, local assets and attachments, navigation hierarchy, an unversioned manifest, and relative links that work through `file://` and ordinary static hosting without a CDN
 
 ### Requirement: Transactional export replacement
-The system SHALL build filesystem output in an adjacent staging directory and SHALL replace only an existing directory owned by a strict current unversioned ywtc manifest containing the tool marker and matching canonical export identity.
+The system SHALL build output in adjacent staging, serialize promotion for one destination, and replace only an empty directory or an export owned by a matching strict current ywtc manifest.
 
 #### Scenario: Existing managed export
 - **WHEN** a completed export replaces a prior export whose manifest exactly matches the current structure, `tool: ywtc`, and canonical identity
 - **THEN** the system SHALL retain a timestamped backup, atomically promote staging where the filesystem permits, and restore the backup if promotion fails
+
+#### Scenario: Existing empty destination
+- **WHEN** the destination already exists as a directory with no entries
+- **THEN** the system SHALL treat it as safe new output and atomically promote the verified staging tree
+
+#### Scenario: Concurrent export
+- **WHEN** another live export holds the destination promotion lease
+- **THEN** the second export SHALL stop before replacement with active non-secret operation information and SHALL preserve staging-independent destination data
 
 #### Scenario: Unmanaged destination
 - **WHEN** a non-empty destination lacks a manifest or its manifest is malformed, has unknown fields, uses another tool marker, or has another identity
@@ -35,11 +41,19 @@ The system SHALL support `--archive` only with a filesystem destination and SHAL
 - **THEN** the system SHALL stream the final tree into a non-overwriting ZIP and report both paths
 
 ### Requirement: Static export safety and integrity
-The system SHALL sanitize active source content, prevent path traversal, verify generated references, and record every omitted or degraded construct.
+The system SHALL sanitize active content, prevent traversal, verify generated references, and distinguish lossless static adaptations from omitted or unverified information.
+
+#### Scenario: Unsafe source markup retains its payload
+- **WHEN** executable behavior is removed while all non-executable source payload and references remain readable
+- **THEN** the export SHALL record an adaptation and MAY remain complete
+
+#### Scenario: Unsafe source data is omitted
+- **WHEN** sanitization cannot retain meaningful source payload or a safe reference
+- **THEN** the export SHALL retain a raw snapshot, record a degradation, and mark the page partial
 
 #### Scenario: Unsafe source markup
 - **WHEN** source content contains executable script, unsafe URL schemes, or traversal filenames
-- **THEN** the system SHALL exclude executable behavior, use safe local names, retain a raw snapshot as needed, and mark the degradation without writing outside the destination
+- **THEN** the system SHALL exclude executable behavior, use safe local names, preserve all safely representable payload, and classify any missing information as degradation
 
 ### Requirement: Materialized navigation directives
 Filesystem exports SHALL render supported source navigation directives as deterministic links to selected exported pages.
@@ -90,7 +104,7 @@ The strict current export manifest SHALL record per-page comment status, source 
 - **THEN** manifest totals SHALL reconcile exactly with page entries, report totals, and generated files
 
 ### Requirement: Portable layout export
-Filesystem export SHALL preserve normalized page layouts as responsive semantic HTML and SHALL retain every ordered cell when the selected static format lacks a native column model.
+Filesystem export SHALL preserve normalized page layouts as responsive HTML and SHALL retain every ordered cell as a complete adaptation when a static format lacks columns.
 
 #### Scenario: Layout is exported to HTML
 - **WHEN** a normalized page contains one or more supported layout sections
@@ -98,7 +112,7 @@ Filesystem export SHALL preserve normalized page layouts as responsive semantic 
 
 #### Scenario: Layout is exported to Markdown
 - **WHEN** a normalized page contains columns and Markdown cannot express their layout portably
-- **THEN** Markdown SHALL emit every cell in deterministic reading order, record a layout degradation, and retain the raw source snapshot
+- **THEN** Markdown SHALL emit every cell in deterministic reading order, record an adaptation, and keep the page complete when all cell information verifies
 
 #### Scenario: Empty page is exported
 - **WHEN** a selected source page is semantically empty

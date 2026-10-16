@@ -61,6 +61,21 @@ describe('normalized content pipeline', () => {
     expect((await renderConfluenceStorage(document, page, context, 'DOC')).body).toContain('ri:content-title="Child"');
   });
 
+  it('preserves same-vendor macros without turning parser fallbacks into false degradation', async () => {
+    const page = source('<ac:structured-macro ac:name="vendor-widget"><ac:rich-text-body><p>Payload</p></ac:rich-text-body></ac:structured-macro>', 'confluence-storage');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(),
+      sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    expect(document.warnings).toContainEqual(expect.stringContaining('vendor-widget'));
+    const rendered = await renderConfluenceStorage(document, page, context, 'DOC');
+    expect(rendered.body).toContain('ac:name="vendor-widget"');
+    expect(rendered.body).toContain('Payload');
+    expect(rendered.degraded).toBe(false);
+    expect(rendered.notices).not.toContainEqual(expect.objectContaining({kind: 'degradation'}));
+  });
+
   it('rewrites YFM link targets without replacing matching prose', async () => {
     const page = source('[Child](/child) child');
     const child = {...source(''), id: '2', canonicalId: 'source:2', title: 'Child', locator: 'child', url: 'https://wiki.example.com/child'};
@@ -119,6 +134,21 @@ describe('normalized content pipeline', () => {
     expect(uploadedStorage.body).toContain('<ri:attachment ri:filename="manual.pdf"');
   });
 
+  it('preserves external images as complete references without downloading them', async () => {
+    const page = source('![Architecture](https://cdn.example.com/diagram.png){width=640 height=360}');
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(),
+      sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const rendered = await renderConfluenceStorage(normalizePageContent(page), page, context, 'DOC');
+    expect(rendered.body).toContain('https://cdn.example.com/diagram.png');
+    expect(rendered.body).toContain('ac:alt="Architecture"');
+    expect(rendered.body).toContain('ac:width="640"');
+    expect(rendered.degraded).toBe(false);
+    expect(rendered.warnings).toEqual([]);
+    expect(rendered.preservedExternalReferences).toBe(1);
+  });
+
   it('resolves duplicate API names through exact download aliases and rewrites each resource independently', async () => {
     const page = source('![First](/root/.files/image.png)\n\n![Second](/root/.files/image-1.png)');
     const resources: SourceResource[] = [
@@ -150,7 +180,7 @@ describe('normalized content pipeline', () => {
     expect(document.warnings.join(' ')).not.toMatch(/Header without title/i);
     expect(stripAnsi('\u001B[33mHeader without title\u001B[0m')).toBe('Header without title');
     expect(verifyDestinationContent('<h1></h1><h2>Named</h2><p>Body</p>', '<h2 data-provider="true">Named</h2><p>Body</p>', 'confluence', page))
-      .toEqual({status: 'complete', differences: []});
+      .toEqual({status: 'complete', differences: [], adaptations: []});
     expect(verifyDestinationContent('<h2>Named</h2><p>Body</p>', '<p>Named</p><p>Body</p>', 'confluence', page).status).toBe('partial');
     expect(verifyDestinationContent('<table><tr><td>A</td></tr></table>', '<table><tr><td></td></tr></table>', 'confluence', page).status).toBe('failed');
     expect(verifyDestinationContent('<pre><code>x</code></pre>', '<p>x</p>', 'confluence', page).status).toBe('failed');
@@ -181,7 +211,7 @@ describe('normalized content pipeline', () => {
     await expect(renderConfluenceStorage(document, page, context, 'DOC')).resolves.toMatchObject({body: '<p></p>', degraded: false});
     await expect(renderYfm(document, context)).resolves.toMatchObject({body: '', degraded: false});
     await expect(renderMarkdown(document, context)).resolves.toMatchObject({body: '', degraded: false});
-    expect(verifyDestinationContent('<p></p>', '', 'confluence', page)).toEqual({status: 'complete', differences: []});
+    expect(verifyDestinationContent('<p></p>', '', 'confluence', page)).toEqual({status: 'complete', differences: [], adaptations: []});
     expect(verifyDestinationContent('<p></p>', '<p>Unexpected</p>', 'confluence', page).status).toBe('failed');
   });
 
@@ -223,8 +253,9 @@ describe('normalized content pipeline', () => {
     const markdown = await renderMarkdown(document, context);
     expect(markdown.body).toContain('### Column 1');
     expect(markdown.body).toContain('### Column 3');
-    expect(markdown.degraded).toBe(true);
-    expect(markdown.warnings).toContainEqual(expect.stringContaining('linearized'));
+    expect(markdown.degraded).toBe(false);
+    expect(markdown.warnings).toEqual([]);
+    expect(markdown.adaptations).toContainEqual(expect.stringContaining('linearized'));
   });
 
   it('maps supported Confluence layouts and macros to native YFM constructs', async () => {
@@ -254,21 +285,23 @@ describe('normalized content pipeline', () => {
     expect(yfm.degraded).toBe(false);
   });
 
-  it('preserves invalid or unequal Confluence layout content with explicit degradation', async () => {
+  it('preserves invalid or unequal Confluence layout content as a complete adaptation', async () => {
     const page = source('<ac:layout><ac:layout-section ac:type="two_left_sidebar"><ac:layout-cell><p>Narrow</p></ac:layout-cell><ac:layout-cell><p>Wide</p></ac:layout-cell></ac:layout-section><ac:layout-section ac:type="unknown"><ac:layout-cell><p>Other</p></ac:layout-cell></ac:layout-section></ac:layout>', 'confluence-storage');
     const document = normalizePageContent(page);
     const context: RenderContext = {
       pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
     };
-    expect(document.warnings).toContainEqual(expect.stringContaining('unsupported-width'));
+    expect(document.warnings).toEqual([]);
+    expect(document.adaptations).toContainEqual(expect.stringContaining('adaptive widths'));
     expect(normalizedPreviewHtml(document)).toContain('Narrow');
     expect(normalizedPreviewHtml(document)).toContain('Other');
     const yfm = await renderYfm(document, context);
     expect(yfm.body).toContain('Narrow');
     expect(yfm.body).toContain('Wide');
     expect(yfm.body).toContain('Other');
-    expect(yfm.warnings).toContainEqual(expect.stringContaining('equal YFM columns'));
-    expect(yfm.degraded).toBe(true);
+    expect(yfm.warnings).toEqual([]);
+    expect(yfm.adaptations).toContainEqual(expect.stringContaining('equal YFM columns'));
+    expect(yfm.degraded).toBe(false);
   });
 
   it('verifies native layouts structurally without confusing provider padding with loss', () => {
@@ -276,7 +309,7 @@ describe('normalized content pipeline', () => {
     const expected = '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell><p>Left</p></ac:layout-cell><ac:layout-cell><p>Right</p></ac:layout-cell></ac:layout-section></ac:layout>';
     const padded = '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell><p>Left</p><p></p></ac:layout-cell><ac:layout-cell><p>Right</p></ac:layout-cell></ac:layout-section></ac:layout>';
     expect(verifyDestinationContent(expected, padded, 'confluence', page).status).toBe('complete');
-    expect(verifyDestinationContent(expected, '<p>Left</p><p>Right</p>', 'confluence', page)).toMatchObject({status: 'partial'});
+    expect(verifyDestinationContent(expected, '<p>Left</p><p>Right</p>', 'confluence', page)).toMatchObject({status: 'complete', adaptations: [expect.stringContaining('layout')]});
     expect(verifyDestinationContent(expected, '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell><p>Left</p></ac:layout-cell><ac:layout-cell></ac:layout-cell></ac:layout-section></ac:layout>', 'confluence', page).status).toBe('failed');
   });
 

@@ -143,7 +143,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   console.log(`  Causes  ${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
   console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
   console.log(`  Comments ${result.summary.comments} entries · ${result.summary.commentThreads} threads · ${result.summary.commentParticipants} participants · ${result.summary.commentAttachments} files · ${result.summary.commentBytes} bytes`);
-  console.log(`  Issues  ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.normalizations} safe normalizations`);
+  console.log(`  Quality ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.adaptations} adaptations · ${result.summary.normalizations} safe normalizations · ${result.summary.preservedExternalReferences} external references preserved`);
   if (result.output) console.log(`  Output  ${result.output}`);
   if (result.archive) console.log(`  Archive ${result.archive}`);
   if (result.hasErrors) console.log(`  Resume  ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope}${command.sourceStatus === 'all' ? '' : ` --source-status ${command.sourceStatus}`}`);
@@ -240,7 +240,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         return 0;
       }
       for (const report of catalog.reports) {
-        const issues = `${report.errors} errors · ${report.warnings} warnings · ${report.degradations} degradations`;
+        const issues = `${report.errors} errors · ${report.warnings} warnings · ${report.degradations} degradations · ${report.adaptations ?? 0} adaptations`;
         console.log(`  ${report.runId}  ${report.finishedAt ?? report.startedAt}  ${report.status}`);
         console.log(`    ${report.direction} · ${report.scope} · source status ${report.sourceStatus} · ${report.selectedDescendants}/${report.returnedDescendants} descendants selected · ${report.excludedPages} excluded · depth ${report.maximumDepth}`);
         console.log(`    source ${report.pages} pages · ${report.hierarchyGaps} hierarchy gaps · ${report.hierarchyRepairs} repaired · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);

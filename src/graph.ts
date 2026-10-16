@@ -33,11 +33,11 @@ function assertUniquePages(root: SourcePage, pages: SourcePage[]): void {
   for (const page of pages) {
     const canonical = byCanonical.get(page.canonicalId);
     const provider = byProviderId.get(page.id);
-    if (canonical && (canonical.id !== page.id || canonical.locator !== page.locator)) {
-      throw new Error(`Source page ${page.canonicalId} was returned with conflicting identity or locator`);
+    if (canonical && canonical.id !== page.id) {
+      throw new Error(`Source page ${page.canonicalId} was returned with conflicting immutable identity`);
     }
-    if (provider && (provider.canonicalId !== page.canonicalId || provider.locator !== page.locator)) {
-      throw new Error(`Source page ID ${page.id} was returned with conflicting canonical identity or locator`);
+    if (provider && provider.canonicalId !== page.canonicalId) {
+      throw new Error(`Source page ID ${page.id} was returned with conflicting canonical identity`);
     }
     byCanonical.set(page.canonicalId, page);
     byProviderId.set(page.id, page);

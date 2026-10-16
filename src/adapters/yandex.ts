@@ -17,6 +17,7 @@ import type {
   SourceResource,
   UploadedResource,
 } from '../domain.js';
+import {DestinationRevisionConflictError, DestinationTitleConflictError} from '../domain.js';
 import {normalizeCommentForest} from '../comments.js';
 import {HttpRequestError} from '../http.js';
 import {normalizeWikiSlug, safeFilename} from '../input.js';
@@ -227,14 +228,21 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     const currentIds = new Set(current.map((identity) => identity.id));
     const selected = options.status === 'current' ? all.filter((identity) => currentIds.has(identity.id)) : all;
     const excludedIdentities = options.status === 'current' ? all.filter((identity) => !currentIds.has(identity.id)) : [];
+    const locatorDrifts: string[] = [];
     const results = await Promise.allSettled(selected.map(async (identity) => {
       const detail = await this.client.getPageById(identity.id);
       const normalized = sourcePage(this.profile, detail);
       const expectedLocator = normalizeWikiSlug(identity.slug);
       if (normalized.locator !== expectedLocator) {
-        throw new Error(`Yandex Wiki descendant ${identity.id} detail slug ${normalized.locator} conflicts with inventory slug ${expectedLocator}`);
+        locatorDrifts.push(`Yandex Wiki page ${identity.id} changed locator from ${expectedLocator} to ${normalized.locator} during discovery; immutable ID was retained.`);
       }
-      return options.status === 'current' ? {...normalized, sourceStatus: 'current' as const} : normalized;
+      const belongsToSubtree = normalized.ancestorIds?.includes(page.id)
+        ?? (normalized.locator === page.locator || normalized.locator.startsWith(`${page.locator}/`));
+      return {
+        page: options.status === 'current' ? {...normalized, sourceStatus: 'current' as const} : normalized,
+        belongsToSubtree,
+        expectedLocator,
+      };
     }));
     const failures = results.flatMap((result, index) => result.status === 'rejected'
       ? [`${selected[index]?.id ?? 'unknown'} (${selected[index]?.slug ?? 'unknown'}): ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`]
@@ -244,9 +252,7 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     }
     const excludedResults = await Promise.allSettled(excludedIdentities.map(async (identity) => {
       const detail = await this.client.getPageById(identity.id);
-      const expectedLocator = normalizeWikiSlug(identity.slug);
       const locator = normalizeWikiSlug(detail.slug);
-      if (locator !== expectedLocator) throw new Error(`detail slug ${locator} conflicts with inventory slug ${expectedLocator}`);
       const ancestors = ancestorIds(detail);
       const rootIndex = ancestors.indexOf(page.id);
       const immediateParentId = parentId(detail);
@@ -266,18 +272,38 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     }));
     const excludedFailures = excludedResults.filter((result) => result.status === 'rejected').length;
     return {
-      pages: results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []),
+      pages: results.flatMap((result) => result.status === 'fulfilled' && result.value.belongsToSubtree ? [result.value.page] : []),
       returned: all.length,
-      excluded: excludedResults.map((result, index) => result.status === 'fulfilled' ? result.value : {
-        id: String(excludedIdentities[index]!.id),
-        canonicalId: canonical(this.profile, excludedIdentities[index]!.id),
-        locator: normalizeWikiSlug(excludedIdentities[index]!.slug),
-        reason: 'source-status' as const,
-        status: 'obsolete' as const,
-        metadataComplete: false,
-      }),
+      excluded: [
+        ...excludedResults.map((result, index) => result.status === 'fulfilled' ? result.value : {
+          id: String(excludedIdentities[index]!.id),
+          canonicalId: canonical(this.profile, excludedIdentities[index]!.id),
+          locator: normalizeWikiSlug(excludedIdentities[index]!.slug),
+          reason: 'source-status' as const,
+          status: 'obsolete' as const,
+          metadataComplete: false,
+        }),
+        ...results.flatMap((result) => result.status === 'fulfilled' && !result.value.belongsToSubtree ? [{
+          id: result.value.page.id,
+          canonicalId: result.value.page.canonicalId,
+          locator: result.value.page.locator,
+          title: result.value.page.title,
+          url: result.value.page.url,
+          ...(result.value.page.parentId ? {parentId: result.value.page.parentId} : {}),
+          ...(result.value.page.ancestorIds ? {ancestorIds: result.value.page.ancestorIds} : {}),
+          reason: 'inventory-drift' as const,
+          ...(result.value.page.sourceStatus ? {status: result.value.page.sourceStatus} : {}),
+          metadataComplete: true,
+        }] : []),
+      ],
       effectiveStatus: options.status,
-      notes: excludedFailures > 0 ? [`Yandex Wiki did not expose complete hierarchy metadata for ${excludedFailures} excluded page(s).`] : [],
+      notes: [
+        ...(excludedFailures > 0 ? [`Yandex Wiki did not expose complete hierarchy metadata for ${excludedFailures} excluded page(s).`] : []),
+        ...(results.some((result) => result.status === 'fulfilled' && !result.value.belongsToSubtree)
+          ? ['Yandex Wiki inventory changed during discovery; pages moved outside the selected subtree were excluded by immutable page ID.']
+          : []),
+        ...locatorDrifts,
+      ],
     };
   }
 
@@ -358,12 +384,27 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
   }
 
   async createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage> {
-    const created = await this.client.createPage({slug: this.childSlug(input.container, input.title), title: input.title, content: input.body});
-    return destinationPage(this.profile, created);
+    try {
+      const created = await this.client.createPage({slug: this.childSlug(input.container, input.title), title: input.title, content: input.body});
+      return destinationPage(this.profile, created);
+    } catch (error) {
+      if (error instanceof HttpRequestError && (error.status === 400 || error.status === 409)) {
+        const occupied = await this.findChild(input.container, input.title).catch(() => undefined);
+        if (occupied) throw new DestinationTitleConflictError(input.title, error.status, {cause: error});
+      }
+      throw error;
+    }
   }
 
   async updatePage(input: {page: DestinationPage; title: string; body: string}): Promise<DestinationPage> {
-    return destinationPage(this.profile, await this.client.updatePage({id: Number(input.page.id), title: input.title, content: input.body}));
+    try {
+      return destinationPage(this.profile, await this.client.updatePage({id: Number(input.page.id), title: input.title, content: input.body}));
+    } catch (error) {
+      if (error instanceof HttpRequestError && error.status === 409) {
+        throw new DestinationRevisionConflictError('page', input.page.id, {cause: error});
+      }
+      throw error;
+    }
   }
 
   async uploadResource(input: {page: DestinationPage; name: string; filePath: string; size?: number; mimeType?: string}): Promise<UploadedResource> {
@@ -404,10 +445,13 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
 
   async findArchiveComment(page: DestinationPage, fingerprint?: string): Promise<DestinationComment | undefined> {
     const comments = await this.client.getPageComments(Number(page.id));
-    const matches = comments.filter((comment) => (comment.body ?? '').includes('Архив комментариев из'));
-    const match = fingerprint
-      ? matches.find((comment) => (comment.body ?? '').includes(fingerprint))
-      : matches.at(-1);
+    const matches = comments
+      .filter((comment) => (comment.body ?? '').includes('Архив комментариев из'))
+      .sort((left, right) => String(left.id).localeCompare(String(right.id), undefined, {numeric: true}));
+    const candidates = fingerprint
+      ? matches.filter((comment) => (comment.body ?? '').includes(fingerprint))
+      : matches;
+    const match = candidates.at(-1);
     return match ? destinationComment(page.id, match) : undefined;
   }
 

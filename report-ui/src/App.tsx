@@ -96,6 +96,7 @@ function issueActionLabel(issue: TransferReportIssue, locale: Locale): string {
   if (issue.severity === 'blocked') return 'Устраните ошибку вышестоящей страницы и повторите ту же миграцию.';
   if (issue.retryable) return 'Повторите ту же миграцию: объект будет обработан заново.';
   if (issue.severity === 'degradation') return 'Сравните source и destination во вкладке сравнения.';
+  if (issue.severity === 'adaptation') return 'Действие не требуется: данные сохранены в эквивалентном представлении.';
   if (issue.severity === 'normalization') return 'Действие не требуется.';
   if (issue.category === 'authorization') return 'Проверьте токен подключения, выполните doctor и повторите миграцию.';
   if (issue.category === 'permissions') return 'Предоставьте пользователю токена доступ к объекту и повторите миграцию.';
@@ -194,7 +195,7 @@ function SummaryTable({report, t}: {report: TransferReportData; t: (key: Transla
             </TableRow>
             <TableRow>
               <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><ShieldAlert className="size-4 text-primary" />{t('quality')}</span></TableCell>
-              <TableCell>{summary.normalizations} {t('normalization').toLocaleLowerCase()} · {summary.degradations} {t('degradation').toLocaleLowerCase()}</TableCell>
+              <TableCell>{summary.normalizations} {t('normalization').toLocaleLowerCase()} · {summary.adaptations} {t('adaptation').toLocaleLowerCase()} · {summary.preservedExternalReferences} {t('externalReferences')}</TableCell>
               <TableCell><span className={summary.errors ? 'font-semibold text-red-700 dark:text-red-300' : ''}>{summary.errors} {t('error').toLocaleLowerCase()}</span> · <span className={summary.warnings ? 'font-semibold text-amber-700 dark:text-amber-300' : ''}>{summary.warnings} {t('warning').toLocaleLowerCase()}</span></TableCell>
             </TableRow>
           </TableBody>
@@ -303,13 +304,16 @@ function isolatedPreview(body: string): string {
 
 function IssueList({issues, locale, t}: {issues: TransferReportIssue[]; locale: Locale; t: (key: TranslationKey) => string}) {
   if (issues.length === 0) return <Alert><Info className="mr-2 inline size-4" />{t('noIssues')}</Alert>;
-  return <div className="space-y-3">{issues.map((issue) => <Alert key={`${issue.code}:${issue.objectId ?? issue.pageId ?? 'run'}`} className={issue.severity === 'error' ? 'border-red-500/30' : issue.severity === 'degradation' ? 'border-amber-500/30' : ''}><div className="flex flex-wrap gap-2"><Badge variant={issue.severity === 'error' ? 'danger' : issue.severity === 'blocked' ? 'blocked' : 'warning'}>{t(issue.severity)}</Badge><Badge variant="outline">{categoryLabels[locale][issue.category]}</Badge><Badge variant="outline">{issue.phase}</Badge>{issue.retryable && <Badge variant="warning">{t('retryable')}</Badge>}{issue.occurrences > 1 && <Badge variant="outline">×{issue.occurrences}</Badge>}</div><p className="mt-3 font-medium">{issue.code}</p><p className="mt-3 text-xs"><strong>{t('action')}:</strong> {issueActionLabel(issue, locale)}</p><Collapsible className="mt-3"><CollapsibleTrigger asChild><Button variant="ghost" size="sm">{t('technical')}</Button></CollapsibleTrigger><CollapsibleContent className="mt-2 rounded-md border border-border/70 bg-muted/30 p-3 text-xs"><dl className="grid gap-1"><div><dt className="inline font-semibold">ID: </dt><dd className="inline break-all">{issue.objectId ?? issue.pageId ?? 'run'}</dd></div>{issue.rootCauseId && <div><dt className="inline font-semibold">Root cause: </dt><dd className="inline break-all">{issue.rootCauseId}</dd></div>}<div><dt className="inline font-semibold">Message: </dt><dd className="inline whitespace-pre-wrap break-words">{issue.message}</dd></div></dl></CollapsibleContent></Collapsible></Alert>)}</div>;
+  return <div className="space-y-3">{issues.map((issue) => <Alert key={`${issue.code}:${issue.objectId ?? issue.pageId ?? 'run'}`} className={issue.severity === 'error' ? 'border-red-500/30' : issue.severity === 'degradation' ? 'border-amber-500/30' : issue.severity === 'adaptation' ? 'border-blue-500/30' : ''}><div className="flex flex-wrap gap-2"><Badge variant={issue.severity === 'error' ? 'danger' : issue.severity === 'blocked' ? 'blocked' : issue.severity === 'adaptation' ? 'outline' : 'warning'}>{t(issue.severity)}</Badge><Badge variant="outline">{categoryLabels[locale][issue.category]}</Badge><Badge variant="outline">{issue.phase}</Badge>{issue.retryable && <Badge variant="warning">{t('retryable')}</Badge>}{issue.occurrences > 1 && <Badge variant="outline">×{issue.occurrences}</Badge>}</div><p className="mt-3 font-medium">{issue.code}</p><p className="mt-3 text-xs"><strong>{t('action')}:</strong> {issueActionLabel(issue, locale)}</p><Collapsible className="mt-3"><CollapsibleTrigger asChild><Button variant="ghost" size="sm">{t('technical')}</Button></CollapsibleTrigger><CollapsibleContent className="mt-2 rounded-md border border-border/70 bg-muted/30 p-3 text-xs"><dl className="grid gap-1"><div><dt className="inline font-semibold">ID: </dt><dd className="inline break-all">{issue.objectId ?? issue.pageId ?? 'run'}</dd></div>{issue.rootCauseId && <div><dt className="inline font-semibold">Root cause: </dt><dd className="inline break-all">{issue.rootCauseId}</dd></div>}<div><dt className="inline font-semibold">Message: </dt><dd className="inline whitespace-pre-wrap break-words">{issue.message}</dd></div></dl></CollapsibleContent></Collapsible></Alert>)}</div>;
 }
 
 function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTreeNode | undefined; payload: ReportPresentationPayload; locale: Locale; t: (key: TranslationKey) => string; onOpenChange: (open: boolean) => void}) {
   const page = node?.page;
   const excluded = node?.excluded;
-  const issues = node ? payload.report.issues.filter((issue) => issue.pageId === node.id || issue.blockedByPageId === node.id) : [];
+  const issues = node ? payload.report.issues.filter((issue) =>
+    (issue.pageId === node.id || issue.blockedByPageId === node.id)
+    && issue.severity !== 'adaptation'
+    && issue.severity !== 'normalization') : [];
   const preview = node ? payload.previews[node.id] : undefined;
   return (
     <Dialog open={Boolean(node)} onOpenChange={onOpenChange}>
@@ -328,11 +332,13 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
                 [t('depth'), String(node?.depth ?? 0)],
                 [t('inventory'), page ? `${page.links} ${t('links')} · ${page.tables} ${t('tables')} · ${page.grids} ${t('grids')} · ${page.codeBlocks} ${t('codeBlocks')}` : excluded?.reason],
                 [t('status'), node ? <StatusBadge key="page-status" status={node.status} t={t} /> : '—'],
+                ['Conflict evidence', page?.conflictEvidence ? `${page.conflictEvidence.reason}: ${page.conflictEvidence.candidateIds.join(', ')}` : '—'],
               ]} />
               <div className="flex flex-wrap gap-2"><ExternalIcon href={page?.sourceUrl ?? excluded?.sourceUrl} label={t('sourceLink')}><ExternalLink className="size-4" /></ExternalIcon><ExternalIcon href={page?.destinationUrl} label={t('destinationLink')}><ExternalLink className="size-4" /></ExternalIcon></div>
               {excluded && !excluded.metadataComplete && <Alert className="border-amber-500/30"><AlertTriangle className="mr-2 inline size-4" />{t('metadataIncomplete')}</Alert>}
               {page?.error && <Alert className="border-red-500/30"><XCircle className="mr-2 inline size-4" />{page.error}</Alert>}
               {page?.warnings.map((warning) => <Alert key={warning} className="border-amber-500/30">{warning}</Alert>)}
+              {page?.adaptations?.map((adaptation) => <Alert key={adaptation} className="border-blue-500/30">{adaptation}</Alert>)}
             </TabsContent>
             <TabsContent value="files">
               {!page || page.resourceItems.length === 0 ? <Alert>{t('noFiles')}</Alert> : <Table><TableHeader><TableRow><TableHead>{t('name')}</TableHead><TableHead>{t('kind')}</TableHead><TableHead>{t('size')}</TableHead><TableHead>{t('status')}</TableHead><TableHead>{t('reason')}</TableHead></TableRow></TableHeader><TableBody>{page.resourceItems.map((resource) => <TableRow key={resource.sourceId}><TableCell><div className="flex items-start gap-2">{resource.kind === 'image' ? <FileImage className="mt-0.5 size-4 text-primary" /> : <Paperclip className="mt-0.5 size-4 text-primary" />}<div><p className="font-medium">{resource.sourceName}</p>{resource.destinationName && resource.destinationName !== resource.sourceName && <p className="text-xs text-muted-foreground">→ {resource.destinationName}</p>}<div className="mt-1 flex gap-1"><ExternalIcon href={resource.sourceUrl} label={t('sourceLink')}><ExternalLink className="size-3.5" /></ExternalIcon><ExternalIcon href={resource.destinationUrl} label={t('destinationLink')}><ExternalLink className="size-3.5" /></ExternalIcon></div></div></div></TableCell><TableCell>{resource.kind}</TableCell><TableCell>{resource.sourceBytes === undefined ? '—' : formatBytes(resource.sourceBytes)}{resource.sha256 && <code className="mt-1 block max-w-40 truncate text-xs" title={resource.sha256}>{resource.sha256}</code>}</TableCell><TableCell><StatusBadge status={resource.status} t={t} /></TableCell><TableCell className="max-w-sm text-muted-foreground">{resource.error ?? resource.blockedReason ?? '—'}</TableCell></TableRow>)}</TableBody></Table>}

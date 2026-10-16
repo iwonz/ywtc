@@ -2,9 +2,7 @@
 
 ## Purpose
 Maintain ywtc as a public, testable, documented, and release-safe TypeScript project with a mandatory OpenSpec change lifecycle.
-
 ## Requirements
-
 ### Requirement: Complete OpenSpec change lifecycle
 Repository agents MUST synchronize a clean local `master` with `origin/master` before starting a change, execute the complete OpenSpec lifecycle for every code, documentation, tooling, or specification change, and repeat the remote comparison before commit and push.
 
@@ -198,7 +196,7 @@ Package and project checks SHALL exercise the public comment flags, provider con
 - **THEN** source fixtures, cached comment bodies, generated ZIPs, reports, tokens, email addresses, and runtime state SHALL be excluded
 
 ### Requirement: Transfer outcome documentation
-The README SHALL define current page and file outcome semantics inside the existing Reports section without introducing another second-level section.
+The README SHALL define page/file outcomes and the separate normalization, adaptation, degradation, warning, and error quality dimensions inside the existing Reports section.
 
 #### Scenario: Page status is inspected
 - **WHEN** an operator reads `### Статусы переноса` under `## Отчёты`
@@ -206,16 +204,20 @@ The README SHALL define current page and file outcome semantics inside the exist
 - **AND** it SHALL state whether destination data was written and the appropriate user action for each status
 
 #### Scenario: File status is inspected
-- **WHEN** an operator reads the same subsection
+- **WHEN** the operator reads the same subsection
 - **THEN** a separate file-status table SHALL define `complete`, `partial`, `failed`, `blocked`, `planned`, and `not-started`
 - **AND** it SHALL explain that `planned` is exclusive to dry-run while `blocked` identifies an unmet page dependency
+
+#### Scenario: Quality classification is inspected
+- **WHEN** an operator compares complete pages containing normalizations or adaptations with partial pages
+- **THEN** documentation SHALL explain that adaptations preserve information in another presentation while degradations identify absent or unverified information
 
 #### Scenario: Failure and dependency are compared
 - **WHEN** an operator compares `failed` with `blocked`
 - **THEN** the documentation SHALL explain that `failed` means an operation was attempted unsuccessfully while `blocked` means it was intentionally not attempted because an upstream dependency failed or conflicted
 
 #### Scenario: README structure is checked
-- **WHEN** the status documentation is added
+- **WHEN** the status documentation is updated
 - **THEN** the README SHALL retain its exact thirteen second-level headings and SHALL NOT duplicate status definitions in another section
 
 ### Requirement: Packaged report application
@@ -237,11 +239,15 @@ The package SHALL include a transparent provider-neutral report illustration tha
 - **THEN** the illustration SHALL remain legible, preserve transparency, fit without clipping, and contain no migration-specific organization data
 
 ### Requirement: Interactive report quality gates
-Project checks SHALL validate compact report accounting, offline behavior, accessibility, localization, theming, responsive interaction, large-tree behavior, privacy, and package availability.
+Project checks SHALL validate reconciled adaptation and degradation accounting in addition to offline behavior, accessibility, localization, theming, responsiveness, privacy, and packaging.
 
 #### Scenario: Browser suite runs
 - **WHEN** the maintained Playwright report suite opens a generated report through `file://`
-- **THEN** it SHALL exercise the unified overview, absence of removed standalone panels and disclaimer, summary reconciliation, hierarchy search/filter/collapse, direct links, dialog tabs, previews, icon preference cycles, keyboard interaction, Russian and English, light and dark themes, and mobile layout without application network requests
+- **THEN** it SHALL exercise reconciled status and quality totals, hierarchy interactions, details, preferences, desktop/mobile themes and languages without application network requests
+
+#### Scenario: Adapted complete page is inspected
+- **WHEN** report fixtures contain a complete page with static Grid, layout, or external-reference adaptations
+- **THEN** the page SHALL remain complete and adaptations SHALL remain separate from degradations, warnings, and conflicts in every report surface
 
 #### Scenario: Preference controls are inspected
 - **WHEN** browser checks activate language and theme buttons
@@ -252,11 +258,11 @@ Project checks SHALL validate compact report accounting, offline behavior, acces
 - **THEN** checks SHALL prove active content is isolated and downloadable JSON plus package contents do not expose protected values
 
 ### Requirement: Interactive report documentation
-The README SHALL describe the current compact dashboard within `## Отчёты` without changing the fixed second-level section order or duplicating migration status definitions.
+The README SHALL describe the compact dashboard and its distinct information-impact categories within `## Отчёты` without changing the fixed second-level section order.
 
 #### Scenario: Operator reads report guidance
 - **WHEN** an operator reads the Reports section
-- **THEN** it SHALL concisely explain the unified source/destination overview, quality totals, hierarchy filters, per-page details, comparison, icon language/theme controls, JSON download, and existing report-opening commands
+- **THEN** it SHALL concisely explain the unified overview, quality totals for adaptations/degradations/normalizations, hierarchy filters, details, comparison, preference controls, JSON download, and report-opening commands
 
 ### Requirement: Deterministic offline report typography
 The packaged report application SHALL render its interface with self-hosted font resources embedded in the autonomous HTML shell and SHALL NOT depend on fonts installed by the host operating system.
@@ -274,15 +280,19 @@ The packaged report application SHALL render its interface with self-hosted font
 - **THEN** the resulting single HTML file SHALL contain the font resources required to render the dashboard autonomously
 
 ### Requirement: Content-equivalence documentation
-The README supported-content table SHALL describe current bidirectional native equivalents and SHALL distinguish exact preservation, safe normalization, static representation, and loss-aware fallback without adding another second-level section.
+The README supported-content table SHALL distinguish exact preservation, safe normalization, complete static adaptation, and incomplete fallback without adding another second-level section.
 
 #### Scenario: Operator evaluates layout fidelity
 - **WHEN** the operator reads `Возможности`
-- **THEN** the table SHALL explain Yandex Wiki and Confluence column-layout preservation, responsive HTML behavior, and Markdown's recorded linearization
+- **THEN** the table SHALL explain native column preservation plus complete responsive HTML and ordered Markdown adaptations when all cells remain available
+
+#### Scenario: Operator evaluates dynamic tables and external media
+- **WHEN** the operator compares provider constructs
+- **THEN** the table SHALL identify verified Grid snapshots as complete adaptations and unchanged external image URLs as preserved references rather than partial transfers
 
 #### Scenario: Operator evaluates provider constructs
 - **WHEN** the operator compares Yandex Wiki and Confluence features
-- **THEN** the table SHALL identify supported pairs for notes/callouts, cuts/expand, tree/children, task lists, code, anchors, links, images, and attachments and SHALL keep unsupported constructs in the concise limitations table
+- **THEN** the table SHALL identify supported pairs for notes/callouts, cuts/expand, tree/children, task lists, code, anchors, links, images, and attachments and SHALL keep genuinely incomplete constructs in the concise limitations table
 
 #### Scenario: Empty structural page is documented
 - **WHEN** a source page has no meaningful content and exists only as a hierarchy container

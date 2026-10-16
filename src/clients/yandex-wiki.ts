@@ -213,11 +213,8 @@ export class YandexWikiClient implements YandexWikiApi {
       });
       const unique = new Map<number, YandexPageIdentity>();
       for (const item of items) {
-        const existing = unique.get(item.id);
-        if (existing && existing.slug !== item.slug) {
-          throw new Error(`Yandex Wiki descendant ${item.id} was returned with conflicting slugs: ${existing.slug}, ${item.slug}`);
-        }
-        if (!existing) unique.set(item.id, item);
+        // Page ID is immutable; a later slug is the current alias after a rename/move.
+        unique.set(item.id, item);
       }
       return [...unique.values()];
     }) as Promise<YandexPageIdentity[]>;

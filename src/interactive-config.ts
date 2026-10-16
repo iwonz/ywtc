@@ -1,6 +1,7 @@
 import {createHash, randomUUID} from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
+import {isDeepStrictEqual} from 'node:util';
 import {Document, isMap, isScalar, parseDocument} from 'yaml';
 import {
   type AppConfig,
@@ -205,6 +206,64 @@ async function unchanged(workspace: Workspace, original: ExistingInteractiveConf
   }
 }
 
+interface SemanticChange {
+  path: string[];
+  before: unknown;
+  after: unknown;
+}
+
+function recordSemanticChanges(before: unknown, after: unknown, currentPath: string[] = []): SemanticChange[] {
+  if (isDeepStrictEqual(before, after)) return [];
+  const beforeRecord = before && typeof before === 'object' && !Array.isArray(before) ? before as Record<string, unknown> : undefined;
+  const afterRecord = after && typeof after === 'object' && !Array.isArray(after) ? after as Record<string, unknown> : undefined;
+  if (beforeRecord && afterRecord) {
+    return [...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)])]
+      .flatMap((key) => recordSemanticChanges(beforeRecord[key], afterRecord[key], [...currentPath, key]));
+  }
+  return [{path: currentPath, before, after}];
+}
+
+function valueAt(value: unknown, keys: readonly string[]): unknown {
+  let current = value;
+  for (const key of keys) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+async function mergeCurrentInteractiveChanges(
+  workspace: Workspace,
+  original: ExistingInteractiveConfig,
+  draft: Document,
+): Promise<Document> {
+  if (!original.document) {
+    throw new InteractiveConfigConflictError(`Configuration changed during setup and its original fields cannot be merged: ${workspace.configFile}.`);
+  }
+  const latestSource = await fs.readFile(workspace.configFile, 'utf8');
+  const latest = parseDocument(latestSource);
+  validateInteractiveDocument(latest, workspace.configFile);
+  const before = original.document.toJS();
+  const after = draft.toJS();
+  const current = latest.toJS();
+  const changes = recordSemanticChanges(before, after);
+  const conflicting = changes.filter((change) => {
+    const latestValue = valueAt(current, change.path);
+    return !isDeepStrictEqual(latestValue, change.before) && !isDeepStrictEqual(latestValue, change.after);
+  });
+  if (conflicting.length > 0) {
+    throw new InteractiveConfigConflictError(
+      `Configuration fields changed both in the wizard and on disk: ${conflicting.map((change) => change.path.join('.')).join(', ')}. Review those fields and retry.`,
+    );
+  }
+  for (const change of changes) {
+    if (change.after === undefined) latest.deleteIn(change.path);
+    else latest.setIn(change.path, change.after);
+  }
+  validateInteractiveDocument(latest, workspace.configFile);
+  return latest;
+}
+
 async function replaceConfig(tempFile: string, workspace: Workspace, operations: InteractiveFileOperations): Promise<void> {
   try {
     await operations.rename(tempFile, workspace.configFile);
@@ -231,11 +290,15 @@ export async function commitInteractiveConfig(input: {
   operations?: InteractiveFileOperations;
 }): Promise<InteractiveCommitResult> {
   const {workspace, document, original, reset} = input;
-  const source = serialized(document);
-  parseWorkspaceConfigYaml(source, workspace.configFile);
+  let committedDocument = document;
   if (!await unchanged(workspace, original)) {
-    throw new InteractiveConfigConflictError(`Configuration changed during setup: ${workspace.configFile}. Restart the wizard.`);
+    if (reset || !original) {
+      throw new InteractiveConfigConflictError(`Configuration changed during setup: ${workspace.configFile}. Review it and retry.`);
+    }
+    committedDocument = await mergeCurrentInteractiveChanges(workspace, original, document);
   }
+  const source = serialized(committedDocument);
+  parseWorkspaceConfigYaml(source, workspace.configFile);
 
   await ensureWorkspaceDirectories(workspace);
   let backupFile: string | undefined;

@@ -57,7 +57,7 @@ function safeErrorMessage(error: AxiosError): string {
       : status === 404
         ? 'resource or API route not found; check URL, page ID, deployment, and API compatibility'
         : status === 409
-          ? 'destination conflict; retry with the same state after checking the current page version/title'
+          ? 'provider rejected the current revision or request state; ywtc will classify and reconcile the operation when supported'
           : status === 413
             ? 'payload too large for the destination; check Confluence attachment limits'
             : status === 429

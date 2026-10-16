@@ -2,6 +2,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
+import {acquireExclusiveLease, type ExclusiveLease} from './exclusive-lease.js';
 import type {ExportFormat, GraphEdgeStatus, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
 
 export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'not-started' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
@@ -13,6 +14,11 @@ export interface BlockingCause {
   blockedByPageId?: string;
   blockedByCode?: string;
   blockedReason?: string;
+}
+
+export interface ConflictEvidence {
+  reason: 'duplicate-source-mapping' | 'immutable-id-mismatch' | 'ambiguous-ownership-candidates';
+  candidateIds: string[];
 }
 
 export interface EndpointIdentity {
@@ -94,6 +100,8 @@ export interface PageTransferState extends BlockingCause {
   resources: Record<string, ResourceTransferState>;
   comments?: CommentTransferState;
   degradations: string[];
+  adaptations?: string[];
+  conflictEvidence?: ConflictEvidence;
   lastError?: string;
   updatedAt: string;
 }
@@ -120,6 +128,10 @@ export interface StateRun {
   excludedPages: number;
   maximumDepth: number;
   warnings: number;
+  degradations?: number;
+  adaptations?: number;
+  normalizations?: number;
+  preservedExternalReferences?: number;
   errors: number;
   rootErrors?: number;
   dependentPages?: number;
@@ -296,6 +308,11 @@ const pageStateSchema = z.object({
   resources: z.record(z.string(), resourceStateSchema),
   comments: commentStateSchema.optional(),
   degradations: z.array(z.string()),
+  adaptations: z.array(z.string()).optional(),
+  conflictEvidence: z.object({
+    reason: z.enum(['duplicate-source-mapping', 'immutable-id-mismatch', 'ambiguous-ownership-candidates']),
+    candidateIds: z.array(z.string()),
+  }).strict().optional(),
   lastError: z.string().optional(),
   updatedAt: z.string(),
 }).strict();
@@ -322,6 +339,10 @@ const runSchema = z.object({
   excludedPages: z.number().int().nonnegative().optional().default(0),
   maximumDepth: z.number().int().nonnegative().optional().default(0),
   warnings: z.number().int().nonnegative(),
+  degradations: z.number().int().nonnegative().optional(),
+  adaptations: z.number().int().nonnegative().optional(),
+  normalizations: z.number().int().nonnegative().optional(),
+  preservedExternalReferences: z.number().int().nonnegative().optional(),
   errors: z.number().int().nonnegative(),
   rootErrors: z.number().int().nonnegative().optional(),
   dependentPages: z.number().int().nonnegative().optional(),
@@ -378,11 +399,16 @@ export class StateStore {
   private saveChain: Promise<void> = Promise.resolve();
   private readOnly = false;
   private info?: StateLoadInfo;
+  private lease?: ExclusiveLease;
 
   constructor(public readonly filename: string) {}
 
   async load(identity: TransferIdentity, options: {fresh?: boolean; dryRun?: boolean} = {}): Promise<TransferState> {
     this.readOnly = options.dryRun ?? false;
+    if (!this.readOnly) {
+      this.lease = await acquireExclusiveLease(`${this.filename}.lock`, 'ywtc state run', this.filename);
+    }
+    try {
     if (options.fresh) {
       let preserved: string | undefined;
       if (!this.readOnly) {
@@ -418,6 +444,10 @@ export class StateStore {
     this.state = emptyState(identity);
     this.info = {source: 'new'};
     return this.state;
+    } catch (error) {
+      await this.release();
+      throw error;
+    }
   }
 
   get value(): TransferState {
@@ -480,6 +510,10 @@ export class StateStore {
   async finishRun(runId: string, status: RunStatus, counts: {
     pages: number;
     warnings: number;
+    degradations?: number;
+    adaptations?: number;
+    normalizations?: number;
+    preservedExternalReferences?: number;
     errors: number;
     rootErrors?: number;
     dependentPages?: number;
@@ -490,6 +524,13 @@ export class StateStore {
     if (!run) throw new Error(`State run ${runId} was not initialized`);
     Object.assign(run, counts, {status, finishedAt: new Date().toISOString()});
     if (!this.readOnly) await this.save();
+    await this.release();
+  }
+
+  async release(): Promise<void> {
+    const lease = this.lease;
+    delete this.lease;
+    await lease?.release();
   }
 
   async setGraph(rootId: string, edges: StateGraphEdge[]): Promise<void> {
@@ -512,7 +553,7 @@ export class StateStore {
       if (['discovered', 'planned', 'skeleton-created'].includes(page.status)) page.status = 'not-started';
       const dependencyBlocked = page.status === 'blocked' || page.status === 'failed' || page.status === 'conflict';
       const blockedByPageId = page.blockedByPageId ?? page.sourceCanonicalId;
-      const blockedByCode = page.blockedByCode ?? (page.status === 'conflict' ? 'destination-conflict' : 'destination-page-unavailable');
+      const blockedByCode = page.blockedByCode ?? (page.status === 'conflict' ? 'destination-ownership-ambiguity' : 'destination-page-unavailable');
       const blockedReason = page.blockedReason ?? page.lastError ?? `Destination page ${blockedByPageId} is unavailable`;
       for (const resource of Object.values(page.resources)) {
         if (resource.status !== 'planned') continue;

@@ -21,6 +21,7 @@ import type {
   RenderedDocument,
   SourcePage,
   SourceResource,
+  TransformationNotice,
 } from './domain.js';
 import {convertYfmToStorage} from './conversion.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
@@ -30,6 +31,28 @@ const linkifier = new LinkifyIt();
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function transformationNotices(input: {
+  normalizations?: readonly string[];
+  adaptations?: readonly string[];
+  degradations?: readonly string[];
+}): TransformationNotice[] {
+  const make = (kind: TransformationNotice['kind'], message: string): TransformationNotice => ({
+    code: `${kind}:${sha256(message).slice(0, 12)}`,
+    kind,
+    message,
+    verification: kind === 'normalization'
+      ? 'semantic-content-equivalence'
+      : kind === 'adaptation'
+        ? 'payload-preserved'
+        : 'full-representation-unverified',
+  });
+  return [
+    ...(input.normalizations ?? []).map((message) => make('normalization', message)),
+    ...(input.adaptations ?? []).map((message) => make('adaptation', message)),
+    ...(input.degradations ?? []).map((message) => make('degradation', message)),
+  ];
 }
 
 function escapeHtml(value: unknown): string {
@@ -219,7 +242,7 @@ const confluenceLayoutCellCounts = new Map([
   ['three_with_sidebars', 3],
 ]);
 
-function storageToSemanticHtml(storage: string, warnings: string[]): string {
+function storageToSemanticHtml(storage: string, warnings: string[], adaptations: string[] = []): string {
   const $ = load(`<main data-ywtc-root>${storage}</main>`, {xmlMode: false}, false);
   $('script, iframe, object, embed, form').each((_index, element) => {
     warnings.push(`Active or embedded element <${element.tagName}> was replaced by a safe fallback`);
@@ -227,7 +250,7 @@ function storageToSemanticHtml(storage: string, warnings: string[]): string {
   });
   $('ac\\:layout').toArray().reverse().forEach((element) => {
     const layout = $(element);
-    if (layout.parents('ac\\:layout').length > 0) warnings.push('Nested Confluence layout was preserved as a readable layout fallback');
+    if (layout.parents('ac\\:layout').length > 0) adaptations.push('Nested Confluence layout was preserved as readable nested sections');
     const sections = layout.children('ac\\:layout-section').toArray().map((section) => {
       const item = $(section);
       const requestedType = item.attr('ac:type') ?? 'unsupported';
@@ -235,7 +258,7 @@ function storageToSemanticHtml(storage: string, warnings: string[]): string {
       const cells = item.children('ac\\:layout-cell').toArray();
       const sectionType = expectedCells === cells.length ? requestedType : 'unsupported';
       if (sectionType === 'unsupported') {
-        warnings.push(`Confluence layout section "${requestedType}" with ${cells.length} cells was preserved as an unsupported-width layout fallback`);
+        adaptations.push(`Confluence layout section "${requestedType}" with ${cells.length} cells was preserved with equivalent cell content and adaptive widths`);
       }
       const body = cells.map((cell) => `<div class="ywtc-layout-cell">${$(cell).html() ?? ''}</div>`).join('');
       return `<section class="ywtc-layout-section ywtc-layout-${escapeHtml(sectionType)} ywtc-layout-columns-${cells.length}" data-ywtc-layout-type="${escapeHtml(sectionType)}">${body}</section>`;
@@ -280,7 +303,11 @@ function storageToSemanticHtml(storage: string, warnings: string[]): string {
     const attachment = image.children('ri\\:attachment').attr('ri:filename');
     const external = image.children('ri\\:url').attr('ri:value');
     const source = attachment ? `attachment:${attachment}` : external;
-    image.replaceWith(source ? `<img src="${escapeHtml(source)}" alt="${escapeHtml(image.attr('ac:alt') ?? attachment ?? '')}">` : '<span>[image]</span>');
+    const dimensions = [
+      image.attr('ac:width') ? ` width="${escapeHtml(image.attr('ac:width'))}"` : '',
+      image.attr('ac:height') ? ` height="${escapeHtml(image.attr('ac:height'))}"` : '',
+    ].join('');
+    image.replaceWith(source ? `<img src="${escapeHtml(source)}" alt="${escapeHtml(image.attr('ac:alt') ?? attachment ?? '')}"${dimensions}>` : '<span>[image]</span>');
   });
   $('ac\\:link').each((_index, element) => {
     const link = $(element);
@@ -429,7 +456,7 @@ function yfmToHtml(content: string, warnings: string[], normalizations: string[]
 
 function metrics(html: string): NormalizedDocument['metrics'] {
   const $ = load(html, null, false);
-  return {links: $('a').length, images: $('img').length, tables: $('table').length, codeBlocks: $('pre').length};
+  return {links: $('a').length, images: $('img').length, tables: $('table').length, codeBlocks: $('pre').length, preservedExternalReferences: 0};
 }
 
 function normalizedNodesFromHtml(html: string, provider: SourcePage['provider']): NormalizedNode[] {
@@ -477,8 +504,9 @@ function semanticallyEmptyHtml(html: string): boolean {
 export function normalizePageContent(page: SourcePage): NormalizedDocument {
   const warnings: string[] = [];
   const normalizations: string[] = [];
+  const adaptations: string[] = [];
   const tree = page.rawFormat === 'yfm' ? extractTreeDirectives(page.rawContent) : {content: page.rawContent, directives: []};
-  const html = page.rawFormat === 'yfm' ? yfmToHtml(tree.content, warnings, normalizations) : storageToSemanticHtml(page.rawContent, warnings);
+  const html = page.rawFormat === 'yfm' ? yfmToHtml(tree.content, warnings, normalizations) : storageToSemanticHtml(page.rawContent, warnings, adaptations);
   const references = extractPageReferences(page.rawContent, page.rawFormat).map<NormalizedReference>((reference, index) => ({
     token: `ref-${index}`,
     kind: reference.kind,
@@ -505,6 +533,8 @@ export function normalizePageContent(page: SourcePage): NormalizedDocument {
     references,
     warnings,
     normalizations,
+    adaptations,
+    notices: transformationNotices({normalizations, adaptations, degradations: warnings}),
     degraded: warnings.length > 0,
     semanticallyEmpty: tree.directives.length === 0 && semanticallyEmptyHtml(html),
     metrics: metrics(html),
@@ -535,10 +565,11 @@ export function appendGridSnapshots(document: NormalizedDocument, resources: Sou
   const htmlNode = document.root.children?.find((node) => node.type === 'html');
   if (htmlNode) htmlNode.value = `${htmlNode.value ?? ''}${html}`;
   else document.root.children?.push({type: 'html', value: html});
+  const adaptations = [...document.adaptations, ...grids.map((resource) => `Dynamic table "${resource.name}" was converted to a static table`)];
   return {
     ...document,
-    warnings: [...document.warnings, ...grids.map((resource) => `Dynamic table "${resource.name}" was converted to a static table`)],
-    degraded: true,
+    adaptations,
+    notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: document.warnings}),
     semanticallyEmpty: false,
     metrics: {...document.metrics, tables: document.metrics.tables + grids.length},
   };
@@ -572,11 +603,11 @@ function linearizeLayoutsForMarkdown(html: string): {html: string; layouts: numb
 
 interface YfmSemanticResult {
   body: string;
-  warnings: string[];
+  adaptations: string[];
 }
 
 async function semanticHtmlToYfm(html: string): Promise<YfmSemanticResult> {
-  const warnings = new Set<string>();
+  const adaptations = new Set<string>();
   let tokenSequence = 0;
   const convert = async (fragment: string): Promise<string> => {
     const $ = load(fragment, null, false);
@@ -592,7 +623,7 @@ async function semanticHtmlToYfm(html: string): Promise<YfmSemanticResult> {
           const sectionItem = $(section);
           const sectionType = sectionItem.attr('data-ywtc-layout-type') ?? 'unsupported';
           if (['two_left_sidebar', 'two_right_sidebar', 'three_with_sidebars', 'unsupported'].includes(sectionType)) {
-            warnings.add(`Confluence ${sectionType} layout widths were converted to equal YFM columns`);
+            adaptations.add(`Confluence ${sectionType} layout widths were converted to equal YFM columns`);
           }
           const blocks: string[] = [];
           for (const cell of sectionItem.children('.ywtc-layout-cell').toArray()) {
@@ -642,7 +673,7 @@ async function semanticHtmlToYfm(html: string): Promise<YfmSemanticResult> {
     for (const [token, rendered] of tokens) markdown = markdown.replaceAll(token, rendered);
     return markdown.trim();
   };
-  return {body: `${await convert(html)}\n`, warnings: [...warnings]};
+  return {body: `${await convert(html)}\n`, adaptations: [...adaptations]};
 }
 
 async function sanitizeHtml(html: string): Promise<string> {
@@ -711,6 +742,19 @@ function markdownFence(value: string): string {
 
 export function rawContentFallback(page: SourcePage, provider: SourcePage['provider'], reason: string): RenderedDocument {
   const warning = `Preferred rendering failed; complete raw source is shown instead: ${reason}`;
+  if (!page.rawContent.trim()) {
+    const normalizations = ['Preserved an intentionally empty source page'];
+    return {
+      body: provider === 'confluence' ? '<p></p>' : '',
+      warnings: [],
+      normalizations,
+      adaptations: [],
+      notices: transformationNotices({normalizations}),
+      degraded: false,
+      representedReferences: page.references.length,
+      preservedExternalReferences: 0,
+    };
+  }
   if (provider === 'confluence') {
     const raw = page.rawContent
       ? `<pre><code>${escapeHtml(page.rawContent)}</code></pre>`
@@ -719,8 +763,11 @@ export function rawContentFallback(page: SourcePage, provider: SourcePage['provi
       body: `<p><strong>Source content fallback</strong> · <a href="${escapeHtml(page.url)}">original page</a></p>${raw}`,
       warnings: [warning],
       normalizations: [],
+      adaptations: [],
+      notices: transformationNotices({degradations: [warning]}),
       degraded: true,
       representedReferences: page.references.length,
+      preservedExternalReferences: 0,
     };
   }
   const raw = page.rawContent
@@ -730,8 +777,11 @@ export function rawContentFallback(page: SourcePage, provider: SourcePage['provi
     body: `**Source content fallback** · [original page](${page.url})\n\n${raw}\n`,
     warnings: [warning],
     normalizations: [],
+    adaptations: [],
+    notices: transformationNotices({degradations: [warning]}),
     degraded: true,
     representedReferences: page.references.length,
+    preservedExternalReferences: 0,
   };
 }
 
@@ -760,6 +810,7 @@ interface SemanticContent {
   links: string[];
   images: string[];
   imageLabels: string[];
+  imageAttributes: string[];
   anchors: string[];
   structure: {lists: number; rows: number; details: number; asides: number; codeBlocks: number};
   macros: string[];
@@ -813,6 +864,12 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     links: $('a[href]').toArray().map((element) => `${$(element).attr('href') ?? ''}|${semanticText($(element).text())}`).sort(),
     images: $('img').toArray().map((element) => $(element).attr('src') ?? '').sort(),
     imageLabels: $('img').toArray().map((element) => $(element).attr('alt') ?? '').sort(),
+    imageAttributes: $('img').toArray().map((element) => [
+      $(element).attr('src') ?? '',
+      $(element).attr('alt') ?? '',
+      $(element).attr('width') ?? '',
+      $(element).attr('height') ?? '',
+    ].join('|')).sort(),
     anchors: $('[id],a[name]').toArray().map((element) => $(element).attr('id') ?? $(element).attr('name') ?? '').filter(Boolean).sort(),
     structure: {
       lists: $('ul,ol').length,
@@ -834,6 +891,7 @@ function semanticContentIsEmpty(content: SemanticContent): boolean {
     && content.code.length === 0
     && content.links.length === 0
     && content.images.length === 0
+    && content.imageAttributes.length === 0
     && content.anchors.length === 0
     && content.macros.length === 0
     && content.layouts.length === 0
@@ -847,6 +905,7 @@ export function semanticContentFingerprint(body: string, provider: SourcePage['p
 export interface ContentVerificationResult {
   status: 'complete' | 'partial' | 'failed';
   differences: string[];
+  adaptations: string[];
 }
 
 export function verifyDestinationContent(
@@ -855,18 +914,18 @@ export function verifyDestinationContent(
   provider: SourcePage['provider'],
   page: SourcePage,
 ): ContentVerificationResult {
-  if (actualBody === undefined) return {status: 'failed', differences: [`Verification could not read destination content for ${page.title}`]};
+  if (actualBody === undefined) return {status: 'failed', differences: [`Verification could not read destination content for ${page.title}`], adaptations: []};
   if (isLegacyTransferPlaceholder(actualBody, provider, page)) {
-    return {status: 'failed', differences: [`Verification found a transfer placeholder instead of source content for ${page.title}`]};
+    return {status: 'failed', differences: [`Verification found a transfer placeholder instead of source content for ${page.title}`], adaptations: []};
   }
   const expected = semanticContent(expectedBody, provider);
   const actual = semanticContent(actualBody, provider);
   const expectedEmpty = semanticContentIsEmpty(expected);
   const actualEmpty = semanticContentIsEmpty(actual);
-  if (expectedEmpty && actualEmpty) return {status: 'complete', differences: []};
-  if (!expectedEmpty && actualEmpty) return {status: 'failed', differences: [`Verification found empty destination content for ${page.title}`]};
+  if (expectedEmpty && actualEmpty) return {status: 'complete', differences: [], adaptations: []};
+  if (!expectedEmpty && actualEmpty) return {status: 'failed', differences: [`Verification found empty destination content for ${page.title}`], adaptations: []};
   if (expectedEmpty && !actualEmpty) {
-    return {status: 'failed', differences: [`Verification found unexpected destination content for semantically empty source page ${page.title}`]};
+    return {status: 'failed', differences: [`Verification found unexpected destination content for semantically empty source page ${page.title}`], adaptations: []};
   }
   const differs = (key: keyof SemanticContent): boolean => JSON.stringify(expected[key]) !== JSON.stringify(actual[key]);
   const missingData = (['text', 'tableCells', 'code', 'links', 'images', 'anchors', 'macros'] as const).filter(differs);
@@ -874,16 +933,19 @@ export function verifyDestinationContent(
     return {
       status: 'failed',
       differences: [`Verification found destination content that differs from the rendered source for ${page.title}: ${missingData.join(', ')}`],
+      adaptations: [],
     };
   }
-  const simplifiedFormatting = (['headings', 'listItems', 'imageLabels', 'structure', 'layouts'] as const).filter(differs);
-  if (simplifiedFormatting.length > 0) {
+  const missingStructure = (['headings', 'listItems', 'imageLabels', 'imageAttributes', 'structure'] as const).filter(differs);
+  if (missingStructure.length > 0) {
     return {
       status: 'partial',
-      differences: [`Destination formatting was simplified for ${page.title}: ${simplifiedFormatting.join(', ')}`],
+      differences: [`Destination lost or could not verify meaningful structure for ${page.title}: ${missingStructure.join(', ')}`],
+      adaptations: [],
     };
   }
-  return {status: 'complete', differences: []};
+  if (differs('layouts')) return {status: 'complete', differences: [], adaptations: [`Destination adapted visual layout geometry for ${page.title} while preserving its payload`]};
+  return {status: 'complete', differences: [], adaptations: []};
 }
 
 export function assertDestinationContent(
@@ -945,6 +1007,14 @@ function rewritePortableHtml(html: string, context: RenderContext): string {
   return $.html();
 }
 
+function preservedExternalImageCount(document: NormalizedDocument, context: RenderContext): number {
+  const $ = load(htmlFromDocument(document), null, false);
+  return $('img[src]').toArray().filter((element) => {
+    const source = $(element).attr('src') ?? '';
+    return /^https?:\/\//i.test(source) && !resourceBinding(source, context);
+  }).length;
+}
+
 function treeDirectiveNodes(document: NormalizedDocument): NormalizedNode[] {
   return document.root.children?.filter((node) => node.type === 'tree-directive') ?? [];
 }
@@ -986,20 +1056,21 @@ function renderTreeHtml(context: RenderContext, directive: NonNullable<Normalize
 
 export async function renderMarkdown(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
-    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
   const portable = rewritePortableHtml(htmlFromDocument(document), context);
   const linearized = linearizeLayoutsForMarkdown(portable);
   const tree = treeDirectiveNodes(document).map((node) => renderTreeMarkdown(context, node.tree ?? {})).filter(Boolean).join('\n\n');
   const content = await htmlToMarkdown(linearized.html);
   const body = tree ? `${content.trimEnd()}\n\n${tree}\n` : content;
-  const layoutWarnings = linearized.layouts > 0 ? [`${linearized.layouts} column layout${linearized.layouts === 1 ? ' was' : 's were'} linearized for portable Markdown`] : [];
-  return {body, warnings: [...document.warnings, ...layoutWarnings], normalizations: [...(document.normalizations ?? [])], degraded: document.degraded || layoutWarnings.length > 0, representedReferences: document.references.length};
+  const layoutAdaptations = linearized.layouts > 0 ? [`${linearized.layouts} column layout${linearized.layouts === 1 ? ' was' : 's were'} linearized for portable Markdown`] : [];
+  const adaptations = [...document.adaptations, ...layoutAdaptations];
+  return {body, warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations, notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: document.warnings}), degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: preservedExternalImageCount(document, context)};
 }
 
 export async function renderStaticHtml(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
-    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
   const rewritten = rewritePortableHtml(htmlFromDocument(document), context);
   const content = await sanitizeHtml(rewritten);
@@ -1011,13 +1082,14 @@ export async function renderStaticHtml(document: NormalizedDocument, context: Re
     for (const child of node.children ?? []) visit(child);
   };
   visit(document.root);
-  const layoutWarnings = unsupportedLayouts.map((cells) => `Unsupported ${cells}-cell layout was stacked in static HTML without losing cell content`);
-  return {body, warnings: [...document.warnings, ...layoutWarnings], normalizations: [...(document.normalizations ?? [])], degraded: document.degraded || layoutWarnings.length > 0, representedReferences: document.references.length};
+  const layoutAdaptations = unsupportedLayouts.map((cells) => `Unsupported ${cells}-cell layout was stacked in static HTML without losing cell content`);
+  const adaptations = [...document.adaptations, ...layoutAdaptations];
+  return {body, warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations, notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: document.warnings}), degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: preservedExternalImageCount(document, context)};
 }
 
 export async function renderYfm(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
-    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
   if (document.rawFormat === 'yfm') {
     let body = document.raw;
@@ -1054,29 +1126,40 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
     if (gridHtml) body = `${body.trimEnd()}\n\n${(await htmlToMarkdown(gridHtml)).trimStart()}`;
     return {
       body,
-      warnings: [...document.warnings, ...resourceWarnings],
-      normalizations: [...(document.normalizations ?? [])],
-      degraded: document.degraded || resourceWarnings.size > 0,
+      warnings: [...resourceWarnings],
+      normalizations: [...document.normalizations],
+      adaptations: [...document.adaptations],
+      notices: transformationNotices({normalizations: document.normalizations, adaptations: document.adaptations, degradations: [...resourceWarnings]}),
+      degraded: resourceWarnings.size > 0,
       representedReferences: document.references.length,
+      preservedExternalReferences: preservedExternalImageCount(document, context),
     };
   }
   const converted = await semanticHtmlToYfm(rewritePortableHtml(htmlFromDocument(document), context));
   return {
     body: converted.body,
-    warnings: [...document.warnings, ...converted.warnings],
-    normalizations: [...(document.normalizations ?? []), 'Converted supported Confluence Storage Format constructs to native YFM equivalents'],
-    degraded: document.degraded || converted.warnings.length > 0,
+    warnings: [...document.warnings],
+    normalizations: [...document.normalizations, 'Converted supported Confluence Storage Format constructs to native YFM equivalents'],
+    adaptations: [...document.adaptations, ...converted.adaptations],
+    notices: transformationNotices({normalizations: [...document.normalizations, 'Converted supported Confluence Storage Format constructs to native YFM equivalents'], adaptations: [...document.adaptations, ...converted.adaptations], degradations: document.warnings}),
+    degraded: document.degraded,
     representedReferences: document.references.length,
+    preservedExternalReferences: preservedExternalImageCount(document, context),
   };
 }
 
 export async function renderConfluenceStorage(document: NormalizedDocument, page: SourcePage, context: RenderContext, spaceKey: string): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
-    return {body: '<p></p>', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+    return {body: '<p></p>', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
   if (document.rawFormat === 'confluence-storage') {
     const $ = load(`<main data-root>${document.raw}</main>`, {xmlMode: true}, false);
-    const warnings = [...document.warnings];
+    const warnings: string[] = [];
+    $('script, iframe, object, embed, form').each((_index, element) => {
+      const raw = $.html(element);
+      warnings.push(`Active or embedded element <${element.tagName}> was preserved as inert source text`);
+      $(element).replaceWith(`<pre><code>${escapeHtml(raw)}</code></pre>`);
+    });
     $('ac\\:image').each((_index, element) => {
       const image = $(element);
       const attachment = image.children('ri\\:attachment');
@@ -1144,9 +1227,12 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
     return {
       body: $('main[data-root]').html() ?? '<p></p>',
       warnings,
-      normalizations: [...(document.normalizations ?? [])],
-      degraded: document.degraded || warnings.length > document.warnings.length,
+      normalizations: [...document.normalizations],
+      adaptations: [...document.adaptations],
+      notices: transformationNotices({normalizations: document.normalizations, adaptations: document.adaptations, degradations: warnings}),
+      degraded: warnings.length > 0,
       representedReferences: document.references.length,
+      preservedExternalReferences: preservedExternalImageCount(document, context),
     };
   }
   const pagesBySlug = new Map<string, {sourceId: number; slug: string; destinationTitle: string}>();
@@ -1210,8 +1296,11 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
     body: `${normalizedStorage('main[data-root]').html() ?? '<p></p>'}${treeStorage}${gridStorage}`,
     warnings: [...document.warnings, ...conversionWarnings],
     normalizations,
+    adaptations: [...document.adaptations, ...converted.adaptations],
+    notices: transformationNotices({normalizations, adaptations: [...document.adaptations, ...converted.adaptations], degradations: [...document.warnings, ...conversionWarnings]}),
     degraded: document.degraded || conversionWarnings.length > 0,
     representedReferences: document.references.length,
+    preservedExternalReferences: converted.stats.preservedExternalReferences,
   };
 }
 

@@ -23,6 +23,7 @@ export interface ConversionContext {
 export interface ConversionResult {
   storage: string;
   warnings: string[];
+  adaptations: string[];
   stats: ConversionStats;
 }
 
@@ -33,6 +34,7 @@ export interface ConversionStats {
   anchorLinks: number;
   attachedImages: number;
   externalImages: number;
+  preservedExternalReferences: number;
   tables: number;
   codeBlocks: number;
 }
@@ -45,6 +47,7 @@ export function emptyConversionStats(): ConversionStats {
     anchorLinks: 0,
     attachedImages: 0,
     externalImages: 0,
+    preservedExternalReferences: 0,
     tables: 0,
     codeBlocks: 0,
   };
@@ -257,6 +260,7 @@ function renderHtmlToStorage(
   html: string,
   context: ConversionContext,
   warnings: Set<string>,
+  adaptations: Set<string>,
   stats: ConversionStats,
 ): string {
   const $ = load(html, null, false);
@@ -307,7 +311,7 @@ function renderHtmlToStorage(
     }
 
     if (classes.has('yfm-tabs')) {
-      warnings.add('Tabs were converted to static headed sections');
+      adaptations.add('Tabs were converted to static headed sections');
       return element.find('.yfm-tab-panel').toArray().map((panel) => {
         const title = $(panel).attr('data-title') || 'Tab';
         return `<h3>${escapeXml(title)}</h3>${renderChildren(panel)}`;
@@ -356,7 +360,7 @@ function renderHtmlToStorage(
       const target = resolveLink(src, context);
       const external = target.type === 'external' ? target.href : new URL(src, `${context.wikiWebUrl}/`).toString();
       stats.externalImages += 1;
-      warnings.add(`Image was kept as an external reference: ${src}`);
+      stats.preservedExternalReferences += 1;
       return `<ac:image${attrs}><ri:url ri:value="${escapeAttribute(external)}"/></ac:image>`;
     }
 
@@ -374,15 +378,32 @@ function renderHtmlToStorage(
       return element.attr('checked') !== undefined ? '☑ ' : '☐ ';
     }
 
-    if (name === 'video') {
-      const src = element.attr('src') ?? '';
-      warnings.add(`Video was converted to a link: ${src}`);
-      return `<p><a href="${escapeAttribute(src)}">${escapeXml(src || 'Video')}</a></p>`;
+    if (name === 'video' || name === 'audio') {
+      const mediaType = name === 'video' ? 'Video' : 'Audio';
+      const references = [
+        element.attr('src'),
+        ...(name === 'video' ? [element.attr('poster')] : []),
+        ...element.find('source[src],track[src]').toArray().map((item) => $(item).attr('src')),
+      ].filter((value): value is string => Boolean(value));
+      const uniqueReferences = [...new Set(references)];
+      const fallbackText = element.clone().find('source,track').remove().end().text().trim();
+      if (uniqueReferences.length === 0 && !fallbackText) {
+        warnings.add(`${mediaType} could not be represented because it has no readable text or media reference`);
+        return `<p>[${mediaType}]</p>`;
+      }
+      adaptations.add(`${mediaType} was converted to ${uniqueReferences.length === 1 ? 'a preserved media link' : `${uniqueReferences.length} preserved media links`}`);
+      const links = uniqueReferences.map((src, index) => `<a href="${escapeAttribute(src)}">${escapeXml(uniqueReferences.length === 1 ? src : `${mediaType} ${index + 1}: ${src}`)}</a>`).join('<br/>');
+      return `<div>${links}${fallbackText ? `<p>${escapeXml(fallbackText)}</p>` : ''}</div>`;
     }
 
     if (classes.has('yfm-math') || classes.has('math')) {
-      warnings.add('Math markup was converted to inline code because no standard Confluence math macro is assumed');
-      return `<code>${escapeXml(element.text())}</code>`;
+      const expression = element.text().trim() || element.attr('data-math') || element.attr('data-formula') || '';
+      if (!expression) {
+        warnings.add('Math markup could not be represented because no textual expression was available');
+        return '<code>[formula]</code>';
+      }
+      adaptations.add('Math markup was converted to inline code because no standard Confluence math macro is assumed');
+      return `<code>${escapeXml(expression)}</code>`;
     }
 
     if (name === 'p') {
@@ -430,6 +451,7 @@ function convertYfmFragmentToStorage(
   content: string,
   context: ConversionContext,
   warnings: Set<string>,
+  adaptations: Set<string>,
   stats: ConversionStats,
 ): string {
   try {
@@ -443,7 +465,7 @@ function convertYfmFragmentToStorage(
       linkify: false,
     });
     for (const warning of [...(output.logs.warn ?? []), ...(output.logs.error ?? [])]) warnings.add(warning);
-    return renderHtmlToStorage(output.result.html, context, warnings, stats);
+    return renderHtmlToStorage(output.result.html, context, warnings, adaptations, stats);
   } catch (error) {
     warnings.add(`YFM transformation failed; original source was preserved: ${error instanceof Error ? error.message : String(error)}`);
     return `<ac:structured-macro ac:name="code" ac:schema-version="1"><ac:parameter ac:name="title">Original YFM</ac:parameter><ac:plain-text-body><![CDATA[${cdata(content)}]]></ac:plain-text-body></ac:structured-macro>`;
@@ -458,30 +480,31 @@ function confluenceLayoutType(cellCount: number): 'single' | 'two_equal' | 'thre
 
 export function convertYfmToStorage(content: string, context: ConversionContext): ConversionResult {
   const warnings = new Set<string>();
+  const adaptations = new Set<string>();
   const stats = emptyConversionStats();
   const segments = parseYfmDocumentSegments(content);
   if (!hasYfmLayouts(segments)) {
-    const storage = convertYfmFragmentToStorage(content, context, warnings, stats);
-    return {storage: storage || '<p></p>', warnings: [...warnings], stats};
+    const storage = convertYfmFragmentToStorage(content, context, warnings, adaptations, stats);
+    return {storage: storage || '<p></p>', warnings: [...warnings], adaptations: [...adaptations], stats};
   }
 
   const sections: string[] = [];
   for (const segment of segments) {
     if (segment.type === 'content') {
       if (!segment.raw.trim()) continue;
-      const body = convertYfmFragmentToStorage(segment.raw, context, warnings, stats);
+      const body = convertYfmFragmentToStorage(segment.raw, context, warnings, adaptations, stats);
       if (!body.trim()) continue;
       sections.push(`<ac:layout-section ac:type="single"><ac:layout-cell>${body}</ac:layout-cell></ac:layout-section>`);
       continue;
     }
     if (segment.cells.length > 3) {
-      warnings.add(`YFM layout with ${segment.cells.length} columns was split into Confluence rows of at most three columns`);
+      adaptations.add(`YFM layout with ${segment.cells.length} columns was split into Confluence rows of at most three columns`);
     }
     for (let offset = 0; offset < segment.cells.length; offset += 3) {
       const cells = segment.cells.slice(offset, offset + 3);
       const type = confluenceLayoutType(cells.length);
       const body = cells.map((cell) => (
-        `<ac:layout-cell>${convertYfmFragmentToStorage(cell, context, warnings, stats) || '<p></p>'}</ac:layout-cell>`
+        `<ac:layout-cell>${convertYfmFragmentToStorage(cell, context, warnings, adaptations, stats) || '<p></p>'}</ac:layout-cell>`
       )).join('');
       sections.push(`<ac:layout-section ac:type="${type}">${body}</ac:layout-section>`);
     }
@@ -489,6 +512,7 @@ export function convertYfmToStorage(content: string, context: ConversionContext)
   return {
     storage: `<ac:layout>${sections.join('')}</ac:layout>`,
     warnings: [...warnings],
+    adaptations: [...adaptations],
     stats,
   };
 }
@@ -528,7 +552,8 @@ function gridCellText(value: unknown): string {
 }
 
 export function convertGridToStorage(grid: YandexGrid, context: ConversionContext): ConversionResult {
-  const warnings = new Set<string>([`Dynamic table "${grid.title}" was converted to a static table`]);
+  const warnings = new Set<string>();
+  const adaptations = new Set<string>([`Dynamic table "${grid.title}" was converted to a static table`]);
   const stats = emptyConversionStats();
   stats.tables = 1;
   const headers = grid.structure.columns.map((column) => `<th>${escapeXml(column.title)}</th>`).join('');
@@ -540,6 +565,9 @@ export function convertGridToStorage(grid: YandexGrid, context: ConversionContex
         converted.warnings.forEach((warning) => {
           warnings.add(warning);
         });
+        converted.adaptations.forEach((adaptation) => {
+          adaptations.add(adaptation);
+        });
         mergeConversionStats(stats, converted.stats);
         return `<td>${converted.storage}</td>`;
       }
@@ -550,6 +578,7 @@ export function convertGridToStorage(grid: YandexGrid, context: ConversionContex
   return {
     storage: `<h2>${escapeXml(grid.title)}</h2><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`,
     warnings: [...warnings],
+    adaptations: [...adaptations],
     stats,
   };
 }

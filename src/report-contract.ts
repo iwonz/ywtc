@@ -1,6 +1,7 @@
 import type {GraphEdgeStatus, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
 import type {IssueCategory, IssueObjectType, MigrationIssue} from './issues.js';
 import type {CommentTransferStatus, PageTransferStatus, ResourceTransferState, RunStatus, StateLoadSource} from './state.js';
+import type {ConflictEvidence} from './state.js';
 
 export type ReportInventoryStatus = 'pending' | 'complete' | 'failed';
 export type ReportResourceStatus = ResourceTransferState['status'];
@@ -69,6 +70,9 @@ export interface TransferReportPage {
   resourceFallbacks: Array<{name: string; error: string}>;
   warnings: string[];
   normalizations?: string[];
+  adaptations?: string[];
+  preservedExternalReferences?: number;
+  conflictEvidence?: ConflictEvidence;
   error?: string;
   blockedByPageId?: string;
   blockedByCode?: string;
@@ -169,6 +173,8 @@ export interface TransferReportSummary {
   codeBlocks: number;
   cycles: number;
   normalizations: number;
+  adaptations: number;
+  preservedExternalReferences: number;
   degradations: number;
   warnings: number;
   errors: number;

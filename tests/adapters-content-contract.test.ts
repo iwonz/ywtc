@@ -83,6 +83,41 @@ describe('source page content contracts', () => {
     await expect(adapter.getDescendants(sourceRoot, {status: 'all'})).rejects.toThrow(/inventory is incomplete.*3 \(root\/missing\): not found/);
   });
 
+  it('keeps renamed pages by immutable ID and excludes pages moved outside the selected subtree', async () => {
+    const client = {
+      getDescendants: async () => [
+        {id: 2, slug: 'root/old-name'},
+        {id: 3, slug: 'root/moved-away'},
+      ],
+      getPageById: async (id: number) => id === 2
+        ? {id, slug: 'root/new-name', title: 'Renamed', page_type: 'page', content: 'body', breadcrumbs: [{id: 1, slug: 'root', title: 'Root'}]}
+        : {id, slug: 'other/moved-away', title: 'Moved', page_type: 'page', content: 'body', breadcrumbs: [{id: 99, slug: 'other', title: 'Other'}]},
+    } as unknown as YandexWikiClient;
+    const adapter = new YandexAdapter(yandexProfile, client);
+    const sourceRoot = {provider: 'yandex-wiki' as const, profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root', locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm' as const, references: []};
+    const result = await adapter.getDescendants(sourceRoot, {status: 'all'});
+    expect(result.pages).toEqual([expect.objectContaining({id: '2', locator: 'root/new-name'})]);
+    expect(result.excluded).toEqual([expect.objectContaining({id: '3', locator: 'other/moved-away', reason: 'inventory-drift'})]);
+    expect(result.notes.join(' ')).toMatch(/changed locator/);
+    expect(result.notes.join(' ')).toMatch(/moved outside/);
+  });
+
+  it('classifies Yandex title collisions and update revision races without message heuristics', async () => {
+    const existing = {id: 2, slug: 'root/child', title: 'Child', page_type: 'page' as const, content: 'existing', breadcrumbs: [{id: 1, slug: 'root', title: 'Root'}]};
+    const client = {
+      createPage: async () => { throw new HttpRequestError('provider collision', 409, 'POST'); },
+      getPageBySlug: async () => existing,
+      updatePage: async () => { throw new HttpRequestError('provider revision state', 409, 'POST'); },
+    } as unknown as YandexWikiClient;
+    const adapter = new YandexAdapter(yandexProfile, client);
+    const parent = {provider: 'yandex-wiki' as const, profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root', locator: 'root', url: 'https://wiki.example/root'};
+    await expect(adapter.createPage({container: parent, title: 'Child', body: 'body'})).rejects.toBeInstanceOf(DestinationTitleConflictError);
+    await expect(adapter.updatePage({
+      page: {provider: 'yandex-wiki', profile: 'wiki', id: '2', canonicalId: 'wiki:2', title: 'Child', locator: 'root/child', url: 'https://wiki.example/root/child'},
+      title: 'Child', body: 'updated',
+    })).rejects.toBeInstanceOf(DestinationRevisionConflictError);
+  });
+
   it('requires Confluence Storage Format while allowing an explicitly empty body', async () => {
     const base: ConfluencePage = {id: '1', type: 'page', title: 'Root', space: {key: 'DOC'}};
     const missingClient = {

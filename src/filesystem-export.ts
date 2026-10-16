@@ -1,6 +1,6 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {createWriteStream} from 'node:fs';
-import {access, mkdir, readFile, rename, rm, stat, writeFile} from 'node:fs/promises';
+import {access, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import {ZipArchive} from '@archiver/archiver';
@@ -11,6 +11,7 @@ import {commentAttachmentUses, createCommentArchiveZip, renderCommentArchive} fr
 import type {CommentInventory, ExportFormat, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
 import type {CommentTransferStatus} from './state.js';
 import {DestinationNameAllocator} from './resource-reconciliation.js';
+import {acquireExclusiveLease} from './exclusive-lease.js';
 
 export interface ExportManifestPage {
   sourceCanonicalId: string;
@@ -21,6 +22,8 @@ export interface ExportManifestPage {
   resources: Array<{name: string; path: string; size?: number; sha256?: string}>;
   degraded: boolean;
   warnings: string[];
+  adaptations: string[];
+  preservedExternalReferences: number;
   comments: {
     status: CommentTransferStatus;
     threads: number;
@@ -58,6 +61,8 @@ const manifestPageSchema = z.object({
   }).strict()),
   degraded: z.boolean(),
   warnings: z.array(z.string()),
+  adaptations: z.array(z.string()),
+  preservedExternalReferences: z.number().int().nonnegative(),
   comments: z.object({
     status: z.enum(['planned', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped']),
     threads: z.number().int().nonnegative(),
@@ -212,6 +217,8 @@ export class FilesystemExporter {
         resources: [],
         degraded: false,
         warnings: [],
+        adaptations: [],
+        preservedExternalReferences: 0,
         comments: {
           status: input.commentsEnabled === false ? 'skipped' : 'planned',
           threads: input.commentsByPage?.get(page.canonicalId)?.threads.length ?? 0,
@@ -225,6 +232,8 @@ export class FilesystemExporter {
       return {directory: input.directory, manifest, warnings, errors};
     }
 
+    const lease = await acquireExclusiveLease(`${input.directory}.ywtc.lock`, 'ywtc filesystem export', input.directory);
+    try {
     const parent = path.dirname(input.directory);
     const staging = path.join(parent, `.${path.basename(input.directory)}.ywtc-staging-${randomUUID().slice(0, 8)}`);
     await mkdir(parent, {recursive: true, mode: 0o700});
@@ -323,6 +332,8 @@ export class FilesystemExporter {
           resources: manifestResources,
           degraded: false,
           warnings: [],
+          adaptations: [],
+          preservedExternalReferences: 0,
           comments,
         });
       })));
@@ -365,10 +376,12 @@ export class FilesystemExporter {
         await mkdir(path.dirname(path.join(staging, relative)), {recursive: true});
         await writeFile(path.join(staging, relative), output, {mode: 0o600});
         const manifestPage = manifest.pages.find((item) => item.sourceCanonicalId === page.canonicalId)!;
-        manifestPage.degraded = rendered.degraded;
+        manifestPage.degraded = rendered.notices.some((notice) => notice.kind === 'degradation');
         manifestPage.warnings.push(...rendered.warnings);
+        manifestPage.adaptations.push(...rendered.adaptations);
+        manifestPage.preservedExternalReferences = rendered.preservedExternalReferences;
         warnings.push(...rendered.warnings.map((warning) => `${page.title}: ${warning}`));
-        if (rendered.degraded) {
+        if (manifestPage.degraded) {
           const snapshot = `_source/${stableSegment(page)}.${page.rawFormat === 'yfm' ? 'yfm' : 'storage.xml'}`;
           await mkdir(path.dirname(path.join(staging, snapshot)), {recursive: true});
           await writeFile(path.join(staging, snapshot), fullPage.rawContent, {mode: 0o600});
@@ -385,11 +398,16 @@ export class FilesystemExporter {
 
       if (await exists(input.directory)) {
         const selected = await stat(input.directory);
-        if (!selected.isDirectory() || !(await managedManifest(input.directory, input.identity))) {
+        const empty = selected.isDirectory() && (await readdir(input.directory)).length === 0;
+        if (!selected.isDirectory() || (!empty && !(await managedManifest(input.directory, input.identity)))) {
           throw new Error(`Refusing to replace unmanaged destination "${input.directory}". Choose an empty path or a directory with a matching .ywtc-export.json.`);
         }
-        backup = `${input.directory}.backup-${timestamp()}`;
-        await rename(input.directory, backup);
+        if (empty) {
+          await rmdir(input.directory);
+        } else {
+          backup = `${input.directory}.backup-${timestamp()}`;
+          await rename(input.directory, backup);
+        }
       }
       try {
         await rename(staging, input.directory);
@@ -402,6 +420,9 @@ export class FilesystemExporter {
     } catch (error) {
       await rm(staging, {recursive: true, force: true});
       throw error;
+    }
+    } finally {
+      await lease.release();
     }
   }
 }

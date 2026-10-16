@@ -58,6 +58,9 @@ describe('transfer report', () => {
     });
     report.addPage(page({
       sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete', links: 3, images: 1, tables: 1,
+      adaptations: ['Dynamic table was converted to a complete static table'],
+      normalizations: ['Provider normalized equivalent markup'],
+      preservedExternalReferences: 1,
       resources: 1, sourceBytes: 7, transferredBytes: 7,
       resourceItems: [{
         sourceId: 'image', sourceName: 'image.png', sourceUrl: 'https://wiki.example.com/download/image.png',
@@ -108,11 +111,11 @@ describe('transfer report', () => {
       commentStatuses: {complete: 2, partial: 1},
       pageStatuses: {complete: 1, partial: 1, failed: 1},
       resourceStatuses: {complete: 1, failed: 1, 'not-started': 1, planned: 0},
-      warnings: 0, degradations: 1, errors: 1,
+      warnings: 0, degradations: 1, adaptations: 1, normalizations: 1, preservedExternalReferences: 1, errors: 1,
     });
     expect(Object.values(json.summary.pageStatuses).reduce((total, value) => total + value, 0)).toBe(json.summary.pages);
     expect(Object.values(json.summary.resourceStatuses).reduce((total, value) => total + value, 0)).toBe(json.summary.resources);
-    expect(json.issues).toHaveLength(2);
+    expect(json.issues).toHaveLength(4);
     expect(json.issues.find((issue) => issue.code === 'resource-transfer-failed')).toMatchObject({
       pageTitle: 'Partial child', resourceName: 'manual.pdf', retryable: true, occurrences: 2,
     });
@@ -144,7 +147,7 @@ describe('transfer report', () => {
       pages: 3, complete: 1, partial: 1, failed: 1, blocked: 0, conflicts: 0,
       sourceStatus: 'current', returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
       resources: 3, resourcesComplete: 1, resourcesFailed: 1, resourcesNotStarted: 1, resourcesPlanned: 0,
-      inventoryComplete: false, warnings: 0, degradations: 1, errors: 1,
+      inventoryComplete: false, warnings: 0, degradations: 1, adaptations: 1, preservedExternalReferences: 1, errors: 1,
       commentThreads: 2, comments: 3, commentParticipants: 3, commentAttachments: 1, commentBytes: 512,
       commentStatuses: {complete: 2, partial: 1},
     });

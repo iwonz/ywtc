@@ -101,6 +101,23 @@ export class DestinationRevisionConflictError extends Error {
   }
 }
 
+export type OwnershipConflictReason =
+  | 'duplicate-source-mapping'
+  | 'immutable-id-mismatch'
+  | 'ambiguous-ownership-candidates';
+
+export class DestinationOwnershipConflictError extends Error {
+  constructor(
+    readonly reason: OwnershipConflictReason,
+    readonly candidateIds: string[],
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'DestinationOwnershipConflictError';
+  }
+}
+
 export interface UploadedResource {
   id: string;
   name: string;
@@ -195,7 +212,7 @@ export interface SourceStatusExclusion {
   depth?: number;
   discoveredFromId?: string;
   metadataComplete?: boolean;
-  reason: 'source-status';
+  reason: 'source-status' | 'inventory-drift';
   status?: string;
 }
 
@@ -275,7 +292,7 @@ export interface HierarchyGap {
   pageId: string;
   missingParentId?: string;
   selectedParentId: string;
-  reason: 'unavailable' | 'source-status';
+  reason: 'unavailable' | 'source-status' | 'inventory-drift';
 }
 
 export interface SourceSelection {
@@ -322,6 +339,16 @@ export interface NormalizedNode {
   };
 }
 
+export type TransformationNoticeKind = 'normalization' | 'adaptation' | 'degradation';
+
+export interface TransformationNotice {
+  code: string;
+  kind: TransformationNoticeKind;
+  message: string;
+  objectId?: string;
+  verification?: string;
+}
+
 export interface NormalizedDocument {
   root: NormalizedNode;
   raw: string;
@@ -329,6 +356,8 @@ export interface NormalizedDocument {
   references: NormalizedReference[];
   warnings: string[];
   normalizations: string[];
+  adaptations: string[];
+  notices: TransformationNotice[];
   degraded: boolean;
   semanticallyEmpty: boolean;
   metrics: {
@@ -336,6 +365,7 @@ export interface NormalizedDocument {
     images: number;
     tables: number;
     codeBlocks: number;
+    preservedExternalReferences: number;
   };
 }
 
@@ -351,8 +381,11 @@ export interface RenderedDocument {
   body: string;
   warnings: string[];
   normalizations: string[];
+  adaptations: string[];
+  notices: TransformationNotice[];
   degraded: boolean;
   representedReferences: number;
+  preservedExternalReferences: number;
 }
 
 export function assertTransferCapabilities(

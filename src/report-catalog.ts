@@ -43,6 +43,8 @@ const reportListSchema = z.object({
     resourcesPlanned: z.number().nonnegative(),
     inventoryComplete: z.boolean(),
     degradations: z.number().nonnegative(),
+    adaptations: z.number().nonnegative().optional().default(0),
+    preservedExternalReferences: z.number().nonnegative().optional().default(0),
     warnings: z.number().nonnegative(),
     errors: z.number().nonnegative(),
     rootErrors: z.number().nonnegative().optional(),
@@ -90,6 +92,8 @@ export interface ReportCatalogEntry {
   resourcesPlanned: number;
   inventoryComplete: boolean;
   degradations: number;
+  adaptations: number;
+  preservedExternalReferences: number;
   warnings: number;
   errors: number;
   rootErrors: number;
@@ -200,6 +204,8 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     resourcesPlanned: parsed.summary.resourcesPlanned,
     inventoryComplete: parsed.summary.inventoryComplete,
     degradations: parsed.summary.degradations,
+    adaptations: parsed.summary.adaptations,
+    preservedExternalReferences: parsed.summary.preservedExternalReferences,
     warnings: parsed.summary.warnings,
     errors: parsed.summary.errors,
     rootErrors: parsed.summary.rootErrors ?? parsed.summary.errors,

@@ -69,6 +69,7 @@ describe('transfer state', () => {
     });
     const persisted = JSON.parse(await readFile(filename, 'utf8')) as Record<string, unknown>;
     expect(persisted).not.toHaveProperty('version');
+    await store.release();
     const resumed = new StateStore(filename);
     const state = await resumed.load(identity);
     expect(state.runs.find((item) => item.id === run.id)?.status).toBe('interrupted');
@@ -80,6 +81,7 @@ describe('transfer state', () => {
       resources: {attachment: {status: 'blocked', blockedByCode: 'destination-page-staging-failed'}},
       comments: {status: 'not-started'},
     });
+    await resumed.release();
   });
 
   it('strictly rejects an unknown field with a generic error and preserves the file', async () => {
@@ -131,5 +133,26 @@ describe('transfer state', () => {
       resources: {file: {status: 'blocked', blockedByPageId: 'wiki:10'}},
       comments: {status: 'blocked', blockedByPageId: 'wiki:10'},
     });
+    await store.release();
+  });
+
+  it('rejects a concurrent live state owner and recovers a provably stale lock', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-state-lock-'));
+    const filename = path.join(directory, 'state.json');
+    const active = new StateStore(filename);
+    await active.load(identity);
+    await expect(new StateStore(filename).load(identity)).rejects.toThrow(/Another ywtc state run is active/);
+    await active.release();
+
+    await writeFile(`${filename}.lock`, `${JSON.stringify({
+      pid: 999_999_999,
+      hostname: os.hostname(),
+      startedAt: new Date().toISOString(),
+      purpose: 'ywtc state run',
+      target: filename,
+    })}\n`);
+    const recovered = new StateStore(filename);
+    await expect(recovered.load(identity)).resolves.toMatchObject({identity});
+    await recovered.release();
   });
 });

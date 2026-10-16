@@ -1,6 +1,6 @@
 import {stripAnsi} from './content-model.js';
 
-export type IssueSeverity = 'normalization' | 'degradation' | 'warning' | 'blocked' | 'error';
+export type IssueSeverity = 'normalization' | 'adaptation' | 'degradation' | 'warning' | 'blocked' | 'error';
 type IssuePhase = 'discovery' | 'inventory' | 'page' | 'resource' | 'comment' | 'verification' | 'report';
 export type IssueCategory =
   | 'network'

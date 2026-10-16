@@ -28,7 +28,10 @@ function byTitle(nodes: Map<string, ReportTreeNode>) {
 }
 
 function pageSearchText(report: TransferReportData, page: TransferReportPage): string {
-  const issues = report.issues.filter((issue) => issue.pageId === page.sourceCanonicalId);
+  const issues = report.issues.filter((issue) =>
+    issue.pageId === page.sourceCanonicalId
+    && issue.severity !== 'adaptation'
+    && issue.severity !== 'normalization');
   return [
     page.sourceTitle,
     page.sourceId,

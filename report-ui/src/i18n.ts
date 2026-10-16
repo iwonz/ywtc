@@ -19,7 +19,7 @@ const dictionaries = {
     close: 'Close', metadataIncomplete: 'The provider did not expose enough metadata to place this page exactly.', archive: 'Archive', revision: 'revision', stale: 'stale',
     complete: 'Complete', partial: 'Partial', failed: 'Failed', blocked: 'Blocked', conflict: 'Conflict', planned: 'Planned', 'not-started': 'Not started',
     discovered: 'Discovered', 'skeleton-created': 'Bootstrap created', skipped: 'Skipped', excludedStatus: 'Excluded', warning: 'Warning', error: 'Error',
-    degradation: 'Degradation', normalization: 'Safe normalization', technical: 'Technical diagnostics', resultLink: 'Open result',
+    degradation: 'Degradation', adaptation: 'Adaptation', normalization: 'Safe normalization', externalReferences: 'external references preserved', technical: 'Technical diagnostics', resultLink: 'Open result',
   },
   ru: {
     report: 'Отчёт о переносе', source: 'Источник', destination: 'Назначение', status: 'Статус', started: 'Начало', finished: 'Завершение',
@@ -39,7 +39,7 @@ const dictionaries = {
     close: 'Закрыть', metadataIncomplete: 'Provider не раскрыл достаточно метаданных для точного положения страницы.', archive: 'Архив', revision: 'ревизия', stale: 'устарел',
     complete: 'Готово', partial: 'Частично', failed: 'Ошибка', blocked: 'Заблокировано', conflict: 'Конфликт', planned: 'Запланировано', 'not-started': 'Не начато',
     discovered: 'Найдено', 'skeleton-created': 'Bootstrap создан', skipped: 'Пропущено', excludedStatus: 'Исключено', warning: 'Предупреждение', error: 'Ошибка',
-    degradation: 'Деградация', normalization: 'Безопасная нормализация', technical: 'Техническая диагностика', resultLink: 'Открыть результат',
+    degradation: 'Деградация', adaptation: 'Адаптация', normalization: 'Безопасная нормализация', externalReferences: 'внешних ссылок сохранено', technical: 'Техническая диагностика', resultLink: 'Открыть результат',
   },
 } as const;
 

@@ -1,4 +1,4 @@
-import type {DestinationAdapter, DestinationPage} from './domain.js';
+import {DestinationOwnershipConflictError, type DestinationAdapter, type DestinationPage} from './domain.js';
 import {HttpRequestError} from './http.js';
 
 const CONSISTENCY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000] as const;
@@ -32,7 +32,15 @@ export async function verifyConfirmedDestinationPage(
   let lastError: unknown;
   for (let attempt = 0; attempt <= CONSISTENCY_DELAYS_MS.length; attempt += 1) {
     try {
-      return await adapter.verifyPage(page);
+      const verified = await adapter.verifyPage(page);
+      if (verified.id !== page.id) {
+        throw new DestinationOwnershipConflictError(
+          'immutable-id-mismatch',
+          [page.id, verified.id],
+          `Destination returned immutable page ID ${verified.id} while verifying mapped ID ${page.id}`,
+        );
+      }
+      return verified;
     } catch (error) {
       if (!isNotFoundError(error)) throw error;
       lastError = error;

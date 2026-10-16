@@ -126,7 +126,7 @@ describe('interactive configuration', () => {
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain('keep');
   });
 
-  it('detects concurrent edits before creating runtime artifacts', async () => {
+  it('semantically merges independent concurrent YAML edits and comments', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ywtc-interactive-conflict-'));
     const workspace = resolveInitWorkspace({explicit: root});
     await fs.writeFile(workspace.configFile, existingYaml);
@@ -134,6 +134,22 @@ describe('interactive configuration', () => {
     if (!original) throw new Error('expected existing config');
     await fs.writeFile(workspace.configFile, `${existingYaml}# changed elsewhere\n`);
     await expect(commitInteractiveConfig({workspace, document: completeDocument(), original, reset: false}))
+      .resolves.toEqual({configFile: workspace.configFile});
+    await expect(fs.readFile(workspace.configFile, 'utf8')).resolves.toContain('# changed elsewhere');
+  });
+
+  it('rejects concurrent edits to the same semantic field', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ywtc-interactive-field-conflict-'));
+    const workspace = resolveInitWorkspace({explicit: root});
+    await fs.writeFile(workspace.configFile, existingYaml);
+    const original = await readExistingInteractiveConfig(workspace);
+    if (!original?.document || !original.config) throw new Error('expected existing config');
+    const document = original.document.clone();
+    const selected = original.config.profiles['wiki-main'];
+    if (selected?.type !== 'yandex-wiki') throw new Error('expected Yandex profile');
+    updateInteractiveProfile(document, selected.name, {...selected, webUrl: 'https://wizard.example.com'});
+    await fs.writeFile(workspace.configFile, existingYaml.replace('https://wiki.example.com', 'https://external.example.com'));
+    await expect(commitInteractiveConfig({workspace, document, original, reset: false}))
       .rejects.toBeInstanceOf(InteractiveConfigConflictError);
     await expect(fs.stat(workspace.statesDirectory)).rejects.toMatchObject({code: 'ENOENT'});
   });

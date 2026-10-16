@@ -1,6 +1,6 @@
 import {describe, expect, it, vi} from 'vitest';
 import {ConfirmedDestinationMissingError, verifyConfirmedDestinationPage} from '../src/consistency.js';
-import type {DestinationAdapter, DestinationPage} from '../src/domain.js';
+import {DestinationOwnershipConflictError, type DestinationAdapter, type DestinationPage} from '../src/domain.js';
 import {HttpRequestError} from '../src/http.js';
 
 const page: DestinationPage = {
@@ -35,5 +35,14 @@ describe('confirmed destination consistency', () => {
       sleep: async () => undefined, random: () => 0.5,
     })).rejects.toBeInstanceOf(ConfirmedDestinationMissingError);
     expect(missing).toHaveBeenCalledTimes(6);
+  });
+
+  it('rejects a provider response with a different immutable destination ID', async () => {
+    const verifyPage = vi.fn().mockResolvedValue({...page, id: '99', canonicalId: 'destination:99'});
+    const error = await verifyConfirmedDestinationPage({verifyPage} as unknown as DestinationAdapter, page)
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(DestinationOwnershipConflictError);
+    expect(error).toMatchObject({reason: 'immutable-id-mismatch', candidateIds: ['42', '99']});
+    expect(verifyPage).toHaveBeenCalledOnce();
   });
 });

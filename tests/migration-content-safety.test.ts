@@ -124,7 +124,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     },
     updatePage: async ({page: selected, title, body}: {page: DestinationPage; title: string; body: string}) => {
       updated += 1;
-      if (failUpdate) throw new Error('destination update unavailable');
+      if (failUpdate) throw new Error('provider reported a generic conflict while destination update was unavailable');
       current = page(title, body, selected.id, selected.parentId ?? container.id);
       pages.set(current.id, current);
       return current;
@@ -252,7 +252,9 @@ describe('source-derived remote page safety', () => {
     const adapters = fixture();
     adapters.setFailUpdate(true);
     const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
-    await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true});
+    await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({
+      status: 'partial', hasErrors: true, summary: {partial: 1, conflicts: 0},
+    });
     expect(adapters.snapshot().current?.content).toContain('Important body');
     expect(adapters.snapshot().current?.content).not.toContain('ywtc transfer in progress');
   });
@@ -386,7 +388,8 @@ describe('source-derived remote page safety', () => {
     const {directory, config, options} = await setup();
     const degradedRoot: SourcePage = {
       ...root,
-      rawContent: '{% list tabs %}\n\n- First\n\n  Body\n\n- Second\n\n  More\n\n{% endlist %}',
+      rawContent: '<script>alert("unsafe")</script><p>Important source payload</p>',
+      rawFormat: 'confluence-storage',
     };
     const adapters = fixture([], degradedRoot);
     const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
@@ -405,7 +408,7 @@ describe('source-derived remote page safety', () => {
 
     const resumed = await migrator.run(options);
     expect(resumed).toMatchObject({status: 'completed-with-warnings', hasErrors: false, summary: {partial: 1, errors: 0}});
-    expect(adapters.snapshot().uploaded).toBe(2);
+    expect(adapters.snapshot().uploaded).toBe(3);
     const report = JSON.parse(await readFile(resumed.reportPaths.json, 'utf8')) as TransferReportData;
     expect(report.issues).not.toContainEqual(expect.objectContaining({code: 'source-snapshot-transfer-failed'}));
     const resumedState = JSON.parse(await readFile(stateFilename, 'utf8')) as TransferState;
@@ -550,6 +553,31 @@ describe('source-derived remote page safety', () => {
     expect(recovered.pages[root.canonicalId]?.lastError).toBeUndefined();
     expect(recovered.pages[child.canonicalId]).toMatchObject({status: 'complete'});
     expect(recovered.pages[child.canonicalId]?.blockedByPageId).toBeUndefined();
+  });
+
+  it('uses conflict only for proven duplicate immutable destination ownership', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture([child]);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+    const subtreeOptions = {...options, scope: 'subtree' as const};
+    await expect(migrator.run(subtreeOptions)).resolves.toMatchObject({status: 'completed', summary: {complete: 2}});
+    const stateName = (await readdir(path.join(directory, '.states'))).find((name) => name.endsWith('.json'))!;
+    const statePath = path.join(directory, '.states', stateName);
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as TransferState;
+    state.pages[child.canonicalId]!.destinationId = state.pages[root.canonicalId]!.destinationId!;
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+    const result = await migrator.run(subtreeOptions);
+    expect(result).toMatchObject({status: 'partial', summary: {conflicts: 1, blocked: 1}});
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.pages.find((page) => page.sourceCanonicalId === root.canonicalId)).toMatchObject({
+      status: 'conflict',
+      conflictEvidence: {reason: 'duplicate-source-mapping', candidateIds: expect.arrayContaining([root.canonicalId, child.canonicalId])},
+    });
+    expect(report.pages.find((page) => page.sourceCanonicalId === child.canonicalId)).toMatchObject({
+      status: 'blocked', blockedByPageId: root.canonicalId, blockedByCode: 'destination-ownership-ambiguity',
+    });
   });
 
   it('fails safely when a recreated page cannot be confirmed by a repeated read', async () => {

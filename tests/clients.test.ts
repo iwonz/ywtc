@@ -90,7 +90,7 @@ describe('provider clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
-  it('rejects repeated Yandex cursors and conflicting locators for one immutable ID', async () => {
+  it('rejects repeated Yandex cursors and treats renamed locators as aliases of one immutable ID', async () => {
     const repeated = nock('https://api.wiki.yandex.net')
       .get('/v1/pages/8/descendants').query({include_self: false, page_size: 100})
       .reply(200, {results: [{id: 9, slug: 'root/one'}], next_cursor: 'again'})
@@ -102,7 +102,9 @@ describe('provider clients', () => {
     const conflicting = nock('https://api.wiki.yandex.net')
       .get('/v1/pages/18/descendants').query({include_self: false, page_size: 100})
       .reply(200, {results: [{id: 19, slug: 'root/one'}, {id: 19, slug: 'root/renamed'}]});
-    await expect(new YandexWikiClient(wiki, 5_000, limits).getDescendants(18)).rejects.toThrow(/conflicting slugs/);
+    await expect(new YandexWikiClient(wiki, 5_000, limits).getDescendants(18)).resolves.toEqual([
+      {id: 19, slug: 'root/renamed'},
+    ]);
     expect(conflicting.isDone()).toBe(true);
   });
 

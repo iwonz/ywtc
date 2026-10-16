@@ -85,6 +85,8 @@ function emptySummary(): TransferReportSummary {
     codeBlocks: 0,
     cycles: 0,
     normalizations: 0,
+    adaptations: 0,
+    preservedExternalReferences: 0,
     degradations: 0,
     warnings: 0,
     errors: 0,
@@ -110,21 +112,20 @@ function emptySummary(): TransferReportSummary {
 
 function issueCategory(issue: MigrationIssue): IssueCategory {
   if (issue.category) return issue.category;
-  const value = `${issue.code} ${issue.message}`.toLocaleLowerCase();
   if (issue.severity === 'blocked' || issue.blockedByPageId) return 'dependency';
-  if (issue.phase === 'comment' || /comment/.test(value)) return 'comment';
-  if (issue.phase === 'resource' || /attachment|resource|image|upload|download/.test(value)) return 'attachment-image';
-  if (issue.phase === 'verification' || /verif|fingerprint|differs|mismatch/.test(value)) return 'verification';
-  if (/rate.?limit|\b429\b|retry-after/.test(value)) return 'rate-limit';
-  if (/\b401\b|auth|token|credential/.test(value)) return 'authorization';
-  if (/\b403\b|forbidden|permission|access denied/.test(value)) return 'permissions';
-  if (/timeout|timed out|dns|tls|socket|network|econn|enotfound/.test(value)) return 'network';
-  if (/parse|schema|invalid (?:html|xml|yfm|storage)|malformed/.test(value)) return 'parsing';
-  if (/render|markup|layout|format|fallback/.test(value)) return 'rendering-layout';
-  if (/hierarchy|parent|ancestor|reparent|subtree/.test(value)) return 'hierarchy';
-  if (/conflict|duplicate|title|occupied/.test(value)) return 'conflict';
-  if (/source-status|excluded|filter/.test(value)) return 'filtering';
-  if (/http|api|\b4\d\d\b|\b5\d\d\b|not found/.test(value)) return 'provider-api';
+  if (issue.code === 'destination-ownership-ambiguity') return 'conflict';
+  if (issue.code.startsWith('source-status-') || issue.code.startsWith('inventory-drift')) return 'filtering';
+  if (issue.code.startsWith('authorization-')) return 'authorization';
+  if (issue.code.startsWith('permissions-')) return 'permissions';
+  if (issue.code.startsWith('rate-limit-')) return 'rate-limit';
+  if (issue.code.startsWith('network-')) return 'network';
+  if (issue.code.startsWith('parsing-')) return 'parsing';
+  if (issue.code.startsWith('hierarchy-') || issue.code.startsWith('destination-hierarchy-') || issue.code === 'destination-parent-unavailable') return 'hierarchy';
+  if (issue.phase === 'comment') return 'comment';
+  if (issue.phase === 'resource') return 'attachment-image';
+  if (issue.phase === 'verification') return 'verification';
+  if (issue.severity === 'adaptation' || issue.severity === 'degradation') return 'rendering-layout';
+  if (issue.phase === 'page' || issue.phase === 'discovery' || issue.phase === 'inventory') return 'provider-api';
   return 'unknown';
 }
 
@@ -140,6 +141,7 @@ function issueAction(issue: MigrationIssue, category: IssueCategory): string {
   if (issue.severity === 'blocked') return 'Resolve the upstream page error, then repeat the same migration; this object will resume automatically.';
   if (issue.retryable) return 'Repeat the same migration to retry this object.';
   if (issue.severity === 'degradation') return 'Data remains represented; compare the source and destination previews.';
+  if (issue.severity === 'adaptation') return 'No action is required; the destination uses an equivalent static or native representation.';
   if (issue.severity === 'normalization') return 'No action is required.';
   if (category === 'authorization') return 'Check the selected connection token, then run doctor and repeat the migration.';
   if (category === 'permissions') return 'Grant the token user access to the affected object, then repeat the migration.';
@@ -308,6 +310,8 @@ export class TransferReport {
         resourceFallbacks: [],
         warnings: [],
         normalizations: [],
+        adaptations: [],
+        preservedExternalReferences: 0,
         comments: {status: this.data.commentsEnabled ? 'planned' : 'skipped', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0},
       });
     }
@@ -323,6 +327,7 @@ export class TransferReport {
   addPage(page: TransferReportPage, previews?: PreviewPair, collectIssues = true): void {
     page.warnings = [...new Set(page.warnings)];
     page.normalizations = [...new Set(page.normalizations ?? [])];
+    page.adaptations = [...new Set(page.adaptations ?? [])];
     const index = this.data.pages.findIndex((item) => item.sourceCanonicalId === page.sourceCanonicalId);
     if (index >= 0) this.data.pages[index] = {...this.data.pages[index]!, ...page};
     else this.data.pages.push(page);
@@ -331,6 +336,9 @@ export class TransferReport {
     if (!collectIssues) return;
     for (const message of page.normalizations) {
       this.issue({code: `normalization:${message}`, severity: 'normalization', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
+    }
+    for (const message of page.adaptations) {
+      this.issue({code: `adaptation:${message}`, severity: 'adaptation', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
     }
     for (const message of page.warnings) {
       this.issue({code: `warning:${message}`, severity: page.degraded ? 'degradation' : 'warning', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
@@ -378,7 +386,7 @@ export class TransferReport {
       if (['discovered', 'planned', 'skeleton-created'].includes(page.status)) page.status = 'not-started';
       const dependencyBlocked = page.status === 'blocked' || page.status === 'failed' || page.status === 'conflict';
       const blockedByPageId = page.blockedByPageId ?? page.sourceCanonicalId;
-      const blockedByCode = page.blockedByCode ?? (page.status === 'conflict' ? 'destination-conflict' : 'destination-page-unavailable');
+      const blockedByCode = page.blockedByCode ?? (page.status === 'conflict' ? 'destination-ownership-ambiguity' : 'destination-page-unavailable');
       for (const resource of page.resourceItems) {
         if (resource.status !== 'planned') continue;
         if (dependencyBlocked) {
@@ -482,6 +490,8 @@ export class TransferReport {
       codeBlocks: this.data.pages.reduce((total, page) => total + page.codeBlocks, 0),
       cycles: traversalStatusCounts.cycle,
       normalizations: this.issueCollector.count('normalization'),
+      adaptations: this.issueCollector.count('adaptation'),
+      preservedExternalReferences: this.data.pages.reduce((total, page) => total + (page.preservedExternalReferences ?? 0), 0),
       degradations: this.issueCollector.count('degradation'),
       warnings: this.issueCollector.count('warning'),
       errors: this.issueCollector.count('error'),

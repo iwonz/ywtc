@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {mkdtemp, readFile, readdir, stat, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, readdir, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
@@ -65,6 +65,40 @@ describe('transactional filesystem export', () => {
     await expect(readFile(path.join(output, '.ywtc-export.json'))).rejects.toThrow();
   });
 
+  it('allows an existing empty destination directory', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-empty-'));
+    const output = path.join(temporary, 'site');
+    await mkdir(output);
+    const resourceFreeRoot = {...root, rawContent: '# Root\n\n[Child](/child)', references: root.references.filter((reference) => reference.kind === 'page')};
+    const resourceFreeGraph = {...graph, pages: [resourceFreeRoot, child]};
+    const resources = new Map<string, SourceResource[]>([[root.canonicalId, []], [child.canonicalId, []]]);
+    await expect(new FilesystemExporter({} as SourceAdapter, 1).export({
+      graph: resourceFreeGraph, directory: output, format: 'markdown', identity: 'empty-directory', archive: false, dryRun: false,
+      cacheDirectory: temporary, resourcesByPage: resources,
+    })).resolves.toMatchObject({directory: output});
+    await expect(readFile(path.join(output, '.ywtc-export.json'), 'utf8')).resolves.toContain('empty-directory');
+  });
+
+  it('refuses a concurrent live export before creating destination files', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-lock-'));
+    const output = path.join(temporary, 'site');
+    await writeFile(`${output}.ywtc.lock`, JSON.stringify({
+      pid: process.pid,
+      hostname: os.hostname(),
+      startedAt: new Date().toISOString(),
+      purpose: 'ywtc filesystem export',
+      target: output,
+    }));
+    const resourceFreeRoot = {...root, rawContent: '# Root\n\n[Child](/child)', references: root.references.filter((reference) => reference.kind === 'page')};
+    const resourceFreeGraph = {...graph, pages: [resourceFreeRoot, child]};
+    const resources = new Map<string, SourceResource[]>([[root.canonicalId, []], [child.canonicalId, []]]);
+    await expect(new FilesystemExporter({} as SourceAdapter, 1).export({
+      graph: resourceFreeGraph, directory: output, format: 'markdown', identity: 'locked', archive: false, dryRun: false,
+      cacheDirectory: temporary, resourcesByPage: resources,
+    })).rejects.toThrow(/Another ywtc filesystem export is active/);
+    await expect(readFile(path.join(output, '.ywtc-export.json'))).rejects.toThrow();
+  });
+
   it('materializes YFM tree directives into selected descendant links', async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-tree-'));
     const treeRoot = {...root, rawContent: '{% tree depth="2" sort="asc" sort_by="title" %}', references: []};
@@ -101,9 +135,9 @@ describe('transactional filesystem export', () => {
 
     const markdownOutput = path.join(temporary, 'markdown');
     const markdownResult = await exporter.export({graph: layoutGraph, directory: markdownOutput, format: 'markdown', identity: 'layout-markdown', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources});
-    expect(markdownResult.manifest.pages[0]).toMatchObject({degraded: true, warnings: [expect.stringContaining('linearized')]});
+    expect(markdownResult.manifest.pages[0]).toMatchObject({degraded: false, warnings: [], adaptations: [expect.stringContaining('linearized')]});
     expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toContain('### Column 2');
-    expect(await readdir(path.join(markdownOutput, '_source'))).toHaveLength(1);
+    await expect(readdir(path.join(markdownOutput, '_source'))).rejects.toMatchObject({code: 'ENOENT'});
 
     const emptyRoot = {...root, rawContent: '### ', references: []};
     const emptyGraph: PageGraph = {...layoutGraph, rootId: emptyRoot.canonicalId, pages: [emptyRoot]};

@@ -2,9 +2,7 @@
 
 ## Purpose
 Preserve accessible page discussions as verifiable, resumable archives across remote providers and portable filesystem exports without impersonating source authors or silently losing referenced files.
-
 ## Requirements
-
 ### Requirement: Provider-neutral page comment inventory
 When comments are enabled, the system SHALL inventory all accessible footer and inline comments attached to each selected page, including nested replies, author fields exposed to the token, timestamps, resolution/deletion status, and inline source context.
 
@@ -36,7 +34,7 @@ The archive SHALL preserve source attribution inside its text while the destinat
 - **THEN** the archive SHALL retain the available quote and a compact status or tombstone at the original hierarchy position
 
 ### Requirement: Native archive presentation with safe fallback
-The system SHALL create one archive object or page section per source page, place each top-level thread in a native collapsible block when supported, and fall back to nested quotes or escaped code without omitting source text.
+The system SHALL create one archive object or section per source page and SHALL treat alternate complete presentation as adaptation rather than incomplete data.
 
 #### Scenario: Native collapsible content
 - **WHEN** the destination supports expand, cut, or details content
@@ -44,11 +42,15 @@ The system SHALL create one archive object or page section per source page, plac
 
 #### Scenario: Destination rejects rich archive body
 - **WHEN** a native collapsible representation is unsupported or rejected
-- **THEN** the system SHALL retry with a readable nested-quote representation and finally an escaped code representation while recording the fallback
+- **THEN** the system SHALL use a complete nested-quote or escaped-code representation, verify all entries and hierarchy, and record an adaptation without making the page partial
 
 #### Scenario: Oversized comment body
 - **WHEN** the full archive exceeds a destination comment limit
-- **THEN** the system SHALL preserve the complete Markdown archive as a page attachment and create a compact index comment linking to it with `partial` status
+- **THEN** the system SHALL preserve and verify the complete Markdown archive as a page attachment, create a compact index comment linking to it, and record an adaptation without partial status
+
+#### Scenario: Archive fallback is incomplete
+- **WHEN** an alternate presentation or attached archive omits an entry, participant, hierarchy relation, placeholder, or verified attachment link
+- **THEN** comment status and the page SHALL be partial with the missing information identified
 
 ### Requirement: Exact comment attachment collection
 The system SHALL archive only page attachments explicitly linked from comment bodies, resolve them through exact resource aliases, and leave ambiguous, unavailable, or external references as source links with recorded issues.
@@ -81,7 +83,7 @@ Each page with comment attachments SHALL receive one streamed ZIP named from its
 - **THEN** a rerun SHALL reconcile and reuse it without downloading, storing, or uploading duplicate bytes
 
 ### Requirement: Resumable archive lifecycle
-The system SHALL fingerprint normalized source discussion, persist confirmed comment destination identity and revision, and treat a proven mapped archive as source-authoritative without deleting prior comments or attachments.
+The system SHALL fingerprint discussion, persist confirmed destination identity and revision, reconcile deterministic races, and reserve conflict for ambiguous immutable archive identity.
 
 #### Scenario: Unchanged discussion
 - **WHEN** the source fingerprint and semantically verified destination archive match
@@ -97,15 +99,27 @@ The system SHALL fingerprint normalized source discussion, persist confirmed com
 
 #### Scenario: Archive update races with another revision
 - **WHEN** an update-capable destination advances the mapped comment version concurrently
-- **THEN** the system SHALL re-read the latest mapped comment and perform the same bounded latest-version retry policy as mapped pages
+- **THEN** the system SHALL re-read the latest mapped comment and perform the same bounded latest-version retry policy as mapped pages without marking conflict
 
 #### Scenario: Mapped archive is missing
 - **WHEN** a proven mapped destination comment no longer exists
 - **THEN** the system SHALL recreate or append the current archive according to destination capabilities without deleting other comments
 
+#### Scenario: Duplicate verified archive candidates
+- **WHEN** several archive comments carry the same source fingerprint and complete verified payload
+- **THEN** the system SHALL choose the deterministic current candidate, preserve the others as stale revisions, and SHALL NOT report conflict
+
+#### Scenario: Archive identity is ambiguous
+- **WHEN** immutable mapping and archive evidence cannot distinguish which destination comment belongs to the source page
+- **THEN** the system SHALL preserve candidates unchanged, mark comment conflict with evidence, and SHALL NOT overwrite them
+
+#### Scenario: Source archive is stale
+- **WHEN** previously archived source entries are no longer returned
+- **THEN** the system SHALL preserve the existing archive and mark it stale without treating provider revision or presentation differences as conflict
+
 #### Scenario: User-edited or stale archive
-- **WHEN** ywtc cannot prove a unique destination comment identity or previously archived source entries are no longer returned
-- **THEN** the system SHALL preserve existing data and mark conflict or stale state as applicable without overwriting or deleting it
+- **WHEN** current evidence cannot prove a unique destination comment identity or previously archived entries are no longer returned
+- **THEN** ambiguous identity SHALL become conflict with evidence, missing source entries SHALL become stale, and all existing data SHALL remain unchanged
 
 ### Requirement: Independent comment failure status
 A comment inventory, attachment, archive write, or verification failure SHALL NOT block successful page body and ordinary resource transfer, but it SHALL make that page and run `partial` or `failed` for comments with an actionable issue.
@@ -155,3 +169,14 @@ The system SHALL distinguish dry-run plans, dependency-blocked archives, and int
 #### Scenario: Blocked archive is reported
 - **WHEN** a page dependency prevents comment archival
 - **THEN** the blocked archive SHALL contribute to dependent-block totals and SHALL NOT be counted as an independent comment API error
+
+### Requirement: Collision-safe archive resources
+Comment ZIP, full-text archive, and snapshot attachments SHALL use the same repeated content-verified name reconciliation as ordinary page resources.
+
+#### Scenario: Archive name is occupied
+- **WHEN** a destination contains the preferred archive name with different bytes
+- **THEN** the existing object SHALL remain unchanged and the archive SHALL use the next deterministic hash-suffixed name
+
+#### Scenario: Archive upload response is ambiguous
+- **WHEN** an archive upload response is lost or reports a duplicate name
+- **THEN** the system SHALL refresh attachments, reuse only a size-and-hash match, and otherwise retry a deterministic alternate name without reporting ownership conflict

@@ -71,7 +71,8 @@ describe('YFM conversion', () => {
     expect(result.storage).toContain('<table>');
     expect(result.storage).toContain('<th>Name</th>');
     expect(result.storage).toContain('<td>Alice</td>');
-    expect(result.warnings[0]).toMatch(/static table/);
+    expect(result.warnings).toEqual([]);
+    expect(result.adaptations[0]).toMatch(/static table/);
     expect(result.stats.tables).toBe(1);
   });
 
@@ -122,6 +123,29 @@ describe('YFM conversion', () => {
     expect(result.storage).toContain('ac:type="three_equal"');
     expect(result.storage.match(/<ac:layout-cell>/g)).toHaveLength(6);
     expect(result.storage.indexOf('One')).toBeLessThan(result.storage.indexOf('Four'));
-    expect(result.warnings).toContainEqual(expect.stringContaining('split into Confluence rows'));
+    expect(result.warnings).toEqual([]);
+    expect(result.adaptations).toContainEqual(expect.stringContaining('split into Confluence rows'));
+  });
+
+  it('preserves media references and textual formulas as complete adaptations', () => {
+    const result = convertYfmToStorage([
+      '<video src="https://cdn.example.com/main.mp4" poster="https://cdn.example.com/poster.png">',
+      '  <source src="https://cdn.example.com/backup.webm">',
+      '  <track src="https://cdn.example.com/captions.vtt" label="Captions">',
+      '  Video fallback text',
+      '</video>',
+      '<span class="math">x² + y²</span>',
+    ].join('\n'), context());
+    expect(result.storage).toContain('https://cdn.example.com/main.mp4');
+    expect(result.storage).toContain('https://cdn.example.com/backup.webm');
+    expect(result.storage).toContain('https://cdn.example.com/captions.vtt');
+    expect(result.storage).toContain('https://cdn.example.com/poster.png');
+    expect(result.storage).toContain('Video fallback text');
+    expect(result.storage).toContain('<code>x² + y²</code>');
+    expect(result.warnings).toEqual([]);
+    expect(result.adaptations).toEqual(expect.arrayContaining([
+      expect.stringContaining('Video was converted'),
+      expect.stringContaining('Math markup was converted'),
+    ]));
   });
 });

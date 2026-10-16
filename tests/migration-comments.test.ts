@@ -225,8 +225,8 @@ describe('comment migration pipeline', () => {
     const adapters = fixture({rejectNativeArchive: true});
     const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
     const result = await new Migrator(config, createLogger([]), factory).run(options);
-    expect(result.status).toBe('completed-with-warnings');
-    expect(result.summary).toMatchObject({partial: 1, comments: 2, commentStatuses: {partial: 1}});
+    expect(result.status).toBe('completed');
+    expect(result.summary).toMatchObject({complete: 1, partial: 0, comments: 2, adaptations: 1, commentStatuses: {complete: 1}});
     expect(adapters.counts()).toMatchObject({commentCreates: 1});
   });
 
@@ -246,8 +246,8 @@ describe('comment migration pipeline', () => {
     const adapters = fixture({rejectNativeSize: true});
     const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
     const result = await new Migrator(config, createLogger([]), factory).run(options);
-    expect(result.status).toBe('completed-with-warnings');
-    expect(result.summary.commentStatuses.partial).toBe(1);
+    expect(result.status).toBe('completed');
+    expect(result.summary).toMatchObject({complete: 1, partial: 0, adaptations: 1, commentStatuses: {complete: 1}});
     expect(adapters.uploadedNames()).toEqual(expect.arrayContaining([expect.stringMatching(/\.md$/), expect.stringMatching(/\.zip$/)]));
     expect(adapters.commentBody()).toContain('Полный архив');
     expect(adapters.commentBody()).not.toContain('ac:name="expand"');
