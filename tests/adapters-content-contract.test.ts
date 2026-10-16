@@ -3,7 +3,7 @@ import {ConfluenceAdapter} from '../src/adapters/confluence.js';
 import {YandexAdapter} from '../src/adapters/yandex.js';
 import type {YandexWikiClient} from '../src/clients/yandex-wiki.js';
 import type {ConfluenceConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
-import {DestinationTitleConflictError} from '../src/domain.js';
+import {DestinationRevisionConflictError, DestinationTitleConflictError} from '../src/domain.js';
 import {HttpRequestError} from '../src/http.js';
 import type {ConfluenceApi, ConfluencePage, YandexPageDetails} from '../src/types.js';
 
@@ -190,5 +190,31 @@ describe('source page content contracts', () => {
     });
     expect(updatedParent).toBe('9');
     expect(moved.parentId).toBe('9');
+  });
+
+  it('passes the confirmed page version and classifies optimistic revision conflicts', async () => {
+    let submittedVersion: number | undefined;
+    let conflict = false;
+    const page: ConfluencePage = {
+      id: '2', type: 'page', status: 'current', title: 'Current', space: {key: 'DOC'}, version: {number: 7},
+      ancestors: [{id: '1'}], body: {storage: {value: '<p>Current</p>', representation: 'storage'}},
+    };
+    const client = {
+      updatePage: async (input: {version?: number}) => {
+        submittedVersion = input.version;
+        if (conflict) throw new HttpRequestError('HTTP request failed: status=409: stale version', 409, 'PUT');
+        return {...page, version: {number: 8}};
+      },
+      pageWebUrl: () => 'https://conf.example/confluence/pages/2',
+    } as unknown as ConfluenceApi;
+    const adapter = new ConfluenceAdapter(confluenceProfile, client);
+    const mapped = {
+      provider: 'confluence' as const, profile: 'conf', id: '2', canonicalId: 'conf:2', title: 'Current',
+      url: 'https://conf.example/confluence/pages/2', content: '<p>Current</p>', version: '7', parentId: '1',
+    };
+    await expect(adapter.updatePage({page: mapped, title: 'Current', body: '<p>Source</p>'})).resolves.toMatchObject({version: '8'});
+    expect(submittedVersion).toBe(7);
+    conflict = true;
+    await expect(adapter.updatePage({page: mapped, title: 'Current', body: '<p>Source</p>'})).rejects.toBeInstanceOf(DestinationRevisionConflictError);
   });
 });

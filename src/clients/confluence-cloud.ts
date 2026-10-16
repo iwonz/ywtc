@@ -221,9 +221,9 @@ export class CloudConfluenceClient implements ConfluenceApi {
     return this.normalizePage(response.data);
   }
 
-  async updatePage(input: {pageId: string; title: string; storage: string; parentId?: string}): Promise<ConfluencePage> {
-    const current = await this.getPage(input.pageId);
-    const versionNumber = current.version?.number;
+  async updatePage(input: {pageId: string; title: string; storage: string; parentId?: string; version?: number}): Promise<ConfluencePage> {
+    const current = input.version ? undefined : await this.getPage(input.pageId);
+    const versionNumber = input.version ?? current?.version?.number;
     if (!versionNumber) throw new Error(`Confluence Cloud page ${input.pageId} has no version information`);
     const response = await this.writeLimit(() => this.http.request<CloudPage>({
       method: 'PUT', url: `/api/v2/pages/${encodeURIComponent(input.pageId)}`, headers: {'Content-Type': 'application/json'},

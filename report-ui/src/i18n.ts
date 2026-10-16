@@ -3,7 +3,7 @@ export type Locale = 'ru' | 'en';
 const dictionaries = {
   en: {
     report: 'Transfer report', source: 'Source', destination: 'Destination', status: 'Status', started: 'Started', finished: 'Finished',
-    scope: 'Scope', sourceStatus: 'Source status', dryRun: 'Dry run', live: 'Live transfer', summary: 'Summary', metric: 'Metric',
+    scope: 'Scope', sourceStatus: 'Source status', dryRun: 'Dry run', live: 'Live transfer', summary: 'Summary', metric: 'Metric', quality: 'Quality', next: 'next',
     pages: 'Pages', files: 'Files', comments: 'Comments', data: 'Data volume', found: 'found', selected: 'selected', excluded: 'excluded',
     attachments: 'attachments', images: 'images', commentAttachments: 'comment attachments', known: 'known', unknownSizes: 'unknown sizes',
     transferred: 'transferred', threads: 'threads', entries: 'entries', participants: 'participants', inventoryIncomplete: 'Inventory incomplete',
@@ -19,11 +19,11 @@ const dictionaries = {
     close: 'Close', metadataIncomplete: 'The provider did not expose enough metadata to place this page exactly.', archive: 'Archive', revision: 'revision', stale: 'stale',
     complete: 'Complete', partial: 'Partial', failed: 'Failed', blocked: 'Blocked', conflict: 'Conflict', planned: 'Planned', 'not-started': 'Not started',
     discovered: 'Discovered', 'skeleton-created': 'Bootstrap created', skipped: 'Skipped', excludedStatus: 'Excluded', warning: 'Warning', error: 'Error',
-    degradation: 'Degradation', normalization: 'Safe normalization', technical: 'Technical diagnostics', resultLink: 'Open result', footer: 'Generated locally by ywtc. No report data is sent anywhere.',
+    degradation: 'Degradation', normalization: 'Safe normalization', technical: 'Technical diagnostics', resultLink: 'Open result',
   },
   ru: {
     report: 'Отчёт о переносе', source: 'Источник', destination: 'Назначение', status: 'Статус', started: 'Начало', finished: 'Завершение',
-    scope: 'Охват', sourceStatus: 'Статус source', dryRun: 'Проверочный запуск', live: 'Перенос', summary: 'Краткая сводка', metric: 'Параметр',
+    scope: 'Охват', sourceStatus: 'Статус source', dryRun: 'Проверочный запуск', live: 'Перенос', summary: 'Краткая сводка', metric: 'Параметр', quality: 'Качество', next: 'далее',
     pages: 'Страницы', files: 'Файлы', comments: 'Комментарии', data: 'Объём данных', found: 'найдено', selected: 'выбрано', excluded: 'исключено',
     attachments: 'вложений', images: 'изображений', commentAttachments: 'вложений комментариев', known: 'известно', unknownSizes: 'размеров неизвестно',
     transferred: 'перенесено', threads: 'веток', entries: 'сообщений', participants: 'участников', inventoryIncomplete: 'Инвентаризация неполная',
@@ -39,7 +39,7 @@ const dictionaries = {
     close: 'Закрыть', metadataIncomplete: 'Provider не раскрыл достаточно метаданных для точного положения страницы.', archive: 'Архив', revision: 'ревизия', stale: 'устарел',
     complete: 'Готово', partial: 'Частично', failed: 'Ошибка', blocked: 'Заблокировано', conflict: 'Конфликт', planned: 'Запланировано', 'not-started': 'Не начато',
     discovered: 'Найдено', 'skeleton-created': 'Bootstrap создан', skipped: 'Пропущено', excludedStatus: 'Исключено', warning: 'Предупреждение', error: 'Ошибка',
-    degradation: 'Деградация', normalization: 'Безопасная нормализация', technical: 'Техническая диагностика', resultLink: 'Открыть результат', footer: 'Отчёт создан локально ywtc. Данные отчёта никуда не отправляются.',
+    degradation: 'Деградация', normalization: 'Безопасная нормализация', technical: 'Техническая диагностика', resultLink: 'Открыть результат',
   },
 } as const;
 

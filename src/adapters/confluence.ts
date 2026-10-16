@@ -3,7 +3,7 @@ import {createReadStream} from 'node:fs';
 import type {ConfluenceConnectionProfile} from '../config.js';
 import {extractPageReferences} from '../content-model.js';
 import {normalizeCommentForest} from '../comments.js';
-import {DestinationTitleConflictError} from '../domain.js';
+import {DestinationRevisionConflictError, DestinationTitleConflictError} from '../domain.js';
 import type {
   AdapterCapabilities,
   CommentAuthor,
@@ -40,7 +40,7 @@ function canonical(profile: ConfluenceConnectionProfile, id: string): string {
 }
 
 function fingerprint(page: ConfluencePage): string {
-  return createHash('sha256').update(`${page.title}\0${page.body?.storage?.value ?? ''}\0${page.version?.number ?? ''}`).digest('hex');
+  return createHash('sha256').update(`${page.title}\0${page.body?.storage?.value ?? ''}`).digest('hex');
 }
 
 function contentFingerprint(content: string): string {
@@ -298,32 +298,41 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     }
   }
 
-  async updatePage(input: {page: DestinationPage; title: string; body: string; expectedFingerprint?: string}): Promise<DestinationPage> {
-    if (input.expectedFingerprint) {
-      const current = destinationPage(this.profile, this.client, await this.client.getPage(input.page.id));
-      if (current.fingerprint !== input.expectedFingerprint) throw new Error(`Destination conflict for Confluence page ${input.page.id}: content changed since the last verified run`);
+  async updatePage(input: {page: DestinationPage; title: string; body: string}): Promise<DestinationPage> {
+    try {
+      return destinationPage(this.profile, this.client, await this.client.updatePage({
+        pageId: input.page.id,
+        title: input.title,
+        storage: input.body,
+        ...(input.page.version ? {version: Number(input.page.version)} : {}),
+      }));
+    } catch (error) {
+      if (error instanceof HttpRequestError && error.status === 409) {
+        throw new DestinationRevisionConflictError('page', input.page.id, {cause: error});
+      }
+      throw error;
     }
-    return destinationPage(this.profile, this.client, await this.client.updatePage({pageId: input.page.id, title: input.title, storage: input.body}));
   }
 
   async reparentPage(input: {
     page: DestinationPage;
     parent: DestinationContainer | DestinationPage;
-    expectedFingerprint?: string;
   }): Promise<DestinationPage> {
-    if (input.expectedFingerprint) {
-      const current = destinationPage(this.profile, this.client, await this.client.getPage(input.page.id));
-      if (current.fingerprint !== input.expectedFingerprint) {
-        throw new Error(`Destination conflict for Confluence page ${input.page.id}: content changed since the last verified run`);
+    let moved: DestinationPage;
+    try {
+      moved = destinationPage(this.profile, this.client, await this.client.updatePage({
+        pageId: input.page.id,
+        title: input.page.title,
+        storage: input.page.content ?? '',
+        parentId: input.parent.id,
+        ...(input.page.version ? {version: Number(input.page.version)} : {}),
+      }));
+    } catch (error) {
+      if (error instanceof HttpRequestError && error.status === 409) {
+        throw new DestinationRevisionConflictError('page', input.page.id, {cause: error});
       }
-      input.page = current;
+      throw error;
     }
-    const moved = destinationPage(this.profile, this.client, await this.client.updatePage({
-      pageId: input.page.id,
-      title: input.page.title,
-      storage: input.page.content ?? '',
-      parentId: input.parent.id,
-    }));
     const verified = destinationPage(this.profile, this.client, await this.client.getPage(moved.id));
     if (verified.parentId !== input.parent.id) {
       throw new Error(`Confluence hierarchy verification failed for page ${input.page.id}: expected parent ${input.parent.id}, received ${verified.parentId ?? 'none'}`);
@@ -394,11 +403,18 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   }
 
   async updateArchiveComment(input: {comment: DestinationComment; body: string}): Promise<DestinationComment> {
-    return destinationComment(input.comment.pageId, await this.client.updateComment({
-      commentId: input.comment.id,
-      storage: input.body,
-      ...(input.comment.version ? {version: Number(input.comment.version)} : {}),
-    }));
+    try {
+      return destinationComment(input.comment.pageId, await this.client.updateComment({
+        commentId: input.comment.id,
+        storage: input.body,
+        ...(input.comment.version ? {version: Number(input.comment.version)} : {}),
+      }));
+    } catch (error) {
+      if (error instanceof HttpRequestError && error.status === 409) {
+        throw new DestinationRevisionConflictError('comment', input.comment.id, {cause: error});
+      }
+      throw error;
+    }
   }
 
   async readArchiveComment(input: {page: DestinationPage; commentId: string}): Promise<DestinationComment> {

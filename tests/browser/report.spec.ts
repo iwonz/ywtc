@@ -84,10 +84,13 @@ test('interactive report works offline through file:// with exact details and ke
   await page.goto(reportUrl);
 
   await expect(page.getByRole('heading', {name: 'Transfer report'})).toBeVisible();
-  await expect(page.getByRole('heading', {name: 'Summary'})).toBeVisible();
-  await expect(page.getByRole('heading', {name: 'Root causes'})).toBeVisible();
   await expect(page.getByRole('heading', {name: 'Page hierarchy'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Summary'})).toHaveCount(0);
+  await expect(page.getByRole('heading', {name: 'Root causes'})).toHaveCount(0);
+  await expect(page.getByRole('heading', {name: 'Outputs'})).toHaveCount(0);
+  await expect(page.getByText('Generated locally by ywtc. No report data is sent anywhere.')).toHaveCount(0);
   await expect(page.getByRole('columnheader', {name: 'Metric'})).toBeVisible();
+  await expect(page.getByText('Quality', {exact: true})).toBeVisible();
   await expect(page.getByText('Obsolete notes')).toBeVisible();
   await expect(page.getByText('Blocked child', {exact: true})).toBeVisible();
   expect(await page.evaluate(() => (globalThis as {ywtcInjected?: boolean}).ywtcInjected)).toBeUndefined();
@@ -134,12 +137,18 @@ test('interactive report works offline through file:// with exact details and ke
 test('language, theme, filters, comment details, and responsive layout are available', async ({page}) => {
   await page.setViewportSize({width: 390, height: 844});
   await page.goto(reportUrl);
-  await page.getByRole('combobox', {name: 'Language'}).click();
-  await page.getByRole('option', {name: 'Русский'}).click();
+  const language = page.getByRole('button', {name: /Language: English; next: Русский/});
+  await language.hover();
+  await expect(page.getByRole('tooltip')).toContainText('Language: English; next: Русский');
+  await language.click();
   await expect(page.getByRole('heading', {name: 'Отчёт о переносе'})).toBeVisible();
-  await page.getByRole('combobox', {name: 'Тема'}).click();
-  await page.getByRole('option', {name: 'Тёмная'}).click();
+  const systemTheme = page.getByRole('button', {name: /Тема: Системная; далее: Светлая/});
+  await systemTheme.click();
+  await page.getByRole('button', {name: /Тема: Светлая; далее: Тёмная/}).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.reload();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await expect(page.getByRole('heading', {name: 'Отчёт о переносе'})).toBeVisible();
   await page.getByRole('combobox', {name: 'Фильтр'}).click();
   await page.getByRole('option', {name: 'Частично'}).click();
   await expect(page.getByRole('treeitem').filter({hasText: 'Partial child'})).toBeVisible();
@@ -165,8 +174,8 @@ for (const snapshot of [
     await page.addStyleTag({
       content: `html, body, #root, .report-background { min-height: ${snapshot.canvasHeight}px !important; }`,
     });
-    await page.getByRole('combobox', {name: 'Theme'}).click();
-    await page.getByRole('option', {name: snapshot.theme}).click();
+    await page.getByRole('button', {name: /Theme: System; next: Light/}).click();
+    if (snapshot.theme === 'Dark') await page.getByRole('button', {name: /Theme: Light; next: Dark/}).click();
     await expect(page).toHaveScreenshot(`${snapshot.name}.png`, {animations: 'disabled', fullPage: true, maxDiffPixelRatio: 0.04});
   });
 }

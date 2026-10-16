@@ -53,6 +53,7 @@ export interface CommentTransferState extends BlockingCause {
   fingerprint?: string;
   destinationId?: string;
   destinationFingerprint?: string;
+  destinationVersion?: string;
   destinationUrl?: string;
   previousDestinationIds?: string[];
   archiveResourceId?: string;
@@ -88,6 +89,7 @@ export interface PageTransferState extends BlockingCause {
   previousDestinationIds?: string[];
   sourceFingerprint?: string;
   destinationFingerprint?: string;
+  destinationVersion?: string;
   status: PageTransferStatus;
   resources: Record<string, ResourceTransferState>;
   comments?: CommentTransferState;
@@ -247,6 +249,7 @@ const commentStateSchema = z.object({
   fingerprint: z.string().optional(),
   destinationId: z.string().optional(),
   destinationFingerprint: z.string().optional(),
+  destinationVersion: z.string().optional(),
   destinationUrl: z.string().optional(),
   previousDestinationIds: z.array(z.string()).optional(),
   archiveResourceId: z.string().optional(),
@@ -285,6 +288,7 @@ const pageStateSchema = z.object({
   previousDestinationIds: z.array(z.string()).optional(),
   sourceFingerprint: z.string().optional(),
   destinationFingerprint: z.string().optional(),
+  destinationVersion: z.string().optional(),
   status: z.enum(['discovered', 'planned', 'skeleton-created', 'not-started', 'complete', 'partial', 'conflict', 'failed', 'blocked']),
   blockedByPageId: z.string().optional(),
   blockedByCode: z.string().optional(),

@@ -14,13 +14,13 @@ import {
   FileWarning,
   FolderTree,
   Info,
-  Languages,
+  Monitor,
   MessageSquare,
-  Network,
+  Moon,
   Paperclip,
-  Palette,
   Search,
   ShieldAlert,
+  Sun,
   Timer,
   XCircle,
 } from 'lucide-react';
@@ -99,7 +99,7 @@ function issueActionLabel(issue: TransferReportIssue, locale: Locale): string {
   if (issue.severity === 'normalization') return 'Действие не требуется.';
   if (issue.category === 'authorization') return 'Проверьте токен подключения, выполните doctor и повторите миграцию.';
   if (issue.category === 'permissions') return 'Предоставьте пользователю токена доступ к объекту и повторите миграцию.';
-  if (issue.category === 'conflict') return 'Проверьте изменение или конфликт заголовка в destination перед повторным запуском.';
+  if (issue.category === 'conflict') return 'Проверьте ownership и identity destination-объекта, затем повторите миграцию.';
   return 'Проверьте причину, затронутый объект и техническую диагностику.';
 }
 
@@ -168,13 +168,8 @@ function SummaryTable({report, t}: {report: TransferReportData; t: (key: Transla
   const summary = report.summary;
   const sourceBytes = summary.sourceBytes + summary.commentBytes;
   return (
-    <Card aria-labelledby="summary-title">
-      <CardHeader className="pb-3">
-        <CardTitle id="summary-title">{t('summary')}</CardTitle>
-        <CardDescription>{report.source.title} → {report.destination.profile ?? report.destination.format ?? report.destination.provider}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Table className="summary-table table-fixed [&_td]:px-1 [&_th]:px-1 sm:[&_td]:px-3 sm:[&_th]:px-3">
+    <div>
+      <Table className="summary-table table-fixed [&_td]:px-1 [&_th]:px-1 sm:[&_td]:px-3 sm:[&_th]:px-3">
           <TableHeader><TableRow><TableHead>{t('metric')}</TableHead><TableHead>{t('source')}</TableHead><TableHead>{t('destination')}</TableHead></TableRow></TableHeader>
           <TableBody>
             <TableRow>
@@ -197,35 +192,29 @@ function SummaryTable({report, t}: {report: TransferReportData; t: (key: Transla
               <TableCell>{formatBytes(sourceBytes)} {t('known')} · {summary.bytesUnknown} {t('unknownSizes')}</TableCell>
               <TableCell><strong>{formatBytes(summary.bytes)}</strong> {t('transferred')}</TableCell>
             </TableRow>
+            <TableRow>
+              <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><ShieldAlert className="size-4 text-primary" />{t('quality')}</span></TableCell>
+              <TableCell>{summary.normalizations} {t('normalization').toLocaleLowerCase()} · {summary.degradations} {t('degradation').toLocaleLowerCase()}</TableCell>
+              <TableCell><span className={summary.errors ? 'font-semibold text-red-700 dark:text-red-300' : ''}>{summary.errors} {t('error').toLocaleLowerCase()}</span> · <span className={summary.warnings ? 'font-semibold text-amber-700 dark:text-amber-300' : ''}>{summary.warnings} {t('warning').toLocaleLowerCase()}</span></TableCell>
+            </TableRow>
           </TableBody>
         </Table>
         {!summary.inventoryComplete && <Alert className="mt-4 border-amber-500/35 bg-amber-500/8 text-amber-800 dark:text-amber-200"><AlertTriangle className="mr-2 inline size-4" />{t('inventoryIncomplete')}: {summary.inventoriedPages}/{summary.pages}</Alert>}
-      </CardContent>
-    </Card>
+    </div>
   );
 }
 
-function RootCauses({report, locale, t, onOpen}: {report: TransferReportData; locale: Locale; t: (key: TranslationKey) => string; onOpen: (id: string) => void}) {
-  const roots = report.issues.filter((issue) => issue.severity === 'error');
+function RussianFlag() {
+  return <svg viewBox="0 0 24 18" className="size-5 rounded-[2px] border border-border" aria-hidden="true"><path fill="#fff" d="M0 0h24v6H0z"/><path fill="#1c57a7" d="M0 6h24v6H0z"/><path fill="#d52b1e" d="M0 12h24v6H0z"/></svg>;
+}
+
+function EnglishFlag() {
+  return <svg viewBox="0 0 24 18" className="size-5 rounded-[2px] border border-border" aria-hidden="true"><path fill="#17365d" d="M0 0h24v18H0z"/><path stroke="#fff" strokeWidth="4" d="m0 0 24 18M24 0 0 18"/><path stroke="#cf142b" strokeWidth="2" d="m0 0 24 18M24 0 0 18"/><path fill="#fff" d="M0 6h24v6H0zM9 0h6v18H9z"/><path fill="#cf142b" d="M0 7.5h24v3H0zM10.5 0h3v18h-3z"/></svg>;
+}
+
+function PreferenceButton({label, tooltip, onClick, children}: {label: string; tooltip: string; onClick: () => void; children: React.ReactNode}) {
   return (
-    <Card aria-labelledby="root-causes-title">
-      <CardHeader className="pb-3"><CardTitle id="root-causes-title" className="flex items-center gap-2"><Network className="size-4 text-red-500" />{t('rootCauses')}</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
-        {roots.length === 0 ? <p className="text-sm text-muted-foreground">{t('noRootCauses')}</p> : roots.map((issue) => {
-          const rootId = issue.rootCauseId ?? `${issue.pageId ?? 'run'}:${issue.code}`;
-          const dependentIssues = report.issues.filter((candidate) => candidate !== issue && (candidate.rootCauseId === rootId || (candidate.blockedByPageId === issue.pageId && candidate.blockedByCode === issue.code)));
-          return (
-            <Alert key={`${issue.code}:${issue.objectId ?? issue.pageId ?? 'run'}`} className="border-red-500/30 bg-red-500/6">
-              <div className="flex flex-wrap items-center gap-2"><StatusBadge status="failed" t={t} /><Badge variant="outline">{categoryLabels[locale][issue.category]}</Badge>{issue.retryable && <Badge variant="warning">{t('retryable')}</Badge>}{dependentIssues.length > 0 && <Badge variant="blocked">{dependentIssues.length} {t('dependent')}</Badge>}</div>
-              <p className="mt-2 font-medium">{issue.pageTitle ?? issue.objectId ?? issue.code}</p>
-              <p className="mt-1 text-muted-foreground">{issue.message}</p>
-              {dependentIssues.length > 0 && <ul className="mt-2 list-inside list-disc text-xs text-muted-foreground">{dependentIssues.map((dependent) => <li key={`${dependent.code}:${dependent.objectId ?? dependent.pageId}`}>{dependent.pageTitle ?? dependent.objectId ?? dependent.code}: {dependent.message}</li>)}</ul>}
-              <div className="mt-3 flex items-center justify-between gap-3"><span className="text-xs text-muted-foreground">{issueActionLabel(issue, locale)}</span>{issue.pageId && <Button variant="outline" size="sm" onClick={() => onOpen(issue.pageId!)}><Eye className="size-3.5" />{t('details')}</Button>}</div>
-            </Alert>
-          );
-        })}
-      </CardContent>
-    </Card>
+    <Tooltip><TooltipTrigger asChild><Button type="button" variant="outline" size="icon" aria-label={label} onClick={onClick}>{children}</Button></TooltipTrigger><TooltipContent>{tooltip}</TooltipContent></Tooltip>
   );
 }
 
@@ -362,8 +351,58 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
   );
 }
 
-function ControlSelect({label, value, values, onChange, t}: {label: string; value: string; values: string[]; onChange: (value: string) => void; t: (key: TranslationKey) => string}) {
-  return <Select value={value} onValueChange={onChange}><SelectTrigger aria-label={label} className="min-w-28"><SelectValue /></SelectTrigger><SelectContent>{values.map((item) => <SelectItem key={item} value={item}>{item === 'ru' ? 'Русский' : item === 'en' ? 'English' : t(item as TranslationKey)}</SelectItem>)}</SelectContent></Select>;
+function ReportOverview({
+  report,
+  locale,
+  theme,
+  progress,
+  accountedPages,
+  setLocale,
+  setTheme,
+  t,
+}: {
+  report: TransferReportData;
+  locale: Locale;
+  theme: Theme;
+  progress: number;
+  accountedPages: number;
+  setLocale: (locale: Locale) => void;
+  setTheme: (theme: Theme) => void;
+  t: (key: TranslationKey) => string;
+}) {
+  const nextLocale: Locale = locale === 'ru' ? 'en' : 'ru';
+  const nextTheme: Theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system';
+  const localeLabel = `${t('language')}: ${locale === 'ru' ? 'Русский' : 'English'}; ${t('next')}: ${nextLocale === 'ru' ? 'Русский' : 'English'}`;
+  const themeLabel = `${t('theme')}: ${t(theme)}; ${t('next')}: ${t(nextTheme)}`;
+  const resultUrl = safeLink(report.destination.url);
+  return (
+    <Card aria-labelledby="report-title" className="overflow-hidden bg-card/80 shadow-sm backdrop-blur">
+      <CardContent className="px-4 pb-6 pt-3 sm:px-7">
+        <div className="flex justify-end gap-2">
+          <PreferenceButton label={localeLabel} tooltip={localeLabel} onClick={() => setLocale(nextLocale)}>{locale === 'ru' ? <RussianFlag /> : <EnglishFlag />}</PreferenceButton>
+          <PreferenceButton label={themeLabel} tooltip={themeLabel} onClick={() => setTheme(nextTheme)}>{theme === 'system' ? <Monitor className="size-4" /> : theme === 'light' ? <Sun className="size-4" /> : <Moon className="size-4" />}</PreferenceButton>
+        </div>
+        <img src={reportHeader} className="mx-auto mt-1 block h-auto max-h-56 w-full max-w-5xl object-contain" alt="Yandex Wiki and Confluence sources pass pages, hierarchy, links, tables, images, comments, and attachments through ywtc to Confluence, Yandex Wiki, Markdown, and HTML" />
+        <div className="mx-auto mt-2 max-w-5xl text-center">
+          <div className="flex flex-wrap items-center justify-center gap-2"><h1 id="report-title" className="text-2xl font-semibold tracking-tight sm:text-3xl">{t('report')}</h1><StatusBadge status={report.status} t={t} /></div>
+          <p className="mt-2 text-sm text-muted-foreground">{report.direction} · {report.source.profile} → {report.destination.profile ?? report.destination.format ?? report.destination.provider} · {report.scope} · {report.sourceStatus} · {report.dryRun ? t('dryRun') : t('live')}</p>
+          <div className="mt-3 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-muted-foreground"><span>{t('started')}: <strong className="text-foreground">{formatDate(report.startedAt, locale)}</strong></span><span>{t('finished')}: <strong className="text-foreground">{formatDate(report.finishedAt, locale)}</strong></span><span>{t('runId')}: <code className="text-foreground">{report.runId}</code></span></div>
+          <div className="mx-auto mt-4 max-w-xl"><Progress value={progress} aria-label={`${accountedPages}/${report.summary.pages}`} /><p className="mt-1 text-xs text-muted-foreground">{accountedPages}/{report.summary.pages} {t('pages')} · {progress}%</p></div>
+        </div>
+        <div className="mt-6 border-t border-border/70 pt-3"><SummaryTable report={report} t={t} /></div>
+        <div className="mt-5 grid gap-4 border-t border-border/70 pt-5 lg:grid-cols-2">
+          <DefinitionGrid items={[[t('state'), <code key="state-path">{report.state.path}</code>], [t('runId'), <code key="run-id">{report.runId}</code>], [t('source'), `${report.source.provider} · ${report.source.profile}`], [t('destination'), `${report.destination.provider}${report.destination.profile ? ` · ${report.destination.profile}` : ''}`]]} />
+          <div className="space-y-2">
+            {report.outputs.map((output) => <div key={`${output.label}:${output.value}`} className="rounded-lg border border-border/70 p-3"><p className="text-xs font-semibold uppercase text-muted-foreground">{output.label}</p><code className="mt-1 block break-all text-xs">{output.value}</code></div>)}
+            <div className="flex flex-wrap gap-2">
+              {resultUrl && <a className={buttonVariants({variant: 'outline'})} href={resultUrl} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />{t('resultLink')}</a>}
+              <a className={buttonVariants({variant: 'outline'})} href="report.json" download="report.json"><Download className="size-4" />{t('downloadJson')}</a>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export function App({payload}: {payload: ReportPresentationPayload}) {
@@ -401,16 +440,8 @@ export function App({payload}: {payload: ReportPresentationPayload}) {
     <TooltipProvider delayDuration={250}>
       <div className="report-background">
         <main className="mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
-          <header className="relative overflow-hidden rounded-2xl border border-border/75 bg-card/80 px-4 pb-5 pt-3 shadow-sm backdrop-blur sm:px-7">
-            <div className="flex justify-end gap-2"><div className="flex items-center gap-1 text-xs text-muted-foreground"><Languages className="size-3.5" /><ControlSelect label={t('language')} value={locale} values={['ru', 'en']} onChange={(value) => setLocale(value as Locale)} t={t} /></div><div className="flex items-center gap-1 text-xs text-muted-foreground"><Palette className="size-3.5" /><ControlSelect label={t('theme')} value={theme} values={['system', 'light', 'dark']} onChange={(value) => setTheme(value as Theme)} t={t} /></div></div>
-            <img src={reportHeader} className="mx-auto mt-1 block h-auto max-h-56 w-full max-w-5xl object-contain" alt="Yandex Wiki and Confluence sources pass pages, hierarchy, links, tables, images, comments, and attachments through ywtc to Confluence, Yandex Wiki, Markdown, and HTML" />
-            <div className="mx-auto mt-2 max-w-4xl text-center"><div className="flex flex-wrap items-center justify-center gap-2"><h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t('report')}</h1><StatusBadge status={report.status} t={t} /></div><p className="mt-2 text-sm text-muted-foreground">{report.direction} · {report.source.profile} → {report.destination.profile ?? report.destination.format ?? report.destination.provider} · {report.scope} · {report.sourceStatus} · {report.dryRun ? t('dryRun') : t('live')}</p><div className="mt-3 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-muted-foreground"><span>{t('started')}: <strong className="text-foreground">{formatDate(report.startedAt, locale)}</strong></span><span>{t('finished')}: <strong className="text-foreground">{formatDate(report.finishedAt, locale)}</strong></span><span>{t('runId')}: <code className="text-foreground">{report.runId}</code></span><ExternalIcon href={report.destination.url} label={t('resultLink')}><ExternalLink className="size-4" /></ExternalIcon></div><div className="mx-auto mt-4 max-w-xl"><Progress value={progress} aria-label={`${accountedPages}/${report.summary.pages}`} /><p className="mt-1 text-xs text-muted-foreground">{accountedPages}/{report.summary.pages} {t('pages')} · {progress}%</p></div></div>
-          </header>
-          <SummaryTable report={report} t={t} />
-          <RootCauses report={report} locale={locale} t={t} onOpen={setSelectedId} />
+          <ReportOverview report={report} locale={locale} theme={theme} progress={progress} accountedPages={accountedPages} setLocale={setLocale} setTheme={setTheme} t={t} />
           <Hierarchy report={report} t={t} selectedId={selectedId} onSelect={setSelectedId} />
-          <Card><CardHeader><CardTitle>{t('outputs')}</CardTitle></CardHeader><CardContent><div className="grid gap-4 lg:grid-cols-2"><DefinitionGrid items={[[t('state'), <code key="state-path">{report.state.path}</code>], [t('runId'), <code key="run-id">{report.runId}</code>], [t('source'), `${report.source.provider} · ${report.source.profile}`], [t('destination'), `${report.destination.provider}${report.destination.profile ? ` · ${report.destination.profile}` : ''}`]]} /><div className="space-y-2">{report.outputs.map((output) => <div key={`${output.label}:${output.value}`} className="rounded-lg border border-border/70 p-3"><p className="text-xs font-semibold uppercase text-muted-foreground">{output.label}</p><code className="mt-1 block break-all text-xs">{output.value}</code></div>)}<a className={buttonVariants({variant: 'outline'})} href="report.json" download="report.json"><Download className="size-4" />{t('downloadJson')}</a></div></div></CardContent></Card>
-          <footer className="pb-4 text-center text-xs text-muted-foreground">{t('footer')}</footer>
         </main>
         <PageDialog node={selectedNode} payload={payload} locale={locale} t={t} onOpenChange={(open) => { if (!open) setSelectedId(undefined); }} />
       </div>

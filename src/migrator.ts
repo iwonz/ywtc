@@ -9,7 +9,6 @@ import {
   appendGridSnapshots,
   assertDestinationContent,
   emptyRendererFallbackReason,
-  isLegacyTransferPlaceholder,
   normalizePageContent,
   normalizedPreviewHtml,
   rawContentFallback,
@@ -29,7 +28,7 @@ import {
   verifyCommentArchive,
 } from './comments.js';
 import {ConfirmedDestinationMissingError, type ConsistencyRetryOptions, verifyConfirmedDestinationPage} from './consistency.js';
-import {DestinationTitleConflictError} from './domain.js';
+import {DestinationRevisionConflictError, DestinationTitleConflictError} from './domain.js';
 import type {
   CommentInventory,
   DestinationAdapter,
@@ -202,6 +201,90 @@ function sourceDerivedTextMatches(expectedBody: string, actualBody: string | und
   return text(expectedBody) === text(actualBody);
 }
 
+const REVISION_RETRY_DELAYS_MS = [500, 1_000, 2_000] as const;
+
+async function revisionDelay(
+  attempt: number,
+  options: ConsistencyRetryOptions,
+): Promise<number> {
+  const base = REVISION_RETRY_DELAYS_MS[attempt]!;
+  const random = options.random ?? Math.random;
+  const delay = Math.max(1, Math.round(base * (0.8 + random() * 0.4)));
+  await (options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))))(delay);
+  return delay;
+}
+
+async function updateMappedPage(input: {
+  destination: DestinationAdapter;
+  current: DestinationPage;
+  title: string;
+  body: string;
+  sourcePage: SourcePage;
+  consistencyOptions: ConsistencyRetryOptions;
+  report: TransferReport;
+}): Promise<{page: DestinationPage; updated: boolean; normalized: boolean; verification: ReturnType<typeof verifyDestinationContent>}> {
+  let current = input.current;
+  for (let attempt = 0; ; attempt += 1) {
+    const verification = verifyDestinationContent(input.body, current.content, input.destination.kind, input.sourcePage);
+    if (verification.status === 'complete' && current.title === input.title) {
+      return {page: current, updated: false, normalized: current.content !== input.body, verification};
+    }
+    try {
+      const result = await input.destination.updatePage({page: current, title: input.title, body: input.body});
+      const confirmed = await verifyConfirmedDestinationPage(input.destination, result, input.consistencyOptions);
+      return {
+        page: confirmed,
+        updated: true,
+        normalized: confirmed.content !== input.body,
+        verification: verifyDestinationContent(input.body, confirmed.content, input.destination.kind, input.sourcePage),
+      };
+    } catch (error) {
+      if (!(error instanceof DestinationRevisionConflictError) || attempt >= REVISION_RETRY_DELAYS_MS.length) throw error;
+      const delay = await revisionDelay(attempt, input.consistencyOptions);
+      input.report.issue({
+        code: 'destination-revision-retry',
+        severity: 'normalization',
+        phase: 'page',
+        pageId: input.sourcePage.canonicalId,
+        retryable: true,
+        message: `${input.sourcePage.title}: destination revision changed concurrently; retry ${attempt + 1} after ${delay} ms`,
+      });
+      current = await verifyConfirmedDestinationPage(input.destination, current, input.consistencyOptions);
+    }
+  }
+}
+
+async function reparentMappedPage(input: {
+  destination: DestinationAdapter;
+  current: DestinationPage;
+  parent: DestinationContainer | DestinationPage;
+  sourcePage: SourcePage;
+  consistencyOptions: ConsistencyRetryOptions;
+  report: TransferReport;
+}): Promise<DestinationPage> {
+  if (!input.destination.reparentPage) throw new Error(`${input.destination.profile.name} does not implement page moves`);
+  let current = input.current;
+  for (let attempt = 0; ; attempt += 1) {
+    if (current.parentId === input.parent.id) return current;
+    try {
+      const moved = await input.destination.reparentPage({page: current, parent: input.parent});
+      return verifyConfirmedDestinationPage(input.destination, moved, input.consistencyOptions);
+    } catch (error) {
+      if (!(error instanceof DestinationRevisionConflictError) || attempt >= REVISION_RETRY_DELAYS_MS.length) throw error;
+      const delay = await revisionDelay(attempt, input.consistencyOptions);
+      input.report.issue({
+        code: 'destination-revision-retry',
+        severity: 'normalization',
+        phase: 'page',
+        pageId: input.sourcePage.canonicalId,
+        retryable: true,
+        message: `${input.sourcePage.title}: destination revision changed during hierarchy repair; retry ${attempt + 1} after ${delay} ms`,
+      });
+      current = await verifyConfirmedDestinationPage(input.destination, current, input.consistencyOptions);
+    }
+  }
+}
+
 function ambiguousCreateOutcome(error: unknown): boolean {
   return error instanceof HttpRequestError
     && (error.status === undefined || error.status >= 500);
@@ -288,6 +371,7 @@ function destinationFromState(state: PageTransferState, adapter: DestinationAdap
     url: state.destinationLocator,
     locator: state.destinationId,
     ...(state.destinationFingerprint ? {fingerprint: state.destinationFingerprint} : {}),
+    ...(state.destinationVersion ? {version: state.destinationVersion} : {}),
   };
 }
 
@@ -1074,22 +1158,6 @@ export class Migrator {
         }
       }
       current ??= await destination.findArchiveComment?.(destinationPage, fingerprint);
-      if (current && previous?.destinationFingerprint && current.fingerprint !== previous.destinationFingerprint) {
-        const conflict: CommentTransferState = {
-          fingerprint,
-          destinationId: current.id,
-          destinationFingerprint: current.fingerprint,
-          ...counts,
-          ...(previous.archiveResourceId ? {archiveResourceId: previous.archiveResourceId} : {}),
-          ...(previous.archiveName ? {archiveName: previous.archiveName} : {}),
-          ...(previous.archivePath ? {archivePath: previous.archivePath} : {}),
-          ...(previous.archiveSha256 ? {archiveSha256: previous.archiveSha256} : {}),
-          status: 'conflict',
-          lastError: 'Destination comment archive was changed manually and was preserved.',
-          updatedAt: now(),
-        };
-        return conflict;
-      }
 
       const remoteResources = await destination.listUploadedResources(destinationPage);
       const remoteMatches = async (
@@ -1201,14 +1269,41 @@ export class Migrator {
         await prepareFullArchive(`Full comment archive exceeded ${maximumInlineBytes} inline bytes and was attached as Markdown.`);
       }
       let result = current;
-      const requiresWrite = !result || previous?.fingerprint !== fingerprint;
+      const verifies = (comment: import('./domain.js').DestinationComment | undefined): boolean => {
+        if (!comment) return false;
+        const verification = verifyCommentArchive(fullArchiveState.fullArchiveName ? fingerprint : inventory, comment.body, archiveResource?.name);
+        if (fullArchiveState.fullArchiveName && !comment.body.includes(fullArchiveState.fullArchiveName)) return false;
+        return verification.ok && verifyDestinationContent(expectedBody, comment.body, destination.kind, page).status === 'complete';
+      };
+      const requiresWrite = !verifies(result);
       if (requiresWrite) {
         const write = async (body: string) => {
           if (input.signal?.aborted) throw input.signal.reason ?? new Error('Transfer cancelled');
           if (!result || !destination.capabilities.updateComments || !destination.updateArchiveComment) {
             return destination.createArchiveComment!({page: destinationPage, body});
           }
-          return destination.updateArchiveComment({comment: result, body});
+          let currentComment = result;
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              return await destination.updateArchiveComment({comment: currentComment, body});
+            } catch (error) {
+              if (!(error instanceof DestinationRevisionConflictError) || attempt >= REVISION_RETRY_DELAYS_MS.length) throw error;
+              const delay = await revisionDelay(attempt, this.consistencyOptions);
+              report.issue({
+                code: 'destination-comment-revision-retry',
+                severity: 'normalization',
+                phase: 'comment',
+                pageId: page.canonicalId,
+                commentId: currentComment.id,
+                retryable: true,
+                message: `${page.title}: comment archive revision changed concurrently; retry ${attempt + 1} after ${delay} ms`,
+              });
+              currentComment = await destination.readArchiveComment!({page: destinationPage, commentId: currentComment.id});
+              if (verifies(currentComment)) {
+                return currentComment;
+              }
+            }
+          }
         };
         const presentations = fallbackReason ? [] : ['native', 'quote', 'code'] as const;
         let lastError: unknown;
@@ -1249,11 +1344,27 @@ export class Migrator {
         }
       }
       if (!result) throw new Error('Destination comment archive was not created');
+      if (requiresWrite && current && destination.capabilities.updateComments && result.id === current.id) {
+        report.issue({
+          code: 'destination-revision-updated',
+          severity: 'normalization',
+          phase: 'comment',
+          pageId: page.canonicalId,
+          commentId: result.id,
+          retryable: false,
+          message: `${page.title}: applied the current source discussion as comment version ${result.version ?? 'confirmed'}`,
+        });
+      }
       const verified = await destination.readArchiveComment({page: destinationPage, commentId: result.id});
       const verification = verifyCommentArchive(fullArchiveState.fullArchiveName ? fingerprint : inventory, verified.body, archiveResource?.name);
       if (fullArchiveState.fullArchiveName && !verified.body.includes(fullArchiveState.fullArchiveName)) {
         verification.ok = false;
         verification.differences.push('full Markdown comment archive reference is missing');
+      }
+      const semanticVerification = verifyDestinationContent(expectedBody, verified.body, destination.kind, page);
+      if (semanticVerification.status !== 'complete') {
+        verification.ok = false;
+        verification.differences.push(...semanticVerification.differences);
       }
       if (!verification.ok) throw new Error(`Comment verification failed: ${verification.differences.join('; ')}`);
       const previousIds = result.id !== current?.id && current
@@ -1263,6 +1374,7 @@ export class Migrator {
         fingerprint,
         destinationId: verified.id,
         destinationFingerprint: verified.fingerprint,
+        ...(verified.version ? {destinationVersion: verified.version} : {}),
         ...(verified.url ? {destinationUrl: verified.url} : {}),
         ...(previousIds?.length ? {previousDestinationIds: previousIds} : {}),
         ...archiveState,
@@ -1284,7 +1396,8 @@ export class Migrator {
         ...counts,
         ...(pageState.comments?.destinationId ? {destinationId: pageState.comments.destinationId} : {}),
         ...(pageState.comments?.destinationFingerprint ? {destinationFingerprint: pageState.comments.destinationFingerprint} : {}),
-        status: /conflict/i.test(message) ? 'conflict' : 'failed',
+        ...(pageState.comments?.destinationVersion ? {destinationVersion: pageState.comments.destinationVersion} : {}),
+        status: 'failed',
         lastError: message,
         updatedAt: now(),
       };
@@ -1374,6 +1487,7 @@ export class Migrator {
           ...(previous?.previousDestinationIds ? {previousDestinationIds: previous.previousDestinationIds} : {}),
           sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
           ...(previous?.destinationFingerprint ? {destinationFingerprint: previous.destinationFingerprint} : {}),
+          ...(previous?.destinationVersion ? {destinationVersion: previous.destinationVersion} : {}),
           status: 'blocked',
           resources: blockedResourceStates(resources, previous?.resources ?? {}, cause),
           ...(comments ? {comments} : {}),
@@ -1401,7 +1515,9 @@ export class Migrator {
         const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
         const bootstrap = bootstrapBodies.get(page.canonicalId)!;
         let created: DestinationPage;
-        const title = saved?.destinationTitle ?? page.title;
+        const title = saved && saved.destinationTitle !== saved.sourceTitle
+          ? saved.destinationTitle
+          : page.title;
         let resourcesForState = saved?.resources ?? {};
         let commentsForState = saved?.comments;
         let previousDestinationIds = saved?.previousDestinationIds ?? [];
@@ -1449,20 +1565,20 @@ export class Migrator {
               message: `${page.title}: replaced unavailable destination mapping ${mapped.id} with ${created.id}`,
             });
           }
-          const generatedPlaceholder = created.title === saved.destinationTitle
-            && isLegacyTransferPlaceholder(created.content, destination.kind, cachedPage);
-          if (!mappingRecovered && ['complete', 'partial'].includes(saved.status) && saved.destinationFingerprint && created.fingerprint !== saved.destinationFingerprint && !generatedPlaceholder) {
-            throw new Error(`Destination conflict for ${page.title}: content changed since the last verified run`);
-          }
-          if (generatedPlaceholder && !options.dryRun) {
-            created = await destination.updatePage({
-              page: created,
-              title: created.title,
-              body: bootstrap.body,
-              ...(created.fingerprint ? {expectedFingerprint: created.fingerprint} : {}),
+          if (
+            !mappingRecovered
+            && saved.destinationFingerprint
+            && created.fingerprint
+            && created.fingerprint !== saved.destinationFingerprint
+          ) {
+            report.issue({
+              code: 'destination-revision-updated',
+              severity: 'normalization',
+              phase: 'page',
+              pageId: page.canonicalId,
+              retryable: false,
+              message: `${page.title}: current destination revision differs from the last confirmed state and will be reconciled from source`,
             });
-            created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
-            assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
           }
           if (!mappingRecovered && created.parentId !== parent.id) {
             const oldPage = created;
@@ -1477,12 +1593,14 @@ export class Migrator {
                 verified: false,
               });
             } else if (destination.capabilities.reparentPages && destination.reparentPage) {
-              created = await destination.reparentPage({
-                page: created,
+              created = await reparentMappedPage({
+                destination,
+                current: created,
                 parent,
-                ...(created.fingerprint ? {expectedFingerprint: created.fingerprint} : {}),
+                sourcePage: cachedPage,
+                consistencyOptions: this.consistencyOptions,
+                report,
               });
-              created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
               if (created.parentId !== parent.id) {
                 throw new Error(`Destination hierarchy verification failed for ${page.title}: expected parent ${parent.id}, received ${created.parentId ?? 'none'}`);
               }
@@ -1570,11 +1688,12 @@ export class Migrator {
           destinationId: created.id,
           destinationCanonicalId: created.canonicalId,
           destinationLocator: created.url,
-          destinationTitle: created.title,
+          destinationTitle: saved?.destinationId && !mappingRecovered ? title : created.title,
           ...(previousDestinationIds.length > 0 ? {previousDestinationIds} : {}),
           sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
           ...(created.fingerprint ? {destinationFingerprint: created.fingerprint} : {}),
-          status: options.dryRun ? 'planned' : saved?.status ?? 'skeleton-created',
+          ...(created.version ? {destinationVersion: created.version} : {}),
+          status: options.dryRun ? 'planned' : 'skeleton-created',
           resources: resourcesForState,
           ...(commentsForState ? {comments: commentsForState} : {}),
           degradations: saved?.degradations ?? [],
@@ -1986,33 +2105,27 @@ export class Migrator {
         let verificationDegradations: string[] = [];
         if (!options.dryRun) {
           const current = await verifyConfirmedDestinationPage(destination, destinationPage, this.consistencyOptions);
-          if (
-            destinationPage.contentFingerprint
-            && current.contentFingerprint
-            && current.contentFingerprint !== destinationPage.contentFingerprint
-          ) {
-            const normalization = verifyDestinationContent(
-              destinationPage.content ?? bootstrap.body,
-              current.content,
-              destination.kind,
-              cachedPage,
-            );
-            if (normalization.status !== 'complete') {
-              throw new Error(`Destination conflict for ${page.title}: content changed while resources were transferred`);
-            }
-            rendered.normalizations.push('Destination normalized page markup without semantic content changes');
-          }
-          verified = await destination.updatePage({
-            page: current,
-            title: current.title,
+          const update = await updateMappedPage({
+            destination,
+            current,
+            title: state.destinationTitle,
             body: rendered.body,
-            ...(current.fingerprint ? {expectedFingerprint: current.fingerprint} : {}),
+            sourcePage: cachedPage,
+            consistencyOptions: this.consistencyOptions,
+            report,
           });
-          if (verified.fingerprint) {
-            state.destinationFingerprint = verified.fingerprint;
-            await store.setPage({...state, updatedAt: new Date().toISOString()});
+          verified = update.page;
+          if (update.normalized) rendered.normalizations.push('Destination normalized page markup without semantic content changes');
+          if (update.updated) {
+            report.issue({
+              code: 'destination-revision-updated',
+              severity: 'normalization',
+              phase: 'page',
+              pageId: page.canonicalId,
+              retryable: false,
+              message: `${page.title}: applied the current source representation as destination version ${verified.version ?? 'confirmed'}`,
+            });
           }
-          verified = await verifyConfirmedDestinationPage(destination, verified, this.consistencyOptions);
           const verification = assertDestinationContent(rendered.body, verified.content, destination.kind, cachedPage);
           verificationDegradations = verification.status === 'partial' ? verification.differences : [];
         }
@@ -2073,6 +2186,7 @@ export class Migrator {
           destinationLocator: verified.url,
           destinationTitle: verified.title,
           ...(verified.fingerprint ? {destinationFingerprint: verified.fingerprint} : {}),
+          ...(verified.version ? {destinationVersion: verified.version} : {}),
           status: options.dryRun ? 'planned' : partial ? 'partial' : 'complete',
           comments: commentState,
           degradations: [...new Set([...rendered.warnings, ...resourceProblems, ...verificationDegradations])],
@@ -2125,6 +2239,7 @@ export class Migrator {
         await store.setPage({
           ...state,
           ...(actual?.fingerprint ? {destinationFingerprint: actual.fingerprint} : {}),
+          ...(actual?.version ? {destinationVersion: actual.version} : {}),
           status: failureStatus,
           lastError: message,
           updatedAt: new Date().toISOString(),

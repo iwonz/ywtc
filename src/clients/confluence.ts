@@ -241,10 +241,11 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
     });
   }
 
-  async updatePage(input: {pageId: string; title: string; storage: string; parentId?: string}): Promise<ConfluencePage> {
+  async updatePage(input: {pageId: string; title: string; storage: string; parentId?: string; version?: number}): Promise<ConfluencePage> {
     return this.writeLimit(async () => {
-      const current = await this.getPage(input.pageId);
-      if (!current.version?.number) throw new Error(`Confluence page ${input.pageId} has no version information`);
+      const current = input.version ? undefined : await this.getPage(input.pageId);
+      const version = input.version ?? current?.version?.number;
+      if (!version) throw new Error(`Confluence page ${input.pageId} has no version information`);
       const response = await this.http.request<ConfluencePage>({
         method: 'PUT',
         url: `/rest/api/content/${encodeURIComponent(input.pageId)}`,
@@ -254,7 +255,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
           type: 'page',
           title: input.title,
           version: {
-            number: current.version.number + 1,
+            number: version + 1,
             minorEdit: true,
             message: 'Transferred by ywtc',
           },

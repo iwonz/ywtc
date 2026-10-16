@@ -281,7 +281,7 @@ The system SHALL discover transitive internal page references for linked scope u
 - **THEN** the system SHALL keep or safely degrade the original reference, record its edge status, and SHALL NOT enqueue it as an accessible internal page
 
 ### Requirement: Provider-neutral state and lifecycle
-The system SHALL persist canonical endpoint identity, graph edges, fingerprints, page/resource mappings, object statuses, and run lifecycle in one strict current state structure without a schema-version field or compatibility branches.
+The system SHALL persist canonical endpoint identity, graph edges, confirmed destination fingerprints and versions, page/resource mappings, object statuses, and run lifecycle in one strict current state structure without a schema-version field or compatibility branches.
 
 #### Scenario: Equivalent locators and expanded scope
 - **WHEN** repeated runs identify the same endpoints through different supported URL/ID/slug forms or expand the scope
@@ -296,7 +296,11 @@ The system SHALL persist canonical endpoint identity, graph edges, fingerprints,
 - **THEN** the system SHALL preserve it unchanged, stop before destination mutation, and report a generic invalid-state error with safe current actions but no conversion behavior
 
 #### Scenario: Destination changed outside ywtc
-- **WHEN** a mapped destination fingerprint differs from the last verified value
+- **WHEN** a proven mapped destination fingerprint or provider version differs from the last verified value
+- **THEN** the system SHALL treat the source as authoritative, update or semantically reuse the mapped object, and preserve prior destination content through provider history without conflict
+
+#### Scenario: Destination ownership is uncertain
+- **WHEN** the provider result makes a state mapping ambiguous or unable to prove a unique destination identity
 - **THEN** the object SHALL become a conflict and SHALL NOT be overwritten automatically
 
 #### Scenario: Interrupted run
@@ -349,15 +353,19 @@ A remote page SHALL be complete or partial only after provider-aware verificatio
 - **THEN** its report comparison SHALL use the body actually read from the destination rather than the body submitted by ywtc
 
 ### Requirement: Generated placeholder recovery
-The system SHALL repair mapped pages whose current body exactly matches the ywtc-generated transfer placeholder for that source while preserving ordinary conflict protection.
+The system SHALL repair mapped pages whose current body exactly matches a ywtc-generated transfer placeholder and SHALL otherwise apply the source-authoritative mapped update policy.
 
 #### Scenario: Unchanged generated placeholder is resumed
-- **WHEN** a mapped destination page still contains the exact generated placeholder and retains its expected mapped title
+- **WHEN** a mapped destination page still contains the exact generated placeholder and retains its expected mapped identity
 - **THEN** a rerun SHALL replace it with source-derived content without creating a duplicate page
 
 #### Scenario: Destination was edited manually
-- **WHEN** the destination title or body differs from both the stored fingerprint and the exact generated placeholder
-- **THEN** the system SHALL report a conflict and SHALL NOT overwrite the page
+- **WHEN** the proven mapped destination title or body differs from both the stored fingerprint and the exact generated placeholder
+- **THEN** the system SHALL apply the current source-derived title and body as a new verified destination version without conflict
+
+#### Scenario: Placeholder ownership cannot be proven
+- **WHEN** ywtc cannot prove that a placeholder or candidate destination page belongs to the selected source mapping
+- **THEN** it SHALL preserve the candidate unchanged and report an ownership conflict
 
 ### Requirement: Terminal report access
 The CLI SHALL expose safe report listing and opening commands and SHALL print a clickable local URL whenever a run produces an HTML report.
@@ -566,23 +574,23 @@ The system SHALL exhaust hierarchy pagination, validate every selected page deta
 - **THEN** the page SHALL attach to the nearest selected ancestor and the hierarchy gap SHALL be recorded
 
 ### Requirement: Destination hierarchy reconciliation
-The system SHALL compare every mapped destination parent with the frozen projected source parent and repair safe mismatches top-down without deleting destination data.
+The system SHALL compare every mapped destination parent with the frozen projected source parent and repair proven mappings top-down independently of destination body revision without deleting destination data.
 
 #### Scenario: Unchanged Confluence page has the wrong parent
-- **WHEN** a mapped Confluence page still matches the last verified ywtc content but its parent differs from the expected mapped parent
+- **WHEN** a proven mapped Confluence page has a different parent from the expected mapped parent
 - **THEN** the system SHALL move it through the deployment-specific update API, read it back, and require the expected parent before processing descendants
 
 #### Scenario: Mapped page was changed by a user
-- **WHEN** a page with the wrong parent has a meaningful content change after the last verified run
-- **THEN** the system SHALL mark it conflict and block its selected descendants without moving or recreating it
+- **WHEN** a proven mapped page has both a wrong parent and a meaningful body or title difference
+- **THEN** the system SHALL reconcile hierarchy and current source content as new verified destination revisions rather than marking a conflict
 
 #### Scenario: Destination cannot move pages
-- **WHEN** an unchanged mapped page has the wrong parent and the destination adapter cannot move it safely
+- **WHEN** a proven mapped page has the wrong parent and the destination adapter cannot move it safely
 - **THEN** the system SHALL create a source-derived replacement under the expected parent, preserve the old ID in state history, reset resource mappings, and leave the old page untouched
 
 #### Scenario: Hierarchy repair fails
-- **WHEN** move, recreation, or parent verification fails
-- **THEN** the affected page SHALL fail and selected descendants SHALL remain blocked rather than being created under the wrong parent
+- **WHEN** move, recreation, or parent verification fails because of API, permission, network, missing parent, or irreducible identity ambiguity
+- **THEN** the affected page SHALL fail or conflict as applicable and selected descendants SHALL remain causally blocked rather than being created under the wrong parent
 
 ### Requirement: Observable source selection coverage
 The system SHALL reconcile discovered, selected, excluded, inventoried, and transferred page counts from one source-selection record in terminal output, state run history, HTML/JSON reports, and the report catalog.
@@ -889,3 +897,75 @@ Provider-aware verification SHALL compare semantic emptiness plus ordered layout
 #### Scenario: Empty bodies are equivalent
 - **WHEN** expected and actual bodies are both semantically empty despite provider-specific empty serialization
 - **THEN** verification SHALL return complete rather than rejecting the destination for having no visible text
+
+### Requirement: Source-authoritative mapped destination updates
+The current source SHALL be authoritative for every page whose destination identity is proven by the selected state, while unmapped or ambiguously owned destination objects remain protected.
+
+#### Scenario: Mapped destination differs
+- **WHEN** a mapped destination page has a different body, title, provider version, or normalized representation from the last verified run
+- **THEN** the system SHALL read the latest object, apply the current source representation as a new destination version, verify it, and SHALL NOT create a duplicate
+
+#### Scenario: Mapped destination is semantically equivalent
+- **WHEN** provider-aware comparison finds the latest destination body, meaningful structure, references, and expected hierarchy equivalent to the rendered source
+- **THEN** the system SHALL reuse the current object without issuing a content update and SHALL checkpoint the confirmed fingerprint and provider version
+
+#### Scenario: Destination revision is replaced
+- **WHEN** a mapped destination revision differs and a verified update succeeds
+- **THEN** the system SHALL record `destination-revision-updated` as a safe event without warning, degradation, partial, or conflict status
+
+#### Scenario: Concurrent Confluence revision
+- **WHEN** Confluence rejects an update because another revision became current
+- **THEN** the system SHALL re-read the newest revision and retry at most three times with jittered backoff based on 0.5, 1, and 2 seconds
+
+#### Scenario: Concurrent revision retries are exhausted
+- **WHEN** all bounded latest-version retries fail
+- **THEN** the page SHALL be failed and its selected descendants SHALL be causally blocked by the unavailable destination parent
+
+#### Scenario: Ownership is ambiguous
+- **WHEN** state and provider evidence cannot prove which existing destination object belongs to the source mapping
+- **THEN** the system SHALL preserve every candidate unchanged, mark conflict, and SHALL NOT adopt or overwrite an object
+
+#### Scenario: Earlier conflict state is resumed
+- **WHEN** a repeated run loads mapped pages previously marked conflict or blocked only because their destination revision differed
+- **THEN** the system SHALL replan them top-down under this authoritative policy without requiring `--fresh`
+
+### Requirement: Confirmed destination revision checkpoints
+State SHALL store a mapped destination fingerprint and provider version only from a final successful provider read after creation, update, move, or semantic reuse.
+
+#### Scenario: Mutation response differs from read-back
+- **WHEN** a provider normalizes content or advances a version after accepting a mutation
+- **THEN** the system SHALL checkpoint the final read-back fingerprint and version rather than the submitted body or immediate mutation response
+
+#### Scenario: Update or read-back fails
+- **WHEN** a destination mutation cannot be confirmed by a final read
+- **THEN** the system SHALL NOT record its unconfirmed fingerprint or version as verified state
+
+### Requirement: Compact unified report overview
+The report SHALL place run identity, progress, source-to-destination comparison, quality totals, paths, result links, and JSON download in one top-level overview before the hierarchy.
+
+#### Scenario: Overview is inspected
+- **WHEN** an operator opens a generated report
+- **THEN** one overview SHALL contain the illustration, title, status, direction, scope, time, run ID, progress, page/file/comment/byte/quality comparison, destination result, state/report paths, and `report.json` download
+
+#### Scenario: Detailed diagnostics are inspected
+- **WHEN** the run contains errors, blocked dependencies, degradations, or normalizations
+- **THEN** the operator SHALL inspect them from highlighted hierarchy rows and the affected page's problem details without a separate root-causes panel
+
+#### Scenario: Compact report structure is checked
+- **WHEN** the report application renders
+- **THEN** it SHALL NOT render standalone summary, root-causes, outputs, or local-report disclaimer sections
+
+### Requirement: Accessible cycling report preferences
+The report SHALL expose language and theme as icon-only buttons with visible tooltips, accessible names, deterministic cycling, and remembered preferences.
+
+#### Scenario: Theme control is activated
+- **WHEN** the operator activates the theme button
+- **THEN** it SHALL cycle `system → light → dark → system`, update Monitor/Sun/Moon iconography, announce current and next modes, and persist the selection when storage is available
+
+#### Scenario: Language control is activated
+- **WHEN** the operator activates the language button
+- **THEN** it SHALL alternate Russian and English using stable embedded flag SVGs, announce current and next languages, and persist the selection when storage is available
+
+#### Scenario: Preference storage is unavailable
+- **WHEN** local storage is inaccessible
+- **THEN** both controls SHALL remain keyboard-operable and update the current report session without failing the application

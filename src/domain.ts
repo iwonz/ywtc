@@ -90,6 +90,17 @@ export class DestinationTitleConflictError extends Error {
   }
 }
 
+export class DestinationRevisionConflictError extends Error {
+  constructor(
+    readonly objectType: 'page' | 'comment',
+    readonly objectId: string,
+    options?: ErrorOptions,
+  ) {
+    super(`Destination ${objectType} ${objectId} changed concurrently`, options);
+    this.name = 'DestinationRevisionConflictError';
+  }
+}
+
 export interface UploadedResource {
   id: string;
   name: string;
@@ -221,11 +232,10 @@ export interface DestinationAdapter {
   findTitleConflict?(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined>;
   findRecoverablePage?(container: DestinationContainer | DestinationPage, title: string): Promise<DestinationPage | undefined>;
   createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage>;
-  updatePage(input: {page: DestinationPage; title: string; body: string; expectedFingerprint?: string}): Promise<DestinationPage>;
+  updatePage(input: {page: DestinationPage; title: string; body: string}): Promise<DestinationPage>;
   reparentPage?(input: {
     page: DestinationPage;
     parent: DestinationContainer | DestinationPage;
-    expectedFingerprint?: string;
   }): Promise<DestinationPage>;
   uploadResource(input: {
     page: DestinationPage;

@@ -144,7 +144,7 @@ function issueAction(issue: MigrationIssue, category: IssueCategory): string {
   if (category === 'authorization') return 'Check the selected connection token, then run doctor and repeat the migration.';
   if (category === 'permissions') return 'Grant the token user access to the affected object, then repeat the migration.';
   if (category === 'parsing' || category === 'rendering-layout') return 'Inspect the comparison and fallback, then report the unsupported construct if the source data is not represented.';
-  if (category === 'conflict') return 'Review the destination change or title conflict before repeating the migration.';
+  if (category === 'conflict') return 'Verify destination ownership and identity before repeating the migration.';
   if (issue.severity === 'error') return 'Review the reason and affected object before resuming the migration.';
   return 'Review the affected object and its page details.';
 }

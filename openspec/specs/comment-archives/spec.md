@@ -81,23 +81,31 @@ Each page with comment attachments SHALL receive one streamed ZIP named from its
 - **THEN** a rerun SHALL reconcile and reuse it without downloading, storing, or uploading duplicate bytes
 
 ### Requirement: Resumable archive lifecycle
-The system SHALL fingerprint the normalized source discussion and persist comment status, destination identity and history, archive mapping, counts, and last error so unchanged reruns are idempotent and changed discussions are handled without deletion.
+The system SHALL fingerprint normalized source discussion, persist confirmed comment destination identity and revision, and treat a proven mapped archive as source-authoritative without deleting prior comments or attachments.
 
 #### Scenario: Unchanged discussion
-- **WHEN** the source fingerprint and verified destination archive match the previous run
-- **THEN** the system SHALL reuse the existing comment and ZIP without creating duplicates
+- **WHEN** the source fingerprint and semantically verified destination archive match
+- **THEN** the system SHALL reuse the existing comment and ZIP without issuing an update or creating duplicates
 
 #### Scenario: Changed discussion on update-capable destination
-- **WHEN** the source fingerprint changes and the existing archive has not been edited by a user
-- **THEN** the system SHALL update it and verify the new archive while preserving destination history in state
+- **WHEN** a proven mapped Confluence archive differs from the current rendered source archive
+- **THEN** the system SHALL update the mapped comment as a new version, read it back, verify it, and checkpoint only its confirmed fingerprint and version
 
 #### Scenario: Changed discussion on append-only destination
-- **WHEN** the destination cannot update comments
+- **WHEN** a proven mapped archive targets Yandex Wiki or another destination that cannot update comments
 - **THEN** the system SHALL append a fingerprinted replacement revision, retain the prior comment, and record the revision relationship
 
+#### Scenario: Archive update races with another revision
+- **WHEN** an update-capable destination advances the mapped comment version concurrently
+- **THEN** the system SHALL re-read the latest mapped comment and perform the same bounded latest-version retry policy as mapped pages
+
+#### Scenario: Mapped archive is missing
+- **WHEN** a proven mapped destination comment no longer exists
+- **THEN** the system SHALL recreate or append the current archive according to destination capabilities without deleting other comments
+
 #### Scenario: User-edited or stale archive
-- **WHEN** a destination archive was manually edited or previously archived source entries are no longer returned
-- **THEN** the system SHALL preserve existing data, mark conflict or stale state, and SHALL NOT overwrite or delete it
+- **WHEN** ywtc cannot prove a unique destination comment identity or previously archived source entries are no longer returned
+- **THEN** the system SHALL preserve existing data and mark conflict or stale state as applicable without overwriting or deleting it
 
 ### Requirement: Independent comment failure status
 A comment inventory, attachment, archive write, or verification failure SHALL NOT block successful page body and ordinary resource transfer, but it SHALL make that page and run `partial` or `failed` for comments with an actionable issue.

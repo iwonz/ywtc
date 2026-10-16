@@ -16,6 +16,7 @@ import type {
   SourceResource,
   UploadedResource,
 } from '../src/domain.js';
+import {DestinationRevisionConflictError} from '../src/domain.js';
 import {createLogger} from '../src/logger.js';
 import {MigrationRunError, Migrator} from '../src/migrator.js';
 import type {RemoteLocator} from '../src/locators.js';
@@ -50,6 +51,7 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
   let commentReadError: Error | undefined;
   let page: DestinationPage | undefined;
   let archiveComment: DestinationComment | undefined;
+  let commentRevisionConflicts = 0;
   const uploaded = new Map<string, {resource: UploadedResource; bytes: Buffer}>();
   const inventory = (): CommentInventory => normalizeCommentForest([
     {id: 'c1', author: {providerId: 'u1', displayName: 'Иван', username: 'ivan'}, createdAt: '2026-01-01', body: commentText},
@@ -120,6 +122,10 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
     updateArchiveComment: async ({comment, body}) => {
       if (options.rejectNativeSize && body.includes('ac:name="expand"')) throw Object.assign(new Error('payload too large'), {status: 413});
       if (options.rejectNativeArchive && body.includes('ac:name="expand"')) throw new Error('expand macro rejected');
+      if (commentRevisionConflicts > 0) {
+        commentRevisionConflicts -= 1;
+        throw new DestinationRevisionConflictError('comment', comment.id);
+      }
       commentUpdates += 1;
       archiveComment = {...comment, body, version: String(Number(comment.version ?? '1') + 1), fingerprint: digest(body)};
       return archiveComment;
@@ -135,6 +141,7 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
     changeComment(value: string) { commentText = value; },
     failCommentRead(error = new Error('comment API unavailable')) { commentReadError = error; },
     manuallyEditComment() { if (archiveComment) archiveComment = {...archiveComment, body: `${archiveComment.body} manual`, fingerprint: digest(`${archiveComment.body} manual`)}; },
+    setCommentRevisionConflicts(count: number) { commentRevisionConflicts = count; },
     counts: () => ({commentReads, commentCreates, commentUpdates, uploads: uploaded.size}),
     page: () => page,
     commentBody: () => archiveComment?.body,
@@ -158,7 +165,7 @@ async function setup() {
 }
 
 describe('comment migration pipeline', () => {
-  it('archives comments by default, reuses unchanged data, updates changed Confluence archives, and protects manual edits', async () => {
+  it('archives comments by default, reuses unchanged data, and authoritatively updates mapped Confluence archives', async () => {
     const {config, options} = await setup();
     const adapters = fixture();
     const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
@@ -177,11 +184,16 @@ describe('comment migration pipeline', () => {
     expect(adapters.counts()).toMatchObject({commentCreates: 1, commentUpdates: 1});
 
     adapters.manuallyEditComment();
+    const restored = await migrator.run(options);
+    expect(restored.status).toBe('completed');
+    expect(restored.summary.commentStatuses.complete).toBe(1);
+    expect(adapters.counts()).toMatchObject({commentUpdates: 2});
+
     adapters.changeComment('Another change [spec](files/spec.pdf)');
-    const conflict = await migrator.run(options);
-    expect(conflict.status).toBe('partial');
-    expect(conflict.summary.commentStatuses.conflict).toBe(1);
-    expect(adapters.counts()).toMatchObject({commentUpdates: 1});
+    const reconciled = await migrator.run(options);
+    expect(reconciled.status).toBe('completed');
+    expect(reconciled.summary.commentStatuses.complete).toBe(1);
+    expect(adapters.counts()).toMatchObject({commentUpdates: 3});
   });
 
   it('does not call comment APIs with --no-comments and records a skipped archive outcome', async () => {
@@ -192,6 +204,20 @@ describe('comment migration pipeline', () => {
     expect(result.status).toBe('completed');
     expect(result.summary.commentStatuses.skipped).toBe(1);
     expect(adapters.counts()).toMatchObject({commentReads: 0, commentCreates: 0, commentUpdates: 0});
+  });
+
+  it('re-reads and retries concurrent mapped comment revisions', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, createLogger([]), factory, {sleep: async () => undefined, random: () => 0.5});
+    await migrator.run(options);
+    adapters.changeComment('Changed after concurrent edit [spec](files/spec.pdf)');
+    adapters.setCommentRevisionConflicts(2);
+    const result = await migrator.run(options);
+    expect(result.status).toBe('completed');
+    expect(result.summary.commentStatuses.complete).toBe(1);
+    expect(adapters.counts()).toMatchObject({commentCreates: 1, commentUpdates: 1});
   });
 
   it('uses a readable fallback when native collapsible markup is rejected', async () => {

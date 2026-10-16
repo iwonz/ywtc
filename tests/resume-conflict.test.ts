@@ -10,6 +10,7 @@ import type {
   SourceAdapter,
   SourcePage,
 } from '../src/domain.js';
+import {DestinationRevisionConflictError} from '../src/domain.js';
 import type {Logger} from '../src/logger.js';
 import type {RemoteLocator} from '../src/locators.js';
 import {Migrator} from '../src/migrator.js';
@@ -39,6 +40,8 @@ function fixture() {
   let created = 0;
   let updated = 0;
   let current: DestinationPage | undefined;
+  let revisionConflicts = 0;
+  let version = 0;
   const source = {
     profile: sourceProfile, kind: 'yandex-wiki', capabilities,
     preflight: async () => ({product: 'Yandex Wiki', warnings: []}),
@@ -58,14 +61,19 @@ function fixture() {
       current = {
         provider: 'confluence', profile: destinationProfile.name, id: '200', canonicalId: 'destination:confluence:200',
         title, url: 'https://conf.example/confluence/pages/200', locator: '200', space: 'DOC', fingerprint: 'bootstrap',
+        version: String(++version),
         parentId: container.id,
         content: body, contentLength: Buffer.byteLength(body),
       };
       return current;
     },
     updatePage: async ({page, title, body}: {page: DestinationPage; title: string; body: string}) => {
+      if (revisionConflicts > 0) {
+        revisionConflicts -= 1;
+        throw new DestinationRevisionConflictError('page', page.id);
+      }
       updated += 1;
-      current = {...page, title, fingerprint: `body-${updated}`, content: body, contentLength: Buffer.byteLength(body)};
+      current = {...page, title, version: String(++version), fingerprint: `body-${updated}`, content: body, contentLength: Buffer.byteLength(body)};
       return current;
     },
     verifyPage: async () => current!,
@@ -76,7 +84,12 @@ function fixture() {
     source,
     destination,
     counts: () => ({created, updated}),
-    modifyDestination: () => { current = {...current!, fingerprint: 'manual-change'}; },
+    modifyDestination: () => {
+      const content = `${current!.content ?? ''}\n<p>destination-only edit</p>`;
+      current = {...current!, title: 'Destination edit', version: String(++version), fingerprint: 'manual-change', content, contentLength: Buffer.byteLength(content)};
+    },
+    setRevisionConflicts: (count: number) => { revisionConflicts = count; },
+    page: () => current,
   };
 }
 
@@ -97,16 +110,41 @@ async function setup() {
 }
 
 describe('resume, conflicts, and cancellation', () => {
-  it('resumes a mapped page without duplication and protects manual destination edits', async () => {
+  it('resumes a mapped page without duplication and replaces destination edits from source', async () => {
     const {config, options} = await setup();
     const adapters = fixture();
     const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
     const migrator = new Migrator(config, logger, factory);
     await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
-    expect(adapters.counts()).toEqual({created: 1, updated: 1});
+    expect(adapters.counts()).toEqual({created: 1, updated: 0});
     adapters.modifyDestination();
-    await expect(migrator.run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true});
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
     expect(adapters.counts()).toEqual({created: 1, updated: 1});
+    expect(adapters.page()).toMatchObject({title: 'Root', version: '3'});
+  });
+
+  it('re-reads and retries bounded optimistic revision conflicts', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    const migrator = new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5});
+    await migrator.run(options);
+    adapters.modifyDestination();
+    adapters.setRevisionConflicts(2);
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
+    expect(adapters.counts()).toEqual({created: 1, updated: 1});
+  });
+
+  it('fails a mapped page after three optimistic revision retries are exhausted', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    const migrator = new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5});
+    await migrator.run(options);
+    adapters.modifyDestination();
+    adapters.setRevisionConflicts(4);
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true, summary: {failed: 1}});
+    expect(adapters.counts()).toEqual({created: 1, updated: 0});
   });
 
   it('checkpoints a cancelled run before any destination mutation', async () => {

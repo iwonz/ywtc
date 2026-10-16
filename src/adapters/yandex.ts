@@ -77,7 +77,7 @@ function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): 
 
 function destinationPage(profile: YandexConnectionProfile, page: YandexPageDetails): DestinationPage {
   const content = page.content ?? '';
-  const fingerprint = createHash('sha256').update(`${page.title}\0${content}\0${page.attributes?.modified_at ?? ''}`).digest('hex');
+  const fingerprint = createHash('sha256').update(`${page.title}\0${content}`).digest('hex');
   const parent = parentId(page);
   return {
     provider: 'yandex-wiki',
@@ -362,11 +362,7 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     return destinationPage(this.profile, created);
   }
 
-  async updatePage(input: {page: DestinationPage; title: string; body: string; expectedFingerprint?: string}): Promise<DestinationPage> {
-    if (input.expectedFingerprint) {
-      const current = destinationPage(this.profile, await this.client.getPageById(Number(input.page.id)));
-      if (current.fingerprint !== input.expectedFingerprint) throw new Error(`Destination conflict for Yandex Wiki page ${input.page.id}: content changed since the last verified run`);
-    }
+  async updatePage(input: {page: DestinationPage; title: string; body: string}): Promise<DestinationPage> {
     return destinationPage(this.profile, await this.client.updatePage({id: Number(input.page.id), title: input.title, content: input.body}));
   }
 

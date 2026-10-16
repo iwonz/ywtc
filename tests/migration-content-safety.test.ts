@@ -524,6 +524,34 @@ describe('source-derived remote page safety', () => {
     expect(state.pages[leaf.canonicalId]?.projectedParentId).toBe(intermediate.canonicalId);
   });
 
+  it('replans earlier false conflict and dependent blocked outcomes without fresh state', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture([child]);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+    const subtreeOptions = {...options, scope: 'subtree' as const};
+    await expect(migrator.run(subtreeOptions)).resolves.toMatchObject({status: 'completed', summary: {complete: 2}});
+    const stateName = (await readdir(path.join(directory, '.states'))).find((name) => name.endsWith('.json'))!;
+    const statePath = path.join(directory, '.states', stateName);
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as TransferState;
+    state.pages[root.canonicalId]!.status = 'conflict';
+    state.pages[root.canonicalId]!.destinationFingerprint = 'stale-provider-fingerprint';
+    state.pages[root.canonicalId]!.lastError = 'legacy destination conflict';
+    state.pages[child.canonicalId]!.status = 'blocked';
+    state.pages[child.canonicalId]!.blockedByPageId = root.canonicalId;
+    state.pages[child.canonicalId]!.blockedByCode = 'destination-conflict';
+    state.pages[child.canonicalId]!.lastError = 'blocked by legacy conflict';
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+    const resumed = await migrator.run(subtreeOptions);
+    expect(resumed).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 2, conflicts: 0, blocked: 0}});
+    const recovered = JSON.parse(await readFile(statePath, 'utf8')) as TransferState;
+    expect(recovered.pages[root.canonicalId]).toMatchObject({status: 'complete'});
+    expect(recovered.pages[root.canonicalId]?.lastError).toBeUndefined();
+    expect(recovered.pages[child.canonicalId]).toMatchObject({status: 'complete'});
+    expect(recovered.pages[child.canonicalId]?.blockedByPageId).toBeUndefined();
+  });
+
   it('fails safely when a recreated page cannot be confirmed by a repeated read', async () => {
     const {directory, config, options} = await setup();
     const adapters = fixture();

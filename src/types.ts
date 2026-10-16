@@ -242,6 +242,7 @@ export interface ConfluenceApi {
     title: string;
     storage: string;
     parentId?: string;
+    version?: number;
   }): Promise<ConfluencePage>;
   findAttachment(pageId: string, filename: string): Promise<ConfluenceAttachment | undefined>;
   uploadAttachment(input: {

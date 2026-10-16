@@ -42,9 +42,9 @@ describe('transfer state', () => {
     });
     await store.setPage({
       sourceId: '10', sourceCanonicalId: 'wiki:10', sourceLocator: 'root', sourceTitle: 'Root',
-      destinationTitle: 'Root', status: 'discovered', resources: {}, degradations: [],
+      destinationTitle: 'Root', destinationFingerprint: 'page-fingerprint', destinationVersion: '8', status: 'discovered', resources: {}, degradations: [],
       comments: {
-        fingerprint: 'comments-fingerprint', destinationId: 'comment-1', archiveResourceId: 'archive-1',
+        fingerprint: 'comments-fingerprint', destinationId: 'comment-1', destinationFingerprint: 'comment-fingerprint', destinationVersion: '3', archiveResourceId: 'archive-1',
         archiveName: 'comments.zip', archiveSha256: 'archive-hash', status: 'complete', threads: 1,
         comments: 2, participants: 2, attachments: 1, bytes: 42, updatedAt: new Date().toISOString(),
       },
@@ -73,8 +73,8 @@ describe('transfer state', () => {
     const state = await resumed.load(identity);
     expect(state.runs.find((item) => item.id === run.id)?.status).toBe('interrupted');
     expect(state.runs.find((item) => item.id === run.id)).toMatchObject({sourceStatus: 'current', returnedDescendants: 9, selectedDescendants: 2, excludedPages: 1, maximumDepth: 2, commentsEnabled: true, commentThreads: 1, comments: 2, commentAttachments: 1});
-    expect(state.pages['wiki:10']?.status).toBe('discovered');
-    expect(state.pages['wiki:10']?.comments).toMatchObject({status: 'complete', destinationId: 'comment-1', comments: 2});
+    expect(state.pages['wiki:10']).toMatchObject({status: 'discovered', destinationFingerprint: 'page-fingerprint', destinationVersion: '8'});
+    expect(state.pages['wiki:10']?.comments).toMatchObject({status: 'complete', destinationId: 'comment-1', destinationVersion: '3', comments: 2});
     expect(state.pages['wiki:11']).toMatchObject({
       status: 'blocked', blockedByPageId: 'wiki:10',
       resources: {attachment: {status: 'blocked', blockedByCode: 'destination-page-staging-failed'}},
