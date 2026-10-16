@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import type {ReportPresentationPayload} from '../../src/report-contract';
 import {App, ReportLoadError} from './App';
 import {installReportFonts} from './fonts';
+import '@mantine/core/styles.css';
 import './styles.css';
 
 installReportFonts();

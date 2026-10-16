@@ -91,6 +91,8 @@ test('interactive report works offline through file:// with exact details and ke
   await expect(page.getByText('Generated locally by ywtc. No report data is sent anywhere.')).toHaveCount(0);
   await expect(page.getByRole('columnheader', {name: 'Metric'})).toBeVisible();
   await expect(page.getByText('Quality', {exact: true})).toBeVisible();
+  await expect(page.getByText(/0 unknown sizes/i)).toHaveCount(0);
+  await expect(page.getByText(/0 safe normalization/i)).toHaveCount(0);
   await expect(page.getByText('Obsolete notes')).toBeVisible();
   await expect(page.getByText('Blocked child', {exact: true})).toBeVisible();
   expect(await page.evaluate(() => (globalThis as {ywtcInjected?: boolean}).ywtcInjected)).toBeUndefined();
@@ -108,7 +110,7 @@ test('interactive report works offline through file:// with exact details and ke
   await expect(page.getByRole('dialog').getByText('manual.pdf')).toBeVisible();
   await expect(page.getByRole('dialog').getByText('upload rejected')).toBeVisible();
   await page.getByRole('tab', {name: /Issues/}).click();
-  await page.getByRole('button', {name: 'Technical diagnostics'}).click();
+  await page.getByRole('dialog').getByRole('button', {name: 'Technical diagnostics'}).click();
   await expect(page.getByRole('dialog').getByText('Attachment upload was rejected')).toBeVisible();
   expect(await page.evaluate(() => document.querySelector('[role="dialog"]')?.contains(document.activeElement))).toBe(true);
   await page.getByRole('tab', {name: 'Comparison'}).click();
@@ -155,6 +157,9 @@ test('language, theme, filters, comment details, and responsive layout are avail
   await expect(page.getByRole('treeitem').filter({hasText: 'Blocked child'})).toHaveCount(0);
   await page.getByRole('combobox', {name: 'Фильтр'}).click();
   await page.getByRole('option', {name: 'Все'}).click();
+  const emptyCounters = page.getByRole('treeitem').filter({hasText: 'Occupied parent'});
+  await expect(emptyCounters).not.toContainText('0 файлов');
+  await expect(emptyCounters).not.toContainText('0 комментариев');
   await page.getByRole('treeitem').filter({hasText: 'Knowledge base'}).click();
   await page.getByRole('tab', {name: 'Комментарии'}).click();
   await expect(page.getByRole('dialog').getByText('comment-entry-1')).toBeVisible();

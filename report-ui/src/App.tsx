@@ -1,3 +1,30 @@
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Code,
+  Collapse,
+  Container,
+  Group,
+  MantineProvider,
+  Modal,
+  Paper,
+  Progress,
+  ScrollArea,
+  Select,
+  SimpleGrid,
+  Stack,
+  Table,
+  Tabs,
+  Text,
+  TextInput,
+  Title,
+  Tooltip,
+  createTheme,
+} from '@mantine/core';
 import {useVirtualizer} from '@tanstack/react-virtual';
 import {
   AlertTriangle,
@@ -24,7 +51,7 @@ import {
   Timer,
   XCircle,
 } from 'lucide-react';
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState} from 'react';
 import type {
   ReportPresentationPayload,
   TransferReportData,
@@ -34,49 +61,19 @@ import reportHeader from '../../docs/assets/report-header-transparent.png';
 import {initialLocale, type Locale, translator, type TranslationKey} from './i18n';
 import {formatBytes, guardedStorageGet, guardedStorageSet, safeLink} from './lib';
 import {buildReportTree, problemCount, type ReportTreeFilter, type ReportTreeNode, visibleTreeNodes} from './model';
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  Input,
-  Progress,
-  ScrollArea,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-  buttonVariants,
-} from './ui';
+import {positiveCounts, visibleDetailSections, visibleSummarySections} from './presentation';
 
 type Theme = 'system' | 'light' | 'dark';
+type Translate = (key: TranslationKey) => string;
+type DefinitionItem = [label: string, value: ReactNode | undefined | null];
+
+const reportTheme = createTheme({
+  fontFamily: 'Inter Variable, sans-serif',
+  fontFamilyMonospace: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  primaryColor: 'blue',
+  defaultRadius: 'md',
+  headings: {fontFamily: 'Inter Variable, sans-serif'},
+});
 
 const categoryLabels: Record<Locale, Record<TransferReportIssue['category'], string>> = {
   en: {
@@ -91,6 +88,8 @@ const categoryLabels: Record<Locale, Record<TransferReportIssue['category'], str
   },
 };
 
+const filterValues: ReportTreeFilter[] = ['all', 'problems', 'partial', 'failed', 'blocked', 'conflict', 'excluded'];
+
 function issueActionLabel(issue: TransferReportIssue, locale: Locale): string {
   if (locale === 'en') return issue.action;
   if (issue.severity === 'blocked') return 'Устраните ошибку вышестоящей страницы и повторите ту же миграцию.';
@@ -104,8 +103,6 @@ function issueActionLabel(issue: TransferReportIssue, locale: Locale): string {
   return 'Проверьте причину, затронутый объект и техническую диагностику.';
 }
 
-const filterValues: ReportTreeFilter[] = ['all', 'problems', 'partial', 'failed', 'blocked', 'conflict', 'excluded'];
-
 function statusTranslation(status: string): TranslationKey | undefined {
   if (status === 'excluded') return 'excludedStatus';
   if (status === 'completed') return 'complete';
@@ -115,123 +112,200 @@ function statusTranslation(status: string): TranslationKey | undefined {
     : undefined;
 }
 
-function badgeVariant(status: string): 'success' | 'warning' | 'danger' | 'blocked' | 'conflict' | 'outline' {
-  if (status === 'complete' || status === 'completed') return 'success';
-  if (status === 'failed') return 'danger';
-  if (status === 'blocked' || status === 'not-started' || status === 'excluded') return 'blocked';
-  if (status === 'conflict') return 'conflict';
-  if (status === 'partial' || status === 'planned' || status === 'completed-with-warnings') return 'warning';
-  return 'outline';
+function statusColor(status: string): string {
+  if (status === 'complete' || status === 'completed') return 'teal';
+  if (status === 'failed') return 'red';
+  if (status === 'conflict') return 'grape';
+  if (status === 'partial' || status === 'planned' || status === 'completed-with-warnings') return 'yellow';
+  if (status === 'blocked' || status === 'not-started' || status === 'excluded') return 'gray';
+  return 'blue';
 }
 
-function StatusIcon({status, className = 'size-4'}: {status: string; className?: string}) {
-  if (status === 'complete' || status === 'completed') return <CheckCircle2 className={className} aria-hidden="true" />;
-  if (status === 'failed') return <XCircle className={className} aria-hidden="true" />;
-  if (status === 'blocked') return <Ban className={className} aria-hidden="true" />;
-  if (status === 'conflict') return <ShieldAlert className={className} aria-hidden="true" />;
-  if (status === 'excluded') return <Archive className={className} aria-hidden="true" />;
-  if (status === 'not-started' || status === 'planned') return <Timer className={className} aria-hidden="true" />;
-  if (status === 'partial' || status === 'completed-with-warnings') return <AlertTriangle className={className} aria-hidden="true" />;
-  return <CircleDashed className={className} aria-hidden="true" />;
+function StatusIcon({status, size = 13}: {status: string; size?: number}) {
+  if (status === 'complete' || status === 'completed') return <CheckCircle2 size={size} aria-hidden="true" />;
+  if (status === 'failed') return <XCircle size={size} aria-hidden="true" />;
+  if (status === 'blocked') return <Ban size={size} aria-hidden="true" />;
+  if (status === 'conflict') return <ShieldAlert size={size} aria-hidden="true" />;
+  if (status === 'excluded') return <Archive size={size} aria-hidden="true" />;
+  if (status === 'not-started' || status === 'planned') return <Timer size={size} aria-hidden="true" />;
+  if (status === 'partial' || status === 'completed-with-warnings') return <AlertTriangle size={size} aria-hidden="true" />;
+  return <CircleDashed size={size} aria-hidden="true" />;
 }
 
-function StatusBadge({status, t}: {status: string; t: (key: TranslationKey) => string}) {
+function StatusBadge({status, t}: {status: string; t: Translate}) {
   const key = statusTranslation(status);
-  return <Badge variant={badgeVariant(status)}><StatusIcon status={status} className="size-3" />{key ? t(key) : status}</Badge>;
+  return (
+    <Badge color={statusColor(status)} variant="light" size="sm" leftSection={<StatusIcon status={status} size={12} />}>
+      {key ? t(key) : status}
+    </Badge>
+  );
 }
 
-function ExternalIcon({href, label, children}: {href?: string | undefined; label: string; children: React.ReactNode}) {
+function ExternalIcon({href, label, color = 'gray', children}: {href?: string | undefined; label: string; color?: string; children: ReactNode}) {
   const safe = safeLink(href);
-  if (!safe) return <span role="img" className={`${buttonVariants({variant: 'ghost', size: 'icon'})} cursor-not-allowed opacity-35`} aria-label={`${label}: unavailable`}>{children}</span>;
+  if (!safe) return null;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <a className={buttonVariants({variant: 'ghost', size: 'icon'})} href={safe} target="_blank" rel="noreferrer" aria-label={label} onClick={(event) => event.stopPropagation()}>{children}</a>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+    <Tooltip label={label} withArrow openDelay={250}>
+      <ActionIcon
+        component="a"
+        href={safe}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={label}
+        variant="subtle"
+        color={color}
+        size="sm"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {children}
+      </ActionIcon>
     </Tooltip>
   );
 }
 
 function formatDate(value: string | undefined, locale: Locale): string {
-  if (!value) return '—';
+  if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat(locale === 'ru' ? 'ru-RU' : 'en-US', {dateStyle: 'medium', timeStyle: 'short'}).format(date);
 }
 
-function OutcomeList({counts, t}: {counts: Record<string, number>; t: (key: TranslationKey) => string}) {
-  const entries = Object.entries(counts).filter(([, count]) => count > 0);
-  if (entries.length === 0) return <span className="text-muted-foreground">0</span>;
-  return <div className="flex flex-wrap gap-1.5">{entries.map(([status, count]) => <span key={status} className="inline-flex items-center gap-1"><StatusBadge status={status} t={t} /><strong className="text-xs tabular-nums">{count}</strong></span>)}</div>;
+function countText(entries: Array<[number, string]>): string | undefined {
+  const visible = entries.filter(([count]) => count > 0);
+  return visible.length > 0 ? visible.map(([count, label]) => `${count} ${label}`).join(' · ') : undefined;
 }
 
-function SummaryTable({report, t}: {report: TransferReportData; t: (key: TranslationKey) => string}) {
+function byteSummary(knownBytes: number, unknownSizes: number, t: Translate): string | undefined {
+  const parts: string[] = [];
+  if (knownBytes > 0) parts.push(`${formatBytes(knownBytes)} ${t('known')}`);
+  if (unknownSizes > 0) parts.push(`${unknownSizes} ${t('unknownSizes')}`);
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
+function OutcomeList({counts, t}: {counts: Record<string, number>; t: Translate}) {
+  const entries = positiveCounts(counts);
+  if (entries.length === 0) return null;
+  return (
+    <Group gap={6} wrap="wrap">
+      {entries.map(([status, count]) => {
+        const key = statusTranslation(status);
+        return <Badge key={status} color={statusColor(status)} variant="light" size="sm">{key ? t(key) : status} · {count}</Badge>;
+      })}
+    </Group>
+  );
+}
+
+function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
   const summary = report.summary;
   const sourceBytes = summary.sourceBytes + summary.commentBytes;
+  const sections = visibleSummarySections(summary);
+  const rows: Array<{id: string; icon: ReactNode; label: string; source?: ReactNode; destination?: ReactNode}> = [
+    {
+      id: 'pages', icon: <FolderTree size={16} />, label: t('pages'),
+      source: countText([
+        [summary.returnedDescendants + 1, t('found')],
+        [summary.pages, t('selected')],
+        [summary.excludedPages, t('excluded')],
+      ]),
+      destination: <OutcomeList counts={summary.pageStatuses} t={t} />,
+    },
+    ...(sections.includes('files') ? [{
+      id: 'files', icon: <Paperclip size={16} />, label: t('files'),
+      source: countText([
+        [summary.resources, t('files').toLocaleLowerCase()],
+        [summary.attachments, t('attachments')],
+        [summary.resourceImages, t('images')],
+        [summary.commentAttachments, t('commentAttachments')],
+      ]),
+      destination: <OutcomeList counts={summary.resourceStatuses} t={t} />,
+    }] : []),
+    ...(sections.includes('comments') ? [{
+      id: 'comments', icon: <MessageSquare size={16} />, label: t('comments'),
+      source: countText([
+        [summary.commentThreads, t('threads')],
+        [summary.comments, t('entries')],
+        [summary.commentParticipants, t('participants')],
+      ]),
+      destination: <OutcomeList counts={summary.commentStatuses} t={t} />,
+    }] : []),
+    ...(sections.includes('data') ? [{
+      id: 'data', icon: <Database size={16} />, label: t('data'),
+      source: byteSummary(sourceBytes, summary.bytesUnknown, t),
+      destination: summary.bytes > 0 ? `${formatBytes(summary.bytes)} ${t('transferred')}` : undefined,
+    }] : []),
+    ...(sections.includes('quality') ? [{
+      id: 'quality', icon: <ShieldAlert size={16} />, label: t('quality'),
+      source: countText([
+        [summary.normalizations, t('normalization').toLocaleLowerCase()],
+        [summary.adaptations, t('adaptation').toLocaleLowerCase()],
+        [summary.preservedExternalReferences, t('externalReferences')],
+      ]),
+      destination: countText([
+        [summary.errors, t('error').toLocaleLowerCase()],
+        [summary.warnings, t('warning').toLocaleLowerCase()],
+        [summary.degradations, t('degradation').toLocaleLowerCase()],
+      ]),
+    }] : []),
+  ];
+
   return (
-    <div>
-      <Table className="summary-table table-fixed [&_td]:px-1 [&_th]:px-1 sm:[&_td]:px-3 sm:[&_th]:px-3">
-          <TableHeader><TableRow><TableHead>{t('metric')}</TableHead><TableHead>{t('source')}</TableHead><TableHead>{t('destination')}</TableHead></TableRow></TableHeader>
-          <TableBody>
-            <TableRow>
-              <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><FolderTree className="size-4 text-primary" />{t('pages')}</span></TableCell>
-              <TableCell>{summary.returnedDescendants + 1} {t('found')} · {summary.pages} {t('selected')} · <span className={summary.excludedPages ? 'font-semibold text-amber-700 dark:text-amber-300' : ''}>{summary.excludedPages} {t('excluded')}</span></TableCell>
-              <TableCell><OutcomeList counts={summary.pageStatuses} t={t} /></TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><Paperclip className="size-4 text-primary" />{t('files')}</span></TableCell>
-              <TableCell>{summary.resources} · {summary.attachments} {t('attachments')} · {summary.resourceImages} {t('images')} · {summary.commentAttachments} {t('commentAttachments')}</TableCell>
-              <TableCell><OutcomeList counts={summary.resourceStatuses} t={t} /></TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><MessageSquare className="size-4 text-primary" />{t('comments')}</span></TableCell>
-              <TableCell>{summary.commentThreads} {t('threads')} · {summary.comments} {t('entries')} · {summary.commentParticipants} {t('participants')}</TableCell>
-              <TableCell><OutcomeList counts={summary.commentStatuses} t={t} /></TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><Database className="size-4 text-primary" />{t('data')}</span></TableCell>
-              <TableCell>{formatBytes(sourceBytes)} {t('known')} · {summary.bytesUnknown} {t('unknownSizes')}</TableCell>
-              <TableCell><strong>{formatBytes(summary.bytes)}</strong> {t('transferred')}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell className="font-medium"><span className="inline-flex items-center gap-2"><ShieldAlert className="size-4 text-primary" />{t('quality')}</span></TableCell>
-              <TableCell>{summary.normalizations} {t('normalization').toLocaleLowerCase()} · {summary.adaptations} {t('adaptation').toLocaleLowerCase()} · {summary.preservedExternalReferences} {t('externalReferences')}</TableCell>
-              <TableCell><span className={summary.errors ? 'font-semibold text-red-700 dark:text-red-300' : ''}>{summary.errors} {t('error').toLocaleLowerCase()}</span> · <span className={summary.warnings ? 'font-semibold text-amber-700 dark:text-amber-300' : ''}>{summary.warnings} {t('warning').toLocaleLowerCase()}</span></TableCell>
-            </TableRow>
-          </TableBody>
+    <Stack gap="sm">
+      <Box className="summary-table-container">
+        <Table className="summary-table" verticalSpacing="sm" highlightOnHover>
+          <Table.Thead>
+            <Table.Tr><Table.Th>{t('metric')}</Table.Th><Table.Th>{t('source')}</Table.Th><Table.Th>{t('destination')}</Table.Th></Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {rows.map((row) => (
+              <Table.Tr key={row.id}>
+                <Table.Td><Group gap="xs" wrap="nowrap" className="metric-label">{row.icon}<Text fw={600} size="sm">{row.label}</Text></Group></Table.Td>
+                <Table.Td><Text size="sm">{row.source}</Text></Table.Td>
+                <Table.Td>{row.destination}</Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
         </Table>
-        {!summary.inventoryComplete && <Alert className="mt-4 border-amber-500/35 bg-amber-500/8 text-amber-800 dark:text-amber-200"><AlertTriangle className="mr-2 inline size-4" />{t('inventoryIncomplete')}: {summary.inventoriedPages}/{summary.pages}</Alert>}
-    </div>
+      </Box>
+      {!summary.inventoryComplete && (
+        <Alert color="yellow" icon={<AlertTriangle size={16} />} title={t('inventoryIncomplete')}>
+          {summary.inventoriedPages}/{summary.pages} {t('pages').toLocaleLowerCase()}
+        </Alert>
+      )}
+    </Stack>
   );
 }
 
 function RussianFlag() {
-  return <svg viewBox="0 0 24 18" className="size-5 rounded-[2px] border border-border" aria-hidden="true"><path fill="#fff" d="M0 0h24v6H0z"/><path fill="#1c57a7" d="M0 6h24v6H0z"/><path fill="#d52b1e" d="M0 12h24v6H0z"/></svg>;
+  return <svg viewBox="0 0 24 18" className="language-flag" aria-hidden="true"><path fill="#fff" d="M0 0h24v6H0z"/><path fill="#1c57a7" d="M0 6h24v6H0z"/><path fill="#d52b1e" d="M0 12h24v6H0z"/></svg>;
 }
 
 function EnglishFlag() {
-  return <svg viewBox="0 0 24 18" className="size-5 rounded-[2px] border border-border" aria-hidden="true"><path fill="#17365d" d="M0 0h24v18H0z"/><path stroke="#fff" strokeWidth="4" d="m0 0 24 18M24 0 0 18"/><path stroke="#cf142b" strokeWidth="2" d="m0 0 24 18M24 0 0 18"/><path fill="#fff" d="M0 6h24v6H0zM9 0h6v18H9z"/><path fill="#cf142b" d="M0 7.5h24v3H0zM10.5 0h3v18h-3z"/></svg>;
+  return <svg viewBox="0 0 24 18" className="language-flag" aria-hidden="true"><path fill="#17365d" d="M0 0h24v18H0z"/><path stroke="#fff" strokeWidth="4" d="m0 0 24 18M24 0 0 18"/><path stroke="#cf142b" strokeWidth="2" d="m0 0 24 18M24 0 0 18"/><path fill="#fff" d="M0 6h24v6H0zM9 0h6v18H9z"/><path fill="#cf142b" d="M0 7.5h24v3H0zM10.5 0h3v18h-3z"/></svg>;
 }
 
-function PreferenceButton({label, tooltip, onClick, children}: {label: string; tooltip: string; onClick: () => void; children: React.ReactNode}) {
+function PreferenceButton({label, onClick, children}: {label: string; onClick: () => void; children: ReactNode}) {
   return (
-    <Tooltip><TooltipTrigger asChild><Button type="button" variant="outline" size="icon" aria-label={label} onClick={onClick}>{children}</Button></TooltipTrigger><TooltipContent>{tooltip}</TooltipContent></Tooltip>
+    <Tooltip label={label} withArrow openDelay={250}>
+      <ActionIcon type="button" variant="default" size="lg" aria-label={label} onClick={onClick}>{children}</ActionIcon>
+    </Tooltip>
   );
 }
 
-function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTreeNode; expanded: boolean; hasChildren: boolean; t: (key: TranslationKey) => string; toggle: () => void; open: () => void}) {
+function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTreeNode; expanded: boolean; hasChildren: boolean; t: Translate; toggle: () => void; open: () => void}) {
   const sourceUrl = node.page?.sourceUrl ?? node.excluded?.sourceUrl;
   const destinationUrl = node.page?.destinationUrl;
-  const resources = node.page?.resourceItems.length ?? 0;
-  const comments = node.page?.comments.comments ?? 0;
+  const counters = node.page ? countText([
+    [node.page.resourceItems.length, t('files').toLocaleLowerCase()],
+    [node.page.comments.comments, t('comments').toLocaleLowerCase()],
+    [node.page.links, t('links')],
+  ]) : undefined;
   return (
-    <div
+    <Paper
       role="treeitem"
       aria-level={node.depth + 1}
       aria-expanded={hasChildren ? expanded : undefined}
       tabIndex={0}
-      className={`tree-row status-${node.status} group flex min-h-[58px] cursor-pointer items-center gap-1 rounded-lg border border-border/70 px-2 py-2 outline-none transition hover:border-primary/35 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-ring`}
-      style={{'--tree-indent': `${Math.min(node.depth, 12) * 20 + 8}px`} as React.CSSProperties}
+      className={`tree-row status-${node.status}`}
+      style={{'--tree-indent': `${Math.min(node.depth, 12) * 20 + 8}px`} as CSSProperties}
       onClick={open}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
@@ -239,24 +313,37 @@ function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTr
         if (event.key === 'ArrowLeft' && hasChildren && expanded) { event.preventDefault(); toggle(); }
       }}
     >
-      <Button variant="ghost" size="icon" className={hasChildren ? '' : 'invisible'} aria-label={expanded ? t('collapse') : t('expand')} onClick={(event) => { event.stopPropagation(); toggle(); }}>
-        <ChevronRight className={`size-4 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-      </Button>
-      <ExternalIcon href={sourceUrl} label={t('sourceLink')}><ExternalLink className="size-4 text-red-500" /></ExternalIcon>
-      <ExternalIcon href={destinationUrl} label={t('destinationLink')}><ExternalLink className="size-4 text-blue-500" /></ExternalIcon>
-      <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label={t('details')} onClick={(event) => { event.stopPropagation(); open(); }}><Eye className="size-4" /></Button></TooltipTrigger><TooltipContent>{t('details')}</TooltipContent></Tooltip>
-      <div className="min-w-0 flex-1 px-1">
-        <div className="flex flex-wrap items-center gap-2"><span className="truncate font-medium">{node.synthetic ? t('unknownPosition') : node.title}</span><StatusBadge status={node.status} t={t} /></div>
-        <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-          {node.page && <><span>{resources} {t('files')}</span><span>{comments} {t('comments')}</span><span>{node.page.links} {t('links')}</span></>}
-          {node.excluded && <span>{node.excluded.reason}{node.excluded.sourceStatus ? ` · ${node.excluded.sourceStatus}` : ''}</span>}
-        </div>
-      </div>
-    </div>
+      <ActionIcon
+        type="button"
+        variant="subtle"
+        color="gray"
+        size="sm"
+        className={hasChildren ? 'tree-toggle' : 'tree-toggle tree-toggle-hidden'}
+        aria-label={expanded ? t('collapse') : t('expand')}
+        onClick={(event) => { event.stopPropagation(); toggle(); }}
+      >
+        <ChevronRight size={16} className={expanded ? 'tree-chevron tree-chevron-expanded' : 'tree-chevron'} />
+      </ActionIcon>
+      <ExternalIcon href={sourceUrl} label={t('sourceLink')} color="red"><ExternalLink size={16} /></ExternalIcon>
+      <ExternalIcon href={destinationUrl} label={t('destinationLink')} color="blue"><ExternalLink size={16} /></ExternalIcon>
+      <Tooltip label={t('details')} withArrow openDelay={250}>
+        <ActionIcon type="button" variant="subtle" color="gray" size="sm" aria-label={t('details')} onClick={(event) => { event.stopPropagation(); open(); }}>
+          <Eye size={16} />
+        </ActionIcon>
+      </Tooltip>
+      <Box className="tree-row-content">
+        <Group gap="xs" wrap="wrap">
+          <Text fw={600} size="sm" className="tree-title">{node.synthetic ? t('unknownPosition') : node.title}</Text>
+          <StatusBadge status={node.status} t={t} />
+        </Group>
+        {counters && <Text size="xs" c="dimmed" mt={3}>{counters}</Text>}
+        {node.excluded && <Text size="xs" c="dimmed" mt={3}>{node.excluded.reason}{node.excluded.sourceStatus ? ` · ${node.excluded.sourceStatus}` : ''}</Text>}
+      </Box>
+    </Paper>
   );
 }
 
-function Hierarchy({report, t, selectedId, onSelect}: {report: TransferReportData; t: (key: TranslationKey) => string; selectedId?: string | undefined; onSelect: (id: string) => void}) {
+function Hierarchy({report, t, selectedId, onSelect}: {report: TransferReportData; t: Translate; selectedId?: string | undefined; onSelect: (id: string) => void}) {
   const tree = useMemo(() => buildReportTree(report), [report]);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ReportTreeFilter>('all');
@@ -265,36 +352,88 @@ function Hierarchy({report, t, selectedId, onSelect}: {report: TransferReportDat
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => 66, overscan: 12});
   useEffect(() => { virtualizer.measure(); }, [virtualizer]);
+  const filterOptions = filterValues.map((value) => ({
+    value,
+    label: value === 'all' ? t('all') : value === 'problems' ? `${t('problems')} (${problemCount(report)})` : statusTranslation(value) ? t(statusTranslation(value)!) : value,
+  }));
   return (
-    <Card aria-labelledby="hierarchy-title">
-      <CardHeader>
-        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-          <div><CardTitle id="hierarchy-title" className="flex items-center gap-2"><FolderTree className="size-4 text-primary" />{t('hierarchy')}</CardTitle><CardDescription>{t('hierarchyDescription')} · {visible.length}/{tree.nodes.size}</CardDescription></div>
-          <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
-            <label htmlFor="report-search" className="relative min-w-0 flex-1 lg:w-80"><Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" /><span className="sr-only">{t('search')}</span><Input id="report-search" className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('search')} /></label>
-            <Select value={filter} onValueChange={(value) => setFilter(value as ReportTreeFilter)}><SelectTrigger aria-label={t('filter')}><SelectValue /></SelectTrigger><SelectContent>{filterValues.map((value) => <SelectItem key={value} value={value}>{value === 'all' ? t('all') : value === 'problems' ? `${t('problems')} (${problemCount(report)})` : statusTranslation(value) ? t(statusTranslation(value)!) : value}</SelectItem>)}</SelectContent></Select>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {visible.length === 0 ? <Alert>{t('noResults')}</Alert> : (
-          <ScrollArea className="h-[min(68vh,720px)] rounded-xl border border-border/60 bg-background/45" viewportRef={scrollRef}>
-            <div role="tree" aria-label={t('hierarchy')} className="relative p-2" style={{height: `${virtualizer.getTotalSize() + 16}px`}}>
+    <Card component="section" aria-labelledby="hierarchy-title" withBorder radius="lg" shadow="xs" className="report-card">
+      <Stack gap="md">
+        <Group justify="space-between" align="end" gap="md" className="hierarchy-header">
+          <Box>
+            <Group gap="xs"><FolderTree size={18} color="var(--mantine-primary-color-filled)" /><Title order={2} id="hierarchy-title" size="h4">{t('hierarchy')}</Title></Group>
+            <Text size="sm" c="dimmed" mt={4}>{t('hierarchyDescription')} · {visible.length}/{tree.nodes.size}</Text>
+          </Box>
+          <Group gap="sm" className="hierarchy-controls">
+            <TextInput
+              id="report-search"
+              aria-label={t('search')}
+              value={search}
+              onChange={(event) => setSearch(event.currentTarget.value)}
+              placeholder={t('search')}
+              leftSection={<Search size={16} />}
+              className="hierarchy-search"
+            />
+            <Select
+              aria-label={t('filter')}
+              value={filter}
+              onChange={(value) => setFilter((value ?? 'all') as ReportTreeFilter)}
+              data={filterOptions}
+              allowDeselect={false}
+              className="hierarchy-filter"
+            />
+          </Group>
+        </Group>
+        {visible.length === 0 ? (
+          <Alert color="gray" icon={<Info size={16} />}>{t('noResults')}</Alert>
+        ) : (
+          <ScrollArea className="tree-scroll" viewportRef={scrollRef} type="auto">
+            <Box role="tree" aria-label={t('hierarchy')} className="tree-virtual" style={{height: virtualizer.getTotalSize() + 16}}>
               {virtualizer.getVirtualItems().map((item) => {
                 const node = visible[item.index]!;
-                return <div key={node.id} ref={virtualizer.measureElement} data-index={item.index} className="absolute left-2 right-2 top-0 pb-2" style={{transform: `translateY(${item.start}px)`}}><TreeRow node={node} expanded={expanded.has(node.id)} hasChildren={node.children.length > 0} t={t} toggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(node.id)) next.delete(node.id); else next.add(node.id); return next; })} open={() => onSelect(node.id)} /></div>;
+                return (
+                  <Box key={node.id} ref={virtualizer.measureElement} data-index={item.index} className="virtual-row" style={{transform: `translateY(${item.start}px)`}}>
+                    <TreeRow
+                      node={node}
+                      expanded={expanded.has(node.id)}
+                      hasChildren={node.children.length > 0}
+                      t={t}
+                      toggle={() => setExpanded((current) => {
+                        const next = new Set(current);
+                        if (next.has(node.id)) next.delete(node.id); else next.add(node.id);
+                        return next;
+                      })}
+                      open={() => onSelect(node.id)}
+                    />
+                  </Box>
+                );
               })}
-            </div>
+            </Box>
           </ScrollArea>
         )}
-        {selectedId && <span className="sr-only" aria-live="polite">{selectedId}</span>}
-      </CardContent>
+        {selectedId && <span className="visually-hidden" aria-live="polite">{selectedId}</span>}
+      </Stack>
     </Card>
   );
 }
 
-function DefinitionGrid({items}: {items: Array<[string, React.ReactNode]>}) {
-  return <dl className="grid gap-3 sm:grid-cols-2">{items.map(([label, value]) => <div key={label} className="rounded-lg border border-border/70 bg-muted/25 p-3"><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt><dd className="mt-1 break-words text-sm">{value || '—'}</dd></div>)}</dl>;
+function hasDefinitionValue(value: ReactNode | undefined | null): value is ReactNode {
+  return value !== undefined && value !== null && value !== '';
+}
+
+function DefinitionGrid({items}: {items: DefinitionItem[]}) {
+  const visible = items.filter(([, value]) => hasDefinitionValue(value));
+  if (visible.length === 0) return null;
+  return (
+    <SimpleGrid cols={{base: 1, sm: 2}} spacing="sm" component="dl" className="definition-grid">
+      {visible.map(([label, value]) => (
+        <Paper key={label} component="div" withBorder radius="md" p="sm" className="definition-item">
+          <Text component="dt" size="xs" fw={700} c="dimmed" tt="uppercase">{label}</Text>
+          <Box component="dd" mt={4} className="definition-value">{value}</Box>
+        </Paper>
+      ))}
+    </SimpleGrid>
+  );
 }
 
 function isolatedPreview(body: string): string {
@@ -302,12 +441,145 @@ function isolatedPreview(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>body{font:14px/1.55 system-ui,sans-serif;margin:18px;color:#182230;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #ccd;padding:6px}pre{white-space:pre-wrap;background:#f3f4f6;padding:10px;border-radius:6px}a{color:#175cd3}.ywtc-layout{display:grid;gap:18px}.ywtc-layout-section{display:grid;grid-template-columns:repeat(var(--columns,1),minmax(0,1fr));gap:18px;align-items:start}.ywtc-layout-columns-2{--columns:2}.ywtc-layout-columns-3{--columns:3}.ywtc-layout-cell{min-width:0}@media(max-width:620px){.ywtc-layout-section{grid-template-columns:1fr}}</style></head><body>${body}</body></html>`;
 }
 
-function IssueList({issues, locale, t}: {issues: TransferReportIssue[]; locale: Locale; t: (key: TranslationKey) => string}) {
-  if (issues.length === 0) return <Alert><Info className="mr-2 inline size-4" />{t('noIssues')}</Alert>;
-  return <div className="space-y-3">{issues.map((issue) => <Alert key={`${issue.code}:${issue.objectId ?? issue.pageId ?? 'run'}`} className={issue.severity === 'error' ? 'border-red-500/30' : issue.severity === 'degradation' ? 'border-amber-500/30' : issue.severity === 'adaptation' ? 'border-blue-500/30' : ''}><div className="flex flex-wrap gap-2"><Badge variant={issue.severity === 'error' ? 'danger' : issue.severity === 'blocked' ? 'blocked' : issue.severity === 'adaptation' ? 'outline' : 'warning'}>{t(issue.severity)}</Badge><Badge variant="outline">{categoryLabels[locale][issue.category]}</Badge><Badge variant="outline">{issue.phase}</Badge>{issue.retryable && <Badge variant="warning">{t('retryable')}</Badge>}{issue.occurrences > 1 && <Badge variant="outline">×{issue.occurrences}</Badge>}</div><p className="mt-3 font-medium">{issue.code}</p><p className="mt-3 text-xs"><strong>{t('action')}:</strong> {issueActionLabel(issue, locale)}</p><Collapsible className="mt-3"><CollapsibleTrigger asChild><Button variant="ghost" size="sm">{t('technical')}</Button></CollapsibleTrigger><CollapsibleContent className="mt-2 rounded-md border border-border/70 bg-muted/30 p-3 text-xs"><dl className="grid gap-1"><div><dt className="inline font-semibold">ID: </dt><dd className="inline break-all">{issue.objectId ?? issue.pageId ?? 'run'}</dd></div>{issue.rootCauseId && <div><dt className="inline font-semibold">Root cause: </dt><dd className="inline break-all">{issue.rootCauseId}</dd></div>}<div><dt className="inline font-semibold">Message: </dt><dd className="inline whitespace-pre-wrap break-words">{issue.message}</dd></div></dl></CollapsibleContent></Collapsible></Alert>)}</div>;
+function issueColor(issue: TransferReportIssue): string {
+  if (issue.severity === 'error') return 'red';
+  if (issue.severity === 'degradation' || issue.severity === 'warning') return 'yellow';
+  if (issue.severity === 'blocked') return 'gray';
+  return 'blue';
 }
 
-function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTreeNode | undefined; payload: ReportPresentationPayload; locale: Locale; t: (key: TranslationKey) => string; onOpenChange: (open: boolean) => void}) {
+function IssueList({issues, locale, t}: {issues: TransferReportIssue[]; locale: Locale; t: Translate}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  if (issues.length === 0) return <Alert color="gray" icon={<Info size={16} />}>{t('noIssues')}</Alert>;
+  return (
+    <Stack gap="sm">
+      {issues.map((issue) => {
+        const key = `${issue.code}:${issue.objectId ?? issue.pageId ?? 'run'}`;
+        const opened = expanded.has(key);
+        return (
+          <Alert key={key} color={issueColor(issue)} title={issue.code} icon={<StatusIcon status={issue.severity} size={16} />}>
+            <Stack gap="xs">
+              <Group gap={6} wrap="wrap">
+                <Badge color={issueColor(issue)} variant="light">{t(issue.severity)}</Badge>
+                <Badge color="gray" variant="outline">{categoryLabels[locale][issue.category]}</Badge>
+                <Badge color="gray" variant="outline">{issue.phase}</Badge>
+                {issue.retryable && <Badge color="yellow" variant="light">{t('retryable')}</Badge>}
+                {issue.occurrences > 1 && <Badge color="gray" variant="outline">×{issue.occurrences}</Badge>}
+              </Group>
+              <Text size="sm"><strong>{t('action')}:</strong> {issueActionLabel(issue, locale)}</Text>
+              <Box>
+                <Button
+                  type="button"
+                  variant="subtle"
+                  color="gray"
+                  size="compact-sm"
+                  onClick={() => setExpanded((current) => {
+                    const next = new Set(current);
+                    if (next.has(key)) next.delete(key); else next.add(key);
+                    return next;
+                  })}
+                >
+                  {t('technical')}
+                </Button>
+                <Collapse expanded={opened}>
+                  <Paper withBorder radius="md" p="sm" mt="xs" className="technical-diagnostics">
+                    <Text size="xs"><strong>ID:</strong> {issue.objectId ?? issue.pageId ?? 'run'}</Text>
+                    {issue.rootCauseId && <Text size="xs"><strong>Root cause:</strong> {issue.rootCauseId}</Text>}
+                    <Text size="xs" className="diagnostic-message"><strong>Message:</strong> {issue.message}</Text>
+                  </Paper>
+                </Collapse>
+              </Box>
+            </Stack>
+          </Alert>
+        );
+      })}
+    </Stack>
+  );
+}
+
+function ResourcesTable({node, t}: {node: ReportTreeNode; t: Translate}) {
+  const resources = node.page?.resourceItems ?? [];
+  return (
+    <Table.ScrollContainer minWidth={760}>
+      <Table striped highlightOnHover verticalSpacing="sm">
+        <Table.Thead><Table.Tr><Table.Th>{t('name')}</Table.Th><Table.Th>{t('kind')}</Table.Th><Table.Th>{t('size')}</Table.Th><Table.Th>{t('status')}</Table.Th><Table.Th>{t('reason')}</Table.Th></Table.Tr></Table.Thead>
+        <Table.Tbody>
+          {resources.map((resource) => (
+            <Table.Tr key={resource.sourceId}>
+              <Table.Td>
+                <Group gap="xs" align="flex-start" wrap="nowrap">
+                  {resource.kind === 'image' ? <FileImage size={16} color="var(--mantine-primary-color-filled)" /> : <Paperclip size={16} color="var(--mantine-primary-color-filled)" />}
+                  <Box>
+                    <Text size="sm" fw={600}>{resource.sourceName}</Text>
+                    {resource.destinationName && resource.destinationName !== resource.sourceName && <Text size="xs" c="dimmed">→ {resource.destinationName}</Text>}
+                    <Group gap={4} mt={4}>
+                      <ExternalIcon href={resource.sourceUrl} label={t('sourceLink')} color="red"><ExternalLink size={14} /></ExternalIcon>
+                      <ExternalIcon href={resource.destinationUrl} label={t('destinationLink')} color="blue"><ExternalLink size={14} /></ExternalIcon>
+                    </Group>
+                  </Box>
+                </Group>
+              </Table.Td>
+              <Table.Td><Text size="sm">{resource.kind}</Text></Table.Td>
+              <Table.Td>
+                {resource.sourceBytes !== undefined && <Text size="sm">{formatBytes(resource.sourceBytes)}</Text>}
+                {resource.sha256 && <Code className="hash-code" title={resource.sha256}>{resource.sha256}</Code>}
+              </Table.Td>
+              <Table.Td><StatusBadge status={resource.status} t={t} /></Table.Td>
+              <Table.Td><Text size="sm" c="dimmed">{resource.error ?? resource.blockedReason}</Text></Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Table.ScrollContainer>
+  );
+}
+
+function CommentsPanel({node, locale, t}: {node: ReportTreeNode; locale: Locale; t: Translate}) {
+  const comments = node.page!.comments;
+  const commentCount = countText([
+    [comments.threads, t('threads')],
+    [comments.comments, t('entries')],
+    [comments.participants, t('participants')],
+    [comments.attachments, t('attachments')],
+  ]);
+  return (
+    <Stack gap="md">
+      <DefinitionGrid items={[
+        [t('status'), <StatusBadge key="comment-status" status={comments.status} t={t} />],
+        [t('comments'), commentCount],
+        [t('archive'), comments.archiveName ? <Group key="comment-archive" gap={4}><Text size="sm">{comments.archiveName}</Text><ExternalIcon href={comments.archiveUrl} label={t('archive')} color="blue"><ExternalLink size={14} /></ExternalIcon></Group> : undefined],
+        [t('size'), comments.bytes > 0 ? formatBytes(comments.bytes) : undefined],
+      ]} />
+      {comments.error && <Alert color="red" icon={<XCircle size={16} />}>{comments.error}</Alert>}
+      {comments.items?.length ? (
+        <Table.ScrollContainer minWidth={680}>
+          <Table striped highlightOnHover verticalSpacing="sm">
+            <Table.Thead><Table.Tr><Table.Th>ID</Table.Th><Table.Th>{t('participants')}</Table.Th><Table.Th>{t('status')}</Table.Th><Table.Th>{t('reason')}</Table.Th></Table.Tr></Table.Thead>
+            <Table.Tbody>
+              {comments.items.map((comment) => (
+                <Table.Tr key={comment.commentId}>
+                  <Table.Td>
+                    <Code>{comment.commentId}</Code>
+                    {comment.createdAt && <Text size="xs" c="dimmed" mt={3}>{formatDate(comment.createdAt, locale)}</Text>}
+                    <Group gap={4} mt={4}>
+                      <ExternalIcon href={comment.sourceUrl} label={t('sourceLink')} color="red"><ExternalLink size={14} /></ExternalIcon>
+                      <ExternalIcon href={comment.destinationUrl} label={t('destinationLink')} color="blue"><ExternalLink size={14} /></ExternalIcon>
+                    </Group>
+                  </Table.Td>
+                  <Table.Td><Text size="sm">{comment.author}</Text></Table.Td>
+                  <Table.Td><StatusBadge status={comment.outcome} t={t} /></Table.Td>
+                  <Table.Td><Text size="sm">{comment.error ?? comment.sourceStatus}</Text></Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
+      ) : null}
+    </Stack>
+  );
+}
+
+function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTreeNode | undefined; payload: ReportPresentationPayload; locale: Locale; t: Translate; onOpenChange: (open: boolean) => void}) {
   const page = node?.page;
   const excluded = node?.excluded;
   const issues = node ? payload.report.issues.filter((issue) =>
@@ -315,58 +587,84 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
     && issue.severity !== 'adaptation'
     && issue.severity !== 'normalization') : [];
   const preview = node ? payload.previews[node.id] : undefined;
+  const sections = visibleDetailSections({page, hasPreview: Boolean(preview), issueCount: issues.length});
+  const tabs = [
+    {value: 'overview', label: t('overview'), visible: true},
+    {value: 'files', label: t('files'), visible: sections.includes('files')},
+    {value: 'comments', label: t('comments'), visible: sections.includes('comments')},
+    {value: 'comparison', label: t('comparison'), visible: sections.includes('comparison')},
+    {value: 'issues', label: `${t('issues')} · ${issues.length}`, visible: sections.includes('issues')},
+  ].filter((tab) => tab.visible);
+  const inventory = page ? countText([
+    [page.links, t('links')],
+    [page.tables, t('tables')],
+    [page.grids, t('grids')],
+    [page.codeBlocks, t('codeBlocks')],
+  ]) : undefined;
+  const title = (
+    <Group gap="xs" wrap="wrap">
+      <Text fw={700}>{node?.synthetic ? t('unknownPosition') : node?.title}</Text>
+      {node && <StatusBadge status={node.status} t={t} />}
+    </Group>
+  );
   return (
-    <Dialog open={Boolean(node)} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader><div className="flex flex-wrap items-center gap-2"><DialogTitle>{node?.synthetic ? t('unknownPosition') : node?.title}</DialogTitle>{node && <StatusBadge status={node.status} t={t} />}</div><DialogDescription>{node?.id}</DialogDescription></DialogHeader>
-        <Tabs defaultValue="overview" className="min-h-0 px-6 pb-6">
-          <TabsList className="w-full justify-start overflow-x-auto"><TabsTrigger value="overview">{t('overview')}</TabsTrigger><TabsTrigger value="files">{t('files')}</TabsTrigger><TabsTrigger value="comments">{t('comments')}</TabsTrigger><TabsTrigger value="comparison">{t('comparison')}</TabsTrigger><TabsTrigger value="issues">{t('issues')} ({issues.length})</TabsTrigger></TabsList>
-          <ScrollArea className="mt-1 h-[min(68vh,650px)] pr-3">
-            <TabsContent value="overview" className="space-y-4">
+    <Modal
+      key={node?.id}
+      opened={Boolean(node)}
+      onClose={() => onOpenChange(false)}
+      title={title}
+      size="min(1180px, 96vw)"
+      centered
+      overlayProps={{backgroundOpacity: 0.72, blur: 3}}
+      scrollAreaComponent={ScrollArea.Autosize}
+      classNames={{content: 'page-modal', body: 'page-modal-body'}}
+    >
+      {node && (
+        <Tabs defaultValue="overview" keepMounted={false}>
+          <ScrollArea type="auto" scrollbarSize={6}>
+            <Tabs.List className="details-tabs">{tabs.map((tab) => <Tabs.Tab key={tab.value} value={tab.value}>{tab.label}</Tabs.Tab>)}</Tabs.List>
+          </ScrollArea>
+          <Tabs.Panel value="overview" pt="md">
+            <Stack gap="md">
               <DefinitionGrid items={[
                 [t('sourceId'), page?.sourceId ?? excluded?.sourceId],
                 [t('destinationId'), page?.destinationId],
                 [t('sourceParent'), page?.sourceParentId ?? excluded?.sourceParentId],
                 [t('expectedParent'), page?.projectedParentId ?? page?.parentId ?? excluded?.projectedParentId],
                 [t('actualParent'), page?.destinationParentId],
-                [t('depth'), String(node?.depth ?? 0)],
-                [t('inventory'), page ? `${page.links} ${t('links')} · ${page.tables} ${t('tables')} · ${page.grids} ${t('grids')} · ${page.codeBlocks} ${t('codeBlocks')}` : excluded?.reason],
-                [t('status'), node ? <StatusBadge key="page-status" status={node.status} t={t} /> : '—'],
-                ['Conflict evidence', page?.conflictEvidence ? `${page.conflictEvidence.reason}: ${page.conflictEvidence.candidateIds.join(', ')}` : '—'],
+                [t('depth'), String(node.depth)],
+                [t('inventory'), inventory ?? excluded?.reason],
+                [t('status'), <StatusBadge key="page-status" status={node.status} t={t} />],
+                [t('conflictEvidence'), page?.conflictEvidence ? `${page.conflictEvidence.reason}: ${page.conflictEvidence.candidateIds.join(', ')}` : undefined],
               ]} />
-              <div className="flex flex-wrap gap-2"><ExternalIcon href={page?.sourceUrl ?? excluded?.sourceUrl} label={t('sourceLink')}><ExternalLink className="size-4" /></ExternalIcon><ExternalIcon href={page?.destinationUrl} label={t('destinationLink')}><ExternalLink className="size-4" /></ExternalIcon></div>
-              {excluded && !excluded.metadataComplete && <Alert className="border-amber-500/30"><AlertTriangle className="mr-2 inline size-4" />{t('metadataIncomplete')}</Alert>}
-              {page?.error && <Alert className="border-red-500/30"><XCircle className="mr-2 inline size-4" />{page.error}</Alert>}
-              {page?.warnings.map((warning) => <Alert key={warning} className="border-amber-500/30">{warning}</Alert>)}
-              {page?.adaptations?.map((adaptation) => <Alert key={adaptation} className="border-blue-500/30">{adaptation}</Alert>)}
-            </TabsContent>
-            <TabsContent value="files">
-              {!page || page.resourceItems.length === 0 ? <Alert>{t('noFiles')}</Alert> : <Table><TableHeader><TableRow><TableHead>{t('name')}</TableHead><TableHead>{t('kind')}</TableHead><TableHead>{t('size')}</TableHead><TableHead>{t('status')}</TableHead><TableHead>{t('reason')}</TableHead></TableRow></TableHeader><TableBody>{page.resourceItems.map((resource) => <TableRow key={resource.sourceId}><TableCell><div className="flex items-start gap-2">{resource.kind === 'image' ? <FileImage className="mt-0.5 size-4 text-primary" /> : <Paperclip className="mt-0.5 size-4 text-primary" />}<div><p className="font-medium">{resource.sourceName}</p>{resource.destinationName && resource.destinationName !== resource.sourceName && <p className="text-xs text-muted-foreground">→ {resource.destinationName}</p>}<div className="mt-1 flex gap-1"><ExternalIcon href={resource.sourceUrl} label={t('sourceLink')}><ExternalLink className="size-3.5" /></ExternalIcon><ExternalIcon href={resource.destinationUrl} label={t('destinationLink')}><ExternalLink className="size-3.5" /></ExternalIcon></div></div></div></TableCell><TableCell>{resource.kind}</TableCell><TableCell>{resource.sourceBytes === undefined ? '—' : formatBytes(resource.sourceBytes)}{resource.sha256 && <code className="mt-1 block max-w-40 truncate text-xs" title={resource.sha256}>{resource.sha256}</code>}</TableCell><TableCell><StatusBadge status={resource.status} t={t} /></TableCell><TableCell className="max-w-sm text-muted-foreground">{resource.error ?? resource.blockedReason ?? '—'}</TableCell></TableRow>)}</TableBody></Table>}
-            </TabsContent>
-            <TabsContent value="comments" className="space-y-4">
-              {!page || (page.comments.comments === 0 && ['complete', 'skipped'].includes(page.comments.status)) ? <Alert>{t('noComments')}</Alert> : <><DefinitionGrid items={[[t('status'), <StatusBadge key="comment-status" status={page.comments.status} t={t} />], [t('comments'), `${page.comments.threads} ${t('threads')} · ${page.comments.comments} ${t('entries')} · ${page.comments.participants} ${t('participants')}`], [t('archive'), <span key="comment-archive" className="inline-flex items-center gap-2">{page.comments.archiveName ?? '—'}<ExternalIcon href={page.comments.archiveUrl} label={t('archive')}><ExternalLink className="size-3.5" /></ExternalIcon></span>], [t('size'), formatBytes(page.comments.bytes)]]} />{page.comments.error && <Alert className="border-red-500/30">{page.comments.error}</Alert>}{page.comments.items?.length ? <Table><TableHeader><TableRow><TableHead>ID</TableHead><TableHead>{t('participants')}</TableHead><TableHead>{t('status')}</TableHead><TableHead>{t('reason')}</TableHead></TableRow></TableHeader><TableBody>{page.comments.items.map((comment) => <TableRow key={comment.commentId}><TableCell><code>{comment.commentId}</code><p className="text-xs text-muted-foreground">{formatDate(comment.createdAt, locale)}</p><div className="mt-1 flex gap-1"><ExternalIcon href={comment.sourceUrl} label={t('sourceLink')}><ExternalLink className="size-3.5" /></ExternalIcon><ExternalIcon href={comment.destinationUrl} label={t('destinationLink')}><ExternalLink className="size-3.5" /></ExternalIcon></div></TableCell><TableCell>{comment.author}</TableCell><TableCell><StatusBadge status={comment.outcome} t={t} /></TableCell><TableCell>{comment.error ?? comment.sourceStatus ?? '—'}</TableCell></TableRow>)}</TableBody></Table> : null}</>}
-            </TabsContent>
-            <TabsContent value="comparison">
-              {!preview ? <Alert>{t('previewUnavailable')}</Alert> : <div className="grid gap-4 lg:grid-cols-2"><div><h3 className="mb-2 text-sm font-semibold">{t('sourcePreview')}</h3><iframe title={t('sourcePreview')} className="preview-frame" sandbox="" srcDoc={isolatedPreview(preview.source)} /></div><div><h3 className="mb-2 text-sm font-semibold">{t('destinationPreview')}</h3><iframe title={t('destinationPreview')} className="preview-frame" sandbox="" srcDoc={isolatedPreview(preview.destination)} /></div></div>}
-            </TabsContent>
-            <TabsContent value="issues"><IssueList issues={issues} locale={locale} t={t} /></TabsContent>
-          </ScrollArea>
+              <Group gap="xs">
+                <ExternalIcon href={page?.sourceUrl ?? excluded?.sourceUrl} label={t('sourceLink')} color="red"><ExternalLink size={16} /></ExternalIcon>
+                <ExternalIcon href={page?.destinationUrl} label={t('destinationLink')} color="blue"><ExternalLink size={16} /></ExternalIcon>
+              </Group>
+              {excluded && !excluded.metadataComplete && <Alert color="yellow" icon={<AlertTriangle size={16} />}>{t('metadataIncomplete')}</Alert>}
+              {page?.error && <Alert color="red" icon={<XCircle size={16} />}>{page.error}</Alert>}
+              {page?.warnings.map((warning) => <Alert key={warning} color="yellow" icon={<AlertTriangle size={16} />}>{warning}</Alert>)}
+              {page?.adaptations?.map((adaptation) => <Alert key={adaptation} color="blue" icon={<Info size={16} />}>{adaptation}</Alert>)}
+            </Stack>
+          </Tabs.Panel>
+          {sections.includes('files') && <Tabs.Panel value="files" pt="md"><ResourcesTable node={node} t={t} /></Tabs.Panel>}
+          {sections.includes('comments') && <Tabs.Panel value="comments" pt="md"><CommentsPanel node={node} locale={locale} t={t} /></Tabs.Panel>}
+          {preview && (
+            <Tabs.Panel value="comparison" pt="md">
+              <SimpleGrid cols={{base: 1, lg: 2}} spacing="md">
+                <Box><Text size="sm" fw={700} mb="xs">{t('sourcePreview')}</Text><iframe title={t('sourcePreview')} className="preview-frame" sandbox="" srcDoc={isolatedPreview(preview.source)} /></Box>
+                <Box><Text size="sm" fw={700} mb="xs">{t('destinationPreview')}</Text><iframe title={t('destinationPreview')} className="preview-frame" sandbox="" srcDoc={isolatedPreview(preview.destination)} /></Box>
+              </SimpleGrid>
+            </Tabs.Panel>
+          )}
+          {issues.length > 0 && <Tabs.Panel value="issues" pt="md"><IssueList issues={issues} locale={locale} t={t} /></Tabs.Panel>}
         </Tabs>
-      </DialogContent>
-    </Dialog>
+      )}
+    </Modal>
   );
 }
 
-function ReportOverview({
-  report,
-  locale,
-  theme,
-  progress,
-  accountedPages,
-  setLocale,
-  setTheme,
-  t,
-}: {
+function ReportOverview({report, locale, theme, progress, accountedPages, setLocale, setTheme, t}: {
   report: TransferReportData;
   locale: Locale;
   theme: Theme;
@@ -374,87 +672,111 @@ function ReportOverview({
   accountedPages: number;
   setLocale: (locale: Locale) => void;
   setTheme: (theme: Theme) => void;
-  t: (key: TranslationKey) => string;
+  t: Translate;
 }) {
+  const [technicalOpen, setTechnicalOpen] = useState(false);
   const nextLocale: Locale = locale === 'ru' ? 'en' : 'ru';
   const nextTheme: Theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system';
   const localeLabel = `${t('language')}: ${locale === 'ru' ? 'Русский' : 'English'}; ${t('next')}: ${nextLocale === 'ru' ? 'Русский' : 'English'}`;
   const themeLabel = `${t('theme')}: ${t(theme)}; ${t('next')}: ${t(nextTheme)}`;
   const resultUrl = safeLink(report.destination.url);
+  const hasTechnicalDetails = Boolean(report.state.path || report.outputs.length > 0);
   return (
-    <Card aria-labelledby="report-title" className="overflow-hidden bg-card/80 shadow-sm backdrop-blur">
-      <CardContent className="px-4 pb-6 pt-3 sm:px-7">
-        <div className="flex justify-end gap-2">
-          <PreferenceButton label={localeLabel} tooltip={localeLabel} onClick={() => setLocale(nextLocale)}>{locale === 'ru' ? <RussianFlag /> : <EnglishFlag />}</PreferenceButton>
-          <PreferenceButton label={themeLabel} tooltip={themeLabel} onClick={() => setTheme(nextTheme)}>{theme === 'system' ? <Monitor className="size-4" /> : theme === 'light' ? <Sun className="size-4" /> : <Moon className="size-4" />}</PreferenceButton>
-        </div>
-        <img src={reportHeader} className="mx-auto mt-1 block h-auto max-h-56 w-full max-w-5xl object-contain" alt="Yandex Wiki and Confluence sources pass pages, hierarchy, links, tables, images, comments, and attachments through ywtc to Confluence, Yandex Wiki, Markdown, and HTML" />
-        <div className="mx-auto mt-2 max-w-5xl text-center">
-          <div className="flex flex-wrap items-center justify-center gap-2"><h1 id="report-title" className="text-2xl font-semibold tracking-tight sm:text-3xl">{t('report')}</h1><StatusBadge status={report.status} t={t} /></div>
-          <p className="mt-2 text-sm text-muted-foreground">{report.direction} · {report.source.profile} → {report.destination.profile ?? report.destination.format ?? report.destination.provider} · {report.scope} · {report.sourceStatus} · {report.dryRun ? t('dryRun') : t('live')}</p>
-          <div className="mt-3 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-muted-foreground"><span>{t('started')}: <strong className="text-foreground">{formatDate(report.startedAt, locale)}</strong></span><span>{t('finished')}: <strong className="text-foreground">{formatDate(report.finishedAt, locale)}</strong></span><span>{t('runId')}: <code className="text-foreground">{report.runId}</code></span></div>
-          <div className="mx-auto mt-4 max-w-xl"><Progress value={progress} aria-label={`${accountedPages}/${report.summary.pages}`} /><p className="mt-1 text-xs text-muted-foreground">{accountedPages}/{report.summary.pages} {t('pages')} · {progress}%</p></div>
-        </div>
-        <div className="mt-6 border-t border-border/70 pt-3"><SummaryTable report={report} t={t} /></div>
-        <div className="mt-5 grid gap-4 border-t border-border/70 pt-5 lg:grid-cols-2">
-          <DefinitionGrid items={[[t('state'), <code key="state-path">{report.state.path}</code>], [t('runId'), <code key="run-id">{report.runId}</code>], [t('source'), `${report.source.provider} · ${report.source.profile}`], [t('destination'), `${report.destination.provider}${report.destination.profile ? ` · ${report.destination.profile}` : ''}`]]} />
-          <div className="space-y-2">
-            {report.outputs.map((output) => <div key={`${output.label}:${output.value}`} className="rounded-lg border border-border/70 p-3"><p className="text-xs font-semibold uppercase text-muted-foreground">{output.label}</p><code className="mt-1 block break-all text-xs">{output.value}</code></div>)}
-            <div className="flex flex-wrap gap-2">
-              {resultUrl && <a className={buttonVariants({variant: 'outline'})} href={resultUrl} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />{t('resultLink')}</a>}
-              <a className={buttonVariants({variant: 'outline'})} href="report.json" download="report.json"><Download className="size-4" />{t('downloadJson')}</a>
-            </div>
-          </div>
-        </div>
-      </CardContent>
+    <Card component="section" aria-labelledby="report-title" withBorder radius="lg" shadow="xs" className="report-card overview-card">
+      <Group justify="flex-end" gap="xs" className="preference-controls">
+        <PreferenceButton label={localeLabel} onClick={() => setLocale(nextLocale)}>{locale === 'ru' ? <RussianFlag /> : <EnglishFlag />}</PreferenceButton>
+        <PreferenceButton label={themeLabel} onClick={() => setTheme(nextTheme)}>{theme === 'system' ? <Monitor size={17} /> : theme === 'light' ? <Sun size={17} /> : <Moon size={17} />}</PreferenceButton>
+      </Group>
+      <img src={reportHeader} className="report-header" alt="Yandex Wiki and Confluence sources pass pages, hierarchy, links, tables, images, comments, and attachments through ywtc to Confluence, Yandex Wiki, Markdown, and HTML" />
+      <Stack align="center" gap="xs" className="report-heading">
+        <Group justify="center" gap="sm" wrap="wrap"><Title order={1} id="report-title">{t('report')}</Title><StatusBadge status={report.status} t={t} /></Group>
+        <Text size="sm" c="dimmed" ta="center">{report.direction} · {report.source.profile} → {report.destination.profile ?? report.destination.format ?? report.destination.provider} · {report.scope} · {report.sourceStatus} · {report.dryRun ? t('dryRun') : t('live')}</Text>
+        <Group justify="center" gap="lg" wrap="wrap" className="run-meta">
+          <Text size="xs" c="dimmed">{t('started')}: <strong>{formatDate(report.startedAt, locale)}</strong></Text>
+          {report.finishedAt && <Text size="xs" c="dimmed">{t('finished')}: <strong>{formatDate(report.finishedAt, locale)}</strong></Text>}
+          <Text size="xs" c="dimmed">{t('runId')}: <Code>{report.runId}</Code></Text>
+        </Group>
+        <Box className="report-progress">
+          <Progress value={progress} aria-label={`${accountedPages}/${report.summary.pages}`} size="sm" radius="xl" />
+          <Text size="xs" c="dimmed" ta="center" mt={5}>{accountedPages}/{report.summary.pages} {t('pages').toLocaleLowerCase()} · {progress}%</Text>
+        </Box>
+      </Stack>
+      <Box className="overview-summary"><SummaryTable report={report} t={t} /></Box>
+      <Group justify="center" gap="sm" mt="lg" wrap="wrap">
+        {resultUrl && <Button component="a" href={resultUrl} target="_blank" rel="noreferrer" variant="light" leftSection={<ExternalLink size={16} />}>{t('resultLink')}</Button>}
+        <Button component="a" href="report.json" download="report.json" variant="default" leftSection={<Download size={16} />}>{t('downloadJson')}</Button>
+        {hasTechnicalDetails && <Button type="button" variant="subtle" color="gray" onClick={() => setTechnicalOpen((value) => !value)}>{t('technicalDetails')}</Button>}
+      </Group>
+      {hasTechnicalDetails && (
+        <Collapse expanded={technicalOpen}>
+          <Paper withBorder radius="md" p="md" mt="md" className="technical-output">
+            <Stack gap="sm">
+              {report.state.path && <Box><Text size="xs" fw={700} c="dimmed" tt="uppercase">{t('state')}</Text><Code block>{report.state.path}</Code></Box>}
+              {report.outputs.map((output) => <Box key={`${output.label}:${output.value}`}><Text size="xs" fw={700} c="dimmed" tt="uppercase">{output.label}</Text><Code block>{output.value}</Code></Box>)}
+            </Stack>
+          </Paper>
+        </Collapse>
+      )}
     </Card>
   );
 }
 
-export function App({payload}: {payload: ReportPresentationPayload}) {
+function ReportApplication({payload}: {payload: ReportPresentationPayload}) {
   const storedLocale = guardedStorageGet('ywtc-report-locale');
   const storedTheme = guardedStorageGet('ywtc-report-theme');
   const [locale, setLocale] = useState<Locale>(storedLocale === 'ru' || storedLocale === 'en' ? storedLocale : initialLocale());
   const [theme, setTheme] = useState<Theme>(storedTheme === 'light' || storedTheme === 'dark' || storedTheme === 'system' ? storedTheme : 'system');
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
   const [selectedId, setSelectedId] = useState<string>();
   const t = useMemo(() => translator(locale), [locale]);
   const tree = useMemo(() => buildReportTree(payload.report), [payload.report]);
   const selectedNode = selectedId ? tree.nodes.get(selectedId) : undefined;
+  const effectiveTheme = theme === 'system' ? systemDark ? 'dark' : 'light' : theme;
   useEffect(() => {
     document.documentElement.lang = locale;
     document.title = `ywtc · ${t('report')} · ${payload.report.runId}`;
     guardedStorageSet('ywtc-report-locale', locale);
   }, [locale, payload.report.runId, t]);
   useEffect(() => {
-    const root = document.documentElement;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const apply = () => {
-      root.classList.remove('light', 'dark');
-      root.classList.add(theme === 'system' ? media.matches ? 'dark' : 'light' : theme);
-    };
-    apply();
+    const update = () => setSystemDark(media.matches);
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove('light', 'dark');
+    root.classList.add(effectiveTheme);
     guardedStorageSet('ywtc-report-theme', theme);
-    media.addEventListener?.('change', apply);
-    return () => media.removeEventListener?.('change', apply);
-  }, [theme]);
+  }, [effectiveTheme, theme]);
   const report = payload.report;
   const accountedPages = report.status === 'running'
     ? report.summary.complete + report.summary.partial + report.summary.failed + report.summary.blocked + report.summary.conflicts
     : report.summary.pages;
   const progress = report.summary.pages === 0 ? 0 : Math.round((accountedPages / report.summary.pages) * 100);
   return (
-    <TooltipProvider delayDuration={250}>
-      <div className="report-background">
-        <main className="mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
+    <MantineProvider theme={reportTheme} forceColorScheme={effectiveTheme} defaultColorScheme="light" deduplicateInlineStyles>
+      <Box className="report-background">
+        <Container component="main" fluid className="report-shell">
           <ReportOverview report={report} locale={locale} theme={theme} progress={progress} accountedPages={accountedPages} setLocale={setLocale} setTheme={setTheme} t={t} />
           <Hierarchy report={report} t={t} selectedId={selectedId} onSelect={setSelectedId} />
-        </main>
+        </Container>
         <PageDialog node={selectedNode} payload={payload} locale={locale} t={t} onOpenChange={(open) => { if (!open) setSelectedId(undefined); }} />
-      </div>
-    </TooltipProvider>
+      </Box>
+    </MantineProvider>
   );
 }
 
+export function App({payload}: {payload: ReportPresentationPayload}) {
+  return <ReportApplication payload={payload} />;
+}
+
 export function ReportLoadError({message}: {message: string}) {
-  return <main className="mx-auto max-w-2xl p-8"><Alert className="border-red-500/30"><FileWarning className="mr-2 inline size-5 text-red-500" /><strong>Report could not be loaded.</strong><p className="mt-2 text-muted-foreground">{message}</p></Alert></main>;
+  return (
+    <MantineProvider theme={reportTheme} defaultColorScheme="light">
+      <Container size="sm" py="xl">
+        <Alert color="red" icon={<FileWarning size={20} />} title="Report could not be loaded.">{message}</Alert>
+      </Container>
+    </MantineProvider>
+  );
 }

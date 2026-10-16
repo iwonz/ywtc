@@ -11,7 +11,7 @@ const dictionaries = {
     hierarchy: 'Page hierarchy', hierarchyDescription: 'Expanded source structure with exact transfer outcomes.', search: 'Search pages, files, IDs, or diagnostics…',
     filter: 'Filter', all: 'All', problems: 'Problems', unknownPosition: 'Position unknown', sourceLink: 'Open source', destinationLink: 'Open destination',
     details: 'View details', collapse: 'Collapse branch', expand: 'Expand branch', noResults: 'No pages match the current search and filter.',
-    overview: 'Overview', comparison: 'Comparison', issues: 'Issues', parent: 'Parent', sourceParent: 'Source parent', expectedParent: 'Expected destination parent', actualParent: 'Actual destination parent', depth: 'Depth', sourceId: 'Source ID', destinationId: 'Destination ID',
+    overview: 'Overview', comparison: 'Comparison', issues: 'Issues', parent: 'Parent', sourceParent: 'Source parent', expectedParent: 'Expected destination parent', actualParent: 'Actual destination parent', depth: 'Depth', sourceId: 'Source ID', destinationId: 'Destination ID', conflictEvidence: 'Conflict evidence',
     inventory: 'Inventory', links: 'links', tables: 'tables', grids: 'grids', codeBlocks: 'code blocks', name: 'Name', kind: 'Kind', size: 'Size',
     hash: 'SHA-256', reason: 'Reason', action: 'What to do', category: 'Category', phase: 'Phase', occurrences: 'Occurrences', noFiles: 'No transferable files.',
     noComments: 'No source comments.', noIssues: 'No page-specific issues.', previewUnavailable: 'Preview is unavailable.', sourcePreview: 'Source preview', destinationPreview: 'Destination preview',
@@ -19,7 +19,7 @@ const dictionaries = {
     close: 'Close', metadataIncomplete: 'The provider did not expose enough metadata to place this page exactly.', archive: 'Archive', revision: 'revision', stale: 'stale',
     complete: 'Complete', partial: 'Partial', failed: 'Failed', blocked: 'Blocked', conflict: 'Conflict', planned: 'Planned', 'not-started': 'Not started',
     discovered: 'Discovered', 'skeleton-created': 'Bootstrap created', skipped: 'Skipped', excludedStatus: 'Excluded', warning: 'Warning', error: 'Error',
-    degradation: 'Degradation', adaptation: 'Adaptation', normalization: 'Safe normalization', externalReferences: 'external references preserved', technical: 'Technical diagnostics', resultLink: 'Open result',
+    degradation: 'Degradation', adaptation: 'Adaptation', normalization: 'Safe normalization', externalReferences: 'external references preserved', technical: 'Technical diagnostics', technicalDetails: 'Technical details', resultLink: 'Open result',
   },
   ru: {
     report: 'Отчёт о переносе', source: 'Источник', destination: 'Назначение', status: 'Статус', started: 'Начало', finished: 'Завершение',
@@ -31,7 +31,7 @@ const dictionaries = {
     hierarchy: 'Иерархия страниц', hierarchyDescription: 'Раскрытая структура source с точными результатами переноса.', search: 'Поиск по страницам, файлам, ID и диагностике…',
     filter: 'Фильтр', all: 'Все', problems: 'С проблемами', unknownPosition: 'Положение неизвестно', sourceLink: 'Открыть source', destinationLink: 'Открыть destination',
     details: 'Открыть детали', collapse: 'Свернуть ветку', expand: 'Раскрыть ветку', noResults: 'По текущему поиску и фильтру страниц нет.',
-    overview: 'Обзор', comparison: 'Сравнение', issues: 'Проблемы', parent: 'Родитель', sourceParent: 'Родитель в source', expectedParent: 'Ожидаемый родитель в destination', actualParent: 'Фактический родитель в destination', depth: 'Глубина', sourceId: 'Source ID', destinationId: 'Destination ID',
+    overview: 'Обзор', comparison: 'Сравнение', issues: 'Проблемы', parent: 'Родитель', sourceParent: 'Родитель в source', expectedParent: 'Ожидаемый родитель в destination', actualParent: 'Фактический родитель в destination', depth: 'Глубина', sourceId: 'Source ID', destinationId: 'Destination ID', conflictEvidence: 'Данные о конфликте',
     inventory: 'Содержимое', links: 'ссылок', tables: 'таблиц', grids: 'гридов', codeBlocks: 'блоков кода', name: 'Название', kind: 'Тип', size: 'Размер',
     hash: 'SHA-256', reason: 'Причина', action: 'Что делать', category: 'Категория', phase: 'Этап', occurrences: 'Повторения', noFiles: 'Переносимых файлов нет.',
     noComments: 'Комментариев в source нет.', noIssues: 'Проблем для страницы нет.', previewUnavailable: 'Предпросмотр недоступен.', sourcePreview: 'Source preview', destinationPreview: 'Destination preview',
@@ -39,7 +39,7 @@ const dictionaries = {
     close: 'Закрыть', metadataIncomplete: 'Provider не раскрыл достаточно метаданных для точного положения страницы.', archive: 'Архив', revision: 'ревизия', stale: 'устарел',
     complete: 'Готово', partial: 'Частично', failed: 'Ошибка', blocked: 'Заблокировано', conflict: 'Конфликт', planned: 'Запланировано', 'not-started': 'Не начато',
     discovered: 'Найдено', 'skeleton-created': 'Bootstrap создан', skipped: 'Пропущено', excludedStatus: 'Исключено', warning: 'Предупреждение', error: 'Ошибка',
-    degradation: 'Деградация', adaptation: 'Адаптация', normalization: 'Безопасная нормализация', externalReferences: 'внешних ссылок сохранено', technical: 'Техническая диагностика', resultLink: 'Открыть результат',
+    degradation: 'Деградация', adaptation: 'Адаптация', normalization: 'Безопасная нормализация', externalReferences: 'внешних ссылок сохранено', technical: 'Техническая диагностика', technicalDetails: 'Технические детали', resultLink: 'Открыть результат',
   },
 } as const;
 
