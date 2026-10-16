@@ -2,6 +2,24 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.1.2](https://github.com/iwonz/ywtc/compare/v4.1.1...v4.1.2) (2026-10-16)
+
+
+### Bug Fixes
+
+* **confluence:** validate provider readiness responses ([1a6b32e](https://github.com/iwonz/ywtc/commit/1a6b32ed25c32bd13eca5ad78ab209e02f07ffbf))
+
+
+### Documentation
+
+* **readme:** simplify operator documentation ([cd745e7](https://github.com/iwonz/ywtc/commit/cd745e74662cd2bd4a5edc592994e39559fab81c))
+
+
+### Maintenance
+
+* **ci:** re-run documentation checks ([92d2504](https://github.com/iwonz/ywtc/commit/92d2504912123828429794913edc3b9703cb403e))
+* **homebrew:** update formula to v4.1.1 ([6ef4a77](https://github.com/iwonz/ywtc/commit/6ef4a77b01f2730775b0e5a0ed6e22e8fe638e31))
+
 ## [4.1.1](https://github.com/iwonz/ywtc/compare/v4.1.0...v4.1.1) (2026-10-16)
 
 
