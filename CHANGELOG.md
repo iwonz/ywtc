@@ -2,6 +2,20 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [3.6.0](https://github.com/iwonz/ywtc/compare/v3.5.0...v3.6.0) (2026-10-16)
+
+
+### Features
+
+* **migration:** preserve empty pages and native layouts ([e11185e](https://github.com/iwonz/ywtc/commit/e11185ee0fa81b26e39ceebbd49f6aee7ae22cd8))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v3.5.0 ([6d98178](https://github.com/iwonz/ywtc/commit/6d9817809008283cbd797640825a1fe676d1ddae))
+* **release:** continue semantic layout publication ([4e9119a](https://github.com/iwonz/ywtc/commit/4e9119a5078b42c463a0d990b66508495083a012))
+* **release:** publish semantic layout support ([84c34b8](https://github.com/iwonz/ywtc/commit/84c34b84216454f653ce00e26b756db3c1c3f311))
+
 ## [3.5.0](https://github.com/iwonz/ywtc/compare/v3.4.1...v3.5.0) (2026-10-16)
 
 
