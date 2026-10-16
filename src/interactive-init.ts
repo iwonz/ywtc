@@ -16,7 +16,7 @@ import {
   updateInteractiveProfile,
   validateInteractiveDocument,
 } from './interactive-config.js';
-import {type InitPrompter, WizardCancelledError} from './init-prompts.js';
+import {type WizardPrompter, WizardCancelledError} from './wizard-prompts.js';
 import {redact} from './logger.js';
 import {resolveInitWorkspace, type Workspace} from './workspace.js';
 
@@ -49,18 +49,24 @@ export interface InteractiveInitOptions {
   workdir?: string;
   cwd?: string;
   homeDirectory?: string;
-  prompter: InitPrompter;
+  prompter: WizardPrompter;
   verify?: typeof verifyConnection;
 }
 
 class InteractiveTerminalError extends Error {
-  constructor() {
-    super('init --interactive requires an interactive TTY. Run "ywtc init" and edit ywtc.config.yaml for non-interactive setup.');
+  constructor(command: 'init' | 'migrate') {
+    super(command === 'init'
+      ? 'init --interactive requires an interactive TTY. Run "ywtc init" and edit ywtc.config.yaml for non-interactive setup.'
+      : 'migrate --interactive requires an interactive TTY. Pass --source and --destination for non-interactive migration.');
     this.name = 'InteractiveTerminalError';
   }
 }
-export function assertInteractiveTerminal(inputIsTTY: boolean | undefined, outputIsTTY: boolean | undefined): void {
-  if (!inputIsTTY || !outputIsTTY) throw new InteractiveTerminalError();
+export function assertInteractiveTerminal(
+  inputIsTTY: boolean | undefined,
+  outputIsTTY: boolean | undefined,
+  command: 'init' | 'migrate' = 'init',
+): void {
+  if (!inputIsTTY || !outputIsTTY) throw new InteractiveTerminalError(command);
 }
 
 function required(value: string): string | undefined {
@@ -116,7 +122,7 @@ function uniqueProfileName(context: WizardContext, ...excluding: Array<string | 
   };
 }
 
-async function navigation(prompter: InitPrompter, id: string, canBack = true): Promise<Navigation> {
+async function navigation(prompter: WizardPrompter, id: string, canBack = true): Promise<Navigation> {
   return prompter.select({
     id,
     message: 'Next step',
@@ -131,7 +137,7 @@ async function navigation(prompter: InitPrompter, id: string, canBack = true): P
 
 async function selectExistingProfile<T extends ConnectionProfile>(input: {
   context: WizardContext;
-  prompter: InitPrompter;
+  prompter: WizardPrompter;
   type: T['type'];
   current?: ProfileDraft<T>;
   id: string;
@@ -165,7 +171,7 @@ async function selectExistingProfile<T extends ConnectionProfile>(input: {
   return profile?.type === input.type ? {profile: profile as T, previousName: selected} : undefined;
 }
 
-async function yandexStep(context: WizardContext, prompter: InitPrompter): Promise<Navigation> {
+async function yandexStep(context: WizardContext, prompter: WizardPrompter): Promise<Navigation> {
   prompter.info('Step 2 of 4 · Yandex Wiki');
   const selected = await selectExistingProfile<YandexConnectionProfile>({
     context, prompter, type: 'yandex-wiki', ...(context.yandex ? {current: context.yandex} : {}), id: 'yandex.profile', label: 'Yandex Wiki',
@@ -224,7 +230,7 @@ async function yandexStep(context: WizardContext, prompter: InitPrompter): Promi
   return navigation(prompter, 'yandex.navigation');
 }
 
-async function confluenceStep(context: WizardContext, prompter: InitPrompter): Promise<Navigation> {
+async function confluenceStep(context: WizardContext, prompter: WizardPrompter): Promise<Navigation> {
   prompter.info('Step 3 of 4 · Confluence');
   const selected = await selectExistingProfile<ConfluenceConnectionProfile>({
     context, prompter, type: 'confluence', ...(context.confluence ? {current: context.confluence} : {}), id: 'confluence.profile', label: 'Confluence',
@@ -385,7 +391,7 @@ async function workspaceStep(
 
 async function verifyAndCommit(
   context: WizardContext,
-  prompter: InitPrompter,
+  prompter: WizardPrompter,
   verify: typeof verifyConnection,
   options: InteractiveInitOptions,
 ): Promise<InteractiveInitResult | 0 | 1 | 2> {

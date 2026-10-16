@@ -7,13 +7,13 @@ import {ConnectionVerificationError, type ConnectionVerification} from '../src/c
 import {readWorkspaceConfig} from '../src/config.js';
 import {runInteractiveInit} from '../src/interactive-init.js';
 import {
-  type InitPrompter,
+  type WizardPrompter,
   type SelectPromptOptions,
   type TextPromptOptions,
   WizardCancelledError,
-} from '../src/init-prompts.js';
+} from '../src/wizard-prompts.js';
 
-class ScriptedPrompter implements InitPrompter {
+class ScriptedPrompter implements WizardPrompter {
   readonly output: string[] = [];
   readonly validationErrors: string[] = [];
   readonly initialValues: Array<{id: string; value?: string}> = [];

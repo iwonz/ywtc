@@ -72,6 +72,18 @@ const initHelp = await execFileAsync(executable, ['init', '--help'], {encoding: 
 if (!initHelp.stdout.includes('--interactive') || !initHelp.stdout.includes('TTY wizard')) {
   throw new Error('Installed ywtc init help does not document the interactive TTY wizard');
 }
+const migrateHelp = await execFileAsync(executable, ['migrate', '--help'], {encoding: 'utf8'});
+for (const option of [
+  '-i, --interactive', '-s, --source', '-d, --destination', '-S, --source-profile', '-D, --destination-profile',
+  '-m, --scope', '-t, --source-status', '-C, --comments', '-N, --no-comments', '-f, --format', '-a, --archive',
+  '-n, --dry-run', '-F, --fresh', '-o, --open-report', '-j, --concurrency', '-r, --state', '-w, --workdir',
+]) {
+  if (!migrateHelp.stdout.includes(option)) throw new Error(`Installed ywtc migrate help is missing ${option}`);
+}
+const updateHelp = await execFileAsync(executable, ['update', '--help'], {encoding: 'utf8'});
+for (const option of ['-i, --install', '-c, --via']) {
+  if (!updateHelp.stdout.includes(option)) throw new Error(`Installed ywtc update help is missing ${option}`);
+}
 
 const rejectedInteractiveWorkspace = path.join(temporary, 'rejected-interactive-workspace');
 try {
@@ -85,6 +97,21 @@ try {
 }
 await access(rejectedInteractiveWorkspace).then(
   () => { throw new Error('Rejected interactive init modified the workspace'); },
+  () => undefined,
+);
+
+const rejectedInteractiveMigrationWorkspace = path.join(temporary, 'rejected-interactive-migration-workspace');
+try {
+  await execFileAsync(executable, ['migrate', '-i', '-w', rejectedInteractiveMigrationWorkspace], {encoding: 'utf8'});
+  throw new Error('Interactive migration unexpectedly accepted non-TTY input');
+} catch (error) {
+  const result = error as {code?: number; stderr?: string};
+  if (result.code !== 2 || !result.stderr?.includes('migrate --interactive requires an interactive TTY')) {
+    throw new Error(`Interactive migration non-TTY diagnosis is not actionable: ${result.stderr ?? String(error)}`);
+  }
+}
+await access(rejectedInteractiveMigrationWorkspace).then(
+  () => { throw new Error('Rejected interactive migration modified the workspace'); },
   () => undefined,
 );
 

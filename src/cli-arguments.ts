@@ -22,8 +22,8 @@ export type CliCommand =
   }
   | {
     command: 'migrate';
-    source: string;
-    destination: string;
+    source?: string;
+    destination?: string;
     sourceProfile?: string;
     destinationProfile?: string;
     scope: TransferScope;
@@ -37,6 +37,7 @@ export type CliCommand =
     concurrency?: number;
     stateFilename?: string;
     openReport: boolean;
+    interactive: boolean;
   }
   | {command: 'reports-list'; workdir?: string}
   | {command: 'reports-open'; runId?: string; workdir?: string}
@@ -65,8 +66,8 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
 
   program.command('init')
     .description('Create a workspace or configure it with a guided terminal wizard')
-    .option('--workdir <path>', 'workspace to initialize')
-    .option('--interactive', 'configure Yandex Wiki and Confluence in a TTY wizard', false)
+    .option('-w, --workdir <path>', 'workspace to initialize')
+    .option('-i, --interactive', 'configure Yandex Wiki and Confluence in a TTY wizard', false)
     .action((options) => {
       const workdir = nonEmpty(options.workdir, '--workdir');
       onCommand({command: 'init', interactive: options.interactive, ...(workdir ? {workdir} : {})});
@@ -74,16 +75,16 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
 
   program.command('doctor')
     .description('Validate profiles and optionally perform read-only endpoint preflight')
-    .option('--workdir <path>', 'workspace to inspect')
-    .option('--source <locator>', 'source page URL, ID, or slug')
-    .option('--destination <locator>', 'destination page URL, ID, slug, or directory')
-    .option('--source-profile <name>', 'named source connection')
-    .option('--destination-profile <name>', 'named destination connection')
-    .addOption(new Option('--scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
-    .addOption(new Option('--source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
-    .option('--comments', 'read and archive page comments (default)', true)
-    .option('--no-comments', 'skip all comment API calls and archive work')
-    .addOption(new Option('--format <format>', 'filesystem format').choices(['markdown', 'html']))
+    .option('-w, --workdir <path>', 'workspace to inspect')
+    .option('-s, --source <locator>', 'source page URL, ID, or slug')
+    .option('-d, --destination <locator>', 'destination page URL, ID, slug, or directory')
+    .option('-S, --source-profile <name>', 'named source connection')
+    .option('-D, --destination-profile <name>', 'named destination connection')
+    .addOption(new Option('-m, --scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
+    .addOption(new Option('-t, --source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
+    .option('-C, --comments', 'read and archive page comments (default)', true)
+    .option('-N, --no-comments', 'skip all comment API calls and archive work')
+    .addOption(new Option('-f, --format <format>', 'filesystem format').choices(['markdown', 'html']))
     .action((options) => {
       const source = nonEmpty(options.source, '--source');
       const destination = nonEmpty(options.destination, '--destination');
@@ -105,36 +106,38 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     });
 
   program.command('migrate')
-    .description('Transfer or export a page graph')
-    .requiredOption('--source <locator>', 'source page URL, ID, or slug')
-    .requiredOption('--destination <locator>', 'destination page URL, ID, slug, or directory')
-    .option('--source-profile <name>', 'named source connection')
-    .option('--destination-profile <name>', 'named destination connection')
-    .addOption(new Option('--scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
-    .addOption(new Option('--source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
-    .option('--comments', 'read and archive page comments (default)', true)
-    .option('--no-comments', 'skip all comment API calls and archive work')
-    .addOption(new Option('--format <format>', 'filesystem format').choices(['markdown', 'html']))
-    .option('--archive', 'also create a ZIP for filesystem output', false)
-    .option('--workdir <path>', 'workspace (configured CWD, then ~/.ywtc)')
-    .option('--dry-run', 'discover and render without destination writes', false)
-    .option('--fresh', 'ignore mappings and preserve existing live state as a backup', false)
-    .option('--open-report', 'open the generated HTML report in the system browser', false)
-    .option('--concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
-    .option('--state <path>', 'state path inside workdir')
+    .description('Transfer or export a page graph, optionally through a TTY wizard')
+    .option('-i, --interactive', 'choose migration parameters and dry-run/live actions in a TTY wizard', false)
+    .option('-s, --source <locator>', 'source page URL, ID, or slug (required without --interactive)')
+    .option('-d, --destination <locator>', 'destination page URL, ID, slug, or directory (required without --interactive)')
+    .option('-S, --source-profile <name>', 'named source connection')
+    .option('-D, --destination-profile <name>', 'named destination connection')
+    .addOption(new Option('-m, --scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
+    .addOption(new Option('-t, --source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
+    .option('-C, --comments', 'read and archive page comments (default)', true)
+    .option('-N, --no-comments', 'skip all comment API calls and archive work')
+    .addOption(new Option('-f, --format <format>', 'filesystem format').choices(['markdown', 'html']))
+    .option('-a, --archive', 'also create a ZIP for filesystem output', false)
+    .option('-w, --workdir <path>', 'workspace (configured CWD, then ~/.ywtc)')
+    .option('-n, --dry-run', 'discover and render without destination writes', false)
+    .option('-F, --fresh', 'ignore mappings and preserve existing live state as a backup', false)
+    .option('-o, --open-report', 'open the generated HTML report in the system browser', false)
+    .option('-j, --concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
+    .option('-r, --state <path>', 'state path inside workdir')
     .action((options) => {
-      const source = nonEmpty(options.source, '--source')!;
-      const destination = nonEmpty(options.destination, '--destination')!;
+      const source = nonEmpty(options.source, '--source');
+      const destination = nonEmpty(options.destination, '--destination');
       const sourceProfile = nonEmpty(options.sourceProfile, '--source-profile');
       const destinationProfile = nonEmpty(options.destinationProfile, '--destination-profile');
       const workdir = nonEmpty(options.workdir, '--workdir');
       const stateFilename = nonEmpty(options.state, '--state');
-      if (options.archive && !options.format) throw new Error('--archive requires --format markdown|html and a directory destination.');
-      if (options.format && /^https?:\/\//i.test(destination)) throw new Error('--format cannot be used with a remote HTTP(S) destination.');
+      if (!options.interactive && (!source || !destination)) {
+        throw new Error('migrate requires both --source and --destination unless --interactive is used.');
+      }
+      if (!options.interactive && options.archive && !options.format) throw new Error('--archive requires --format markdown|html and a directory destination.');
+      if (!options.interactive && options.format && destination && /^https?:\/\//i.test(destination)) throw new Error('--format cannot be used with a remote HTTP(S) destination.');
       onCommand({
         command: 'migrate',
-        source,
-        destination,
         scope: options.scope as TransferScope,
         sourceStatus: options.sourceStatus as SourceStatus,
         comments: options.comments,
@@ -142,6 +145,9 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
         dryRun: options.dryRun,
         fresh: options.fresh,
         openReport: options.openReport,
+        interactive: options.interactive,
+        ...(source ? {source} : {}),
+        ...(destination ? {destination} : {}),
         ...(sourceProfile ? {sourceProfile} : {}),
         ...(destinationProfile ? {destinationProfile} : {}),
         ...(options.format ? {format: options.format as ExportFormat} : {}),
@@ -154,7 +160,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
   const reports = program.command('reports').description('List and open local migration reports');
   reports.command('list')
     .description('List valid reports from newest to oldest')
-    .option('--workdir <path>', 'workspace containing reports')
+    .option('-w, --workdir <path>', 'workspace containing reports')
     .action((options) => {
       const workdir = nonEmpty(options.workdir, '--workdir');
       onCommand({command: 'reports-list', ...(workdir ? {workdir} : {})});
@@ -162,7 +168,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
   reports.command('open')
     .description('Open a report by run ID, or the latest report with "last" or no selector')
     .argument('[run-id|last]', 'report run ID from "ywtc reports list", or "last"')
-    .option('--workdir <path>', 'workspace containing reports')
+    .option('-w, --workdir <path>', 'workspace containing reports')
     .action((runIdValue: string | undefined, options) => {
       const runId = nonEmpty(runIdValue, 'run-id');
       const workdir = nonEmpty(options.workdir, '--workdir');
@@ -171,8 +177,8 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
 
   program.command('update')
     .description('Check for a newer release and optionally update a safe installation')
-    .option('--install', 'install after checking', false)
-    .addOption(new Option('--via <channel>', 'force a compatible installation channel').choices(['npm', 'brew']))
+    .option('-i, --install', 'install after checking', false)
+    .addOption(new Option('-c, --via <channel>', 'force a compatible installation channel').choices(['npm', 'brew']))
     .action((options) => onCommand({
       command: 'update',
       install: options.install,

@@ -66,11 +66,9 @@ ywtc update --install --via brew  # явно через Homebrew
 
 ## Минимальный сценарий
 
-- [ ] Установите CLI одним из способов выше.
-- [ ] Запустите `ywtc init --interactive` и настройте обязательные подключения Yandex Wiki и Confluence.
-- [ ] Дождитесь read-only проверки API и авторизации: конфиг сохраняется только после её успеха.
-- [ ] Выполните предложенную wizard команду первой миграции с `--dry-run`, подставив полные URL страниц.
-- [ ] Проверьте план и повторите команду без `--dry-run`.
+- [ ] Установите `ywtc` одним из способов выше.
+- [ ] Выполните `ywtc init --interactive`.
+- [ ] Выполните `ywtc migrate --interactive`.
 
 ## Конфигурация
 
@@ -83,6 +81,8 @@ ywtc update --install --via brew  # явно через Homebrew
 ```
 
 `ywtc init --interactive` требует TTY, проводит через обязательные настройки обоих провайдеров, скрывает токены и делает только read-only connection probes. Проверка подтверждает API и авторизацию, но не права конкретных страниц: они проверяются `doctor` или `migrate`. Для существующего workspace доступны изменение выбранных профилей, выход без изменений и настройка с нуля с backup прежнего YAML в `.states/backups/`; state не удаляется.
+
+`ywtc migrate --interactive` использует тот же порядок выбора workspace, последовательно настраивает source, destination, scope, комментарии и файловый ZIP, а затем по умолчанию запускает dry-run. После него можно открыть отчёт, изменить параметры, повторить проверку или явно начать live-перенос. При неполном inventory, root error, `failed`, `blocked` или настоящем `conflict` live-действие скрывается.
 
 Обычный `ywtc init` без wizard создаёт безопасный пустой шаблон для автоматизации или ручного управления. Полный пример с Yandex Wiki, Confluence Data Center, Confluence Cloud и сетевыми лимитами: [`ywtc.config.example.yaml`](ywtc.config.example.yaml).
 
@@ -165,7 +165,8 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | --- | --- |
 | `ywtc init [--workdir <path>] [--interactive]` | Создать шаблон либо настроить и проверить подключения в TTY wizard |
 | `ywtc doctor [options]` | Проверить workspace; с source и destination выполнить read-only preflight |
-| `ywtc migrate --source <locator> --destination <locator\|directory> [options]` | Перенести или экспортировать выбранный граф страниц |
+| `ywtc migrate --interactive` | Выбрать параметры, выполнить dry-run и явно продолжить live-перенос в TTY wizard |
+| `ywtc migrate --source <locator> --destination <locator\|directory> [options]` | Неинтерактивно перенести или экспортировать выбранный граф страниц |
 | `ywtc reports list [--workdir <path>]` | Показать локальные отчёты от новых к старым |
 | `ywtc reports open [run-id\|last] [--workdir <path>]` | Открыть выбранный отчёт; `last` или отсутствие аргумента открывает последний корректный |
 | `ywtc update [--install] [--via npm\|brew]` | Проверить или установить обновление безопасным для текущего канала способом |
@@ -174,28 +175,30 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 
 ### Опции
 
-| Опция | Команды | Обязательность / значения | Назначение |
-| --- | --- | --- | --- |
-| `--source <value>` | `doctor`, `migrate` | обязательно для `migrate`; в `doctor` вместе с destination | URL, page ID или Yandex slug |
-| `--destination <value>` | `doctor`, `migrate` | обязательно для `migrate`; в `doctor` вместе с source | Родительская страница или каталог экспорта |
-| `--source-profile <name>` | `doctor`, `migrate` | при неоднозначном коротком locator | Профиль source из `connections` |
-| `--destination-profile <name>` | `doctor`, `migrate` | при неоднозначном remote locator | Профиль destination; несовместим с файловым экспортом |
-| `--scope <mode>` | `doctor`, `migrate` | `page`, `subtree` (default), `linked` | Граница выбора страниц |
-| `--source-status <status>` | `doctor`, `migrate` | `all` (default) или `current` | Статус автоматически обнаруживаемых страниц; явно заданный root включается всегда |
-| `--comments`, `--no-comments` | `doctor`, `migrate` | комментарии включены по умолчанию | Архивировать page comments или полностью отключить их чтение и запись |
-| `--format <format>` | `doctor`, `migrate` | `markdown` или `html` | Делает destination файловым каталогом |
-| `--archive` | `migrate` | только вместе с `--format` | Дополнительно создать ZIP рядом с каталогом |
-| `--dry-run` | `migrate` | default `false` | Discovery и план без записи в destination |
-| `--fresh` | `migrate` | default `false` | Игнорировать mappings текущего state |
-| `--open-report` | `migrate` | default `false` | Открыть итоговый HTML-отчёт; ошибка браузера не меняет результат миграции |
-| `--concurrency <n>` | `migrate` | `1..64`; иначе config default | Общая параллельность; профильные лимиты сохраняются |
-| `--state <path>` | `migrate` | внутри workspace | Явный state вместо автоматического |
-| `--workdir <path>` | `init`, `doctor`, `migrate`, `reports` | config в CWD или `~/.ywtc` | Явно выбрать workspace; поддерживается `~/...` |
-| `--interactive` | `init` | требует stdin/stdout TTY | Обязательный wizard Yandex Wiki + Confluence; без частично сохранённого конфига |
-| `--install` | `update` | default `false` | Установить найденное обновление |
-| `--via <channel>` | `update` | `npm` или `brew` | Явно выбрать совместимый канал обновления |
-| `-h`, `--help` | CLI и команды | необязательно | Справка |
-| `-v`, `--version` | CLI | необязательно | Версия |
+| Полная опция | Short | Команды | Обязательность / значения | Назначение |
+| --- | --- | --- | --- | --- |
+| `--interactive` | `-i` | `init`, `migrate` | требует stdin/stdout TTY | Запустить обязательный мастер настройки или миграции |
+| `--workdir <path>` | `-w` | `init`, `doctor`, `migrate`, `reports` | config в CWD или `~/.ywtc` | Явно выбрать workspace; поддерживается `~/...` |
+| `--source <value>` | `-s` | `doctor`, `migrate` | обязательно для неинтерактивного `migrate`; в `doctor` вместе с destination | URL, page ID или Yandex slug |
+| `--destination <value>` | `-d` | `doctor`, `migrate` | обязательно для неинтерактивного `migrate`; в `doctor` вместе с source | Родительская страница или каталог экспорта |
+| `--source-profile <name>` | `-S` | `doctor`, `migrate` | при неоднозначном коротком locator | Профиль source из `connections` |
+| `--destination-profile <name>` | `-D` | `doctor`, `migrate` | при неоднозначном remote locator | Профиль destination; несовместим с файловым экспортом |
+| `--scope <mode>` | `-m` | `doctor`, `migrate` | `page`, `subtree` (default), `linked` | Граница выбора страниц |
+| `--source-status <status>` | `-t` | `doctor`, `migrate` | `all` (default) или `current` | Статус автоматически обнаруживаемых страниц; явно заданный root включается всегда |
+| `--comments` / `--no-comments` | `-C` / `-N` | `doctor`, `migrate` | комментарии включены по умолчанию | Архивировать page comments или полностью отключить их чтение и запись |
+| `--format <format>` | `-f` | `doctor`, `migrate` | `markdown` или `html` | Делает destination файловым каталогом |
+| `--archive` | `-a` | `migrate` | только с файловым destination | Дополнительно создать ZIP рядом с каталогом |
+| `--dry-run` | `-n` | `migrate` | default `false`; default-действие wizard | Discovery и план без записи в destination |
+| `--fresh` | `-F` | `migrate` | default `false` | Игнорировать mappings текущего state |
+| `--open-report` | `-o` | `migrate` | default `false` | Открыть итоговый HTML-отчёт; ошибка браузера не меняет результат миграции |
+| `--concurrency <n>` | `-j` | `migrate` | `1..64`; иначе config default | Общая параллельность; профильные лимиты сохраняются |
+| `--state <path>` | `-r` | `migrate` | внутри workspace | Явный state вместо автоматического |
+| `--install` | `-i` | `update` | default `false` | Установить найденное обновление |
+| `--via <channel>` | `-c` | `update` | `npm` или `brew` | Явно выбрать совместимый канал обновления |
+| `--help` | `-h` | CLI и команды | необязательно | Справка |
+| `--version` | `-v` | CLI | необязательно | Версия |
+
+Одинаковые short-алиасы относятся только к своей команде: например, `migrate -i` запускает wizard, а `update -i` устанавливает обновление. В интерактивном режиме переданные опции становятся редактируемыми начальными значениями; без него `source` и `destination` обязательны.
 
 ### Локаторы
 
@@ -223,15 +226,10 @@ ywtc migrate --source https://wiki.example.com/team/start \
   --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
   --scope linked
 
-# Перенести только исходную страницу
-ywtc migrate --source https://wiki.example.com/team/start \
-  --destination https://confluence.example.com/confluence/pages/viewpage.action?pageId=123 \
-  --scope page
-
-# Создать автономный HTML-экспорт
+# Создать автономный HTML-экспорт и ZIP
 ywtc migrate --source https://wiki.example.com/team/start \
   --destination ./exports/knowledge-base \
-  --format html
+  --format html --archive
 
 # Открыть последний корректный отчёт
 ywtc reports open last

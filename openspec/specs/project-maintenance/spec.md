@@ -53,7 +53,8 @@ The README SHALL be concise, provider-neutral, and organized by the fixed inform
 
 #### Scenario: Minimum migration flow is followed
 - **WHEN** an operator wants the shortest safe path from installation to migration
-- **THEN** the README SHALL provide a checklist containing installation, workspace initialization, direct profile and credential configuration, a dry run, and the corresponding live run
+- **THEN** the README SHALL provide exactly three checklist steps: install ywtc, run `ywtc init --interactive`, and run `ywtc migrate --interactive`
+- **AND** the two wizards SHALL own connection setup plus the explicit dry-run-to-live handoff without requiring copied commands in the checklist
 
 #### Scenario: Common command variants are needed
 - **WHEN** an operator needs a frequent workflow beyond the minimum
@@ -82,7 +83,7 @@ The README SHALL be concise, provider-neutral, and organized by the fixed inform
 
 #### Scenario: Parameters are inspected
 - **WHEN** an operator constructs any supported command or configuration
-- **THEN** the README SHALL provide compact complete tables for commands, CLI options, direct connection/profile fields, defaults, accepted formats, examples, and descriptions
+- **THEN** the README SHALL provide compact complete tables for commands, long and short CLI options, direct connection/profile fields, defaults, accepted formats, examples, and descriptions
 
 #### Scenario: Token setup is inspected
 - **WHEN** an operator follows authentication instructions
@@ -135,23 +136,28 @@ The README header SHALL accurately depict Yandex Wiki and Confluence as sources 
 - **THEN** its alternative text SHALL identify the two source providers, the `ywtc` pipeline, and all four destination types
 
 ### Requirement: Guided setup documentation and packaging
-The public package and README SHALL expose interactive initialization as the shortest guided setup while retaining ordinary initialization for automation and preserving the fixed README section order.
+The public package and README SHALL expose interactive initialization and interactive migration as the shortest guided setup while retaining ordinary commands for automation and preserving the fixed README section order.
 
 #### Scenario: Minimum guided setup
 - **WHEN** a first-time operator follows the README checklist
-- **THEN** it SHALL lead through installation, `ywtc init --interactive`, connection-only verification, a dry run, and the corresponding live migration without manual YAML editing
+- **THEN** it SHALL contain installation, `ywtc init --interactive`, and `ywtc migrate --interactive` as its three steps
+- **AND** interactive migration SHALL default to dry-run and require an explicit live choice
 
 #### Scenario: Automation setup
 - **WHEN** an operator does not have an interactive terminal or manages configuration separately
-- **THEN** the README SHALL retain concise ordinary `ywtc init` and direct `ywtc.config.yaml` guidance without duplicating the parameter reference
+- **THEN** the README SHALL retain concise ordinary `ywtc init`, direct `ywtc.config.yaml`, and non-interactive `ywtc migrate` guidance without duplicating the parameter reference
 
 #### Scenario: Public CLI help
 - **WHEN** an operator opens `ywtc init --help`
 - **THEN** the packaged CLI SHALL document `--interactive`, `--workdir`, TTY requirements, and the non-interactive alternative without loading configuration
 
+#### Scenario: Public migration help
+- **WHEN** an operator opens `ywtc migrate --help`
+- **THEN** the packaged CLI SHALL document interactive mode, all supported short aliases, conditional non-interactive endpoint requirements, and the dry-run-first workflow without loading configuration
+
 #### Scenario: Packaged non-TTY behavior
-- **WHEN** package verification invokes `ywtc init --interactive` without a TTY
-- **THEN** it SHALL fail before workspace or network mutation with the documented actionable message
+- **WHEN** package verification invokes either interactive wizard without a TTY
+- **THEN** it SHALL fail before workspace, destination, or network mutation with the documented actionable message
 
 ### Requirement: Content safety and report access documentation
 The packaged CLI and README SHALL describe current content-preservation and report-access behavior within the existing fixed information architecture.
@@ -342,3 +348,18 @@ The interactive report SHALL prioritize non-zero outcomes, actionable diagnostic
 - **WHEN** project dependencies and report source are reviewed
 - **THEN** the report SHALL use one maintained component system rather than a parallel custom shadcn-style primitive layer
 - **AND** report-only Radix, Tailwind, CVA, clsx, and tailwind-merge dependencies SHALL be absent
+
+### Requirement: Packaged interactive migration verification
+Project and package checks SHALL exercise interactive migration parsing and the wizard state machine without contacting provider APIs or relying on a real TTY.
+
+#### Scenario: Installed package exposes aliases
+- **WHEN** package validation inspects installed command help and parses representative invocations
+- **THEN** it SHALL confirm every documented migration and update alias maps to the same option as its long form
+
+#### Scenario: Wizard workflow is tested
+- **WHEN** automated checks run the prompt-adapter scenarios
+- **THEN** they SHALL cover defaults, backward navigation, flag prefill, provider/profile selection, all four destination kinds, conditional archive, nested initialization, cancellation, and dry-run actions
+
+#### Scenario: Safe live handoff is tested
+- **WHEN** dry-run results contain blocking or non-blocking outcomes
+- **THEN** tests SHALL prove live is offered only for the non-blocking result and starts only after an explicit selection with the same effective migration request

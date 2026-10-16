@@ -43,6 +43,9 @@ describe('CLI and named profiles', () => {
       command: 'init', interactive: true, workdir: '~/guided',
     });
     expect(parseCliArguments(['init'])).toEqual({command: 'init', interactive: false});
+    expect(parseCliArguments(['init', '-i', '-w', '~/guided'])).toEqual({
+      command: 'init', interactive: true, workdir: '~/guided',
+    });
     expect(cliHelp('init')).toContain('--interactive');
     expect(cliHelp('init')).toContain('TTY wizard');
   });
@@ -54,6 +57,7 @@ describe('CLI and named profiles', () => {
     ])).toMatchObject({
       command: 'migrate', source: '42', destination: './site', sourceProfile: 'wiki-main',
       scope: 'linked', sourceStatus: 'current', format: 'html', archive: true, dryRun: true, openReport: true, concurrency: 8,
+      interactive: false,
     });
     expect(parseCliArguments(['migrate', '--source', 'root', '--destination', '100'])).toMatchObject({sourceStatus: 'all'});
     expect(parseCliArguments(['migrate', '--source', 'root', '--destination', '100'])).toMatchObject({comments: true});
@@ -70,10 +74,32 @@ describe('CLI and named profiles', () => {
     });
   });
 
+  it('maps every documented short option to its long migration or update option', () => {
+    expect(parseCliArguments([
+      'migrate', '-i', '-w', './work', '-s', '42', '-d', './site', '-S', 'wiki-main', '-D', 'conf-main',
+      '-m', 'linked', '-t', 'current', '-N', '-f', 'html', '-a', '-n', '-F', '-o', '-j', '8', '-r', 'run.json',
+    ])).toMatchObject({
+      command: 'migrate', interactive: true, workdir: './work', source: '42', destination: './site',
+      sourceProfile: 'wiki-main', destinationProfile: 'conf-main', scope: 'linked', sourceStatus: 'current',
+      comments: false, format: 'html', archive: true, dryRun: true, fresh: true, openReport: true,
+      concurrency: 8, stateFilename: 'run.json',
+    });
+    expect(parseCliArguments(['migrate', '-i', '-C'])).toMatchObject({command: 'migrate', interactive: true, comments: true});
+    expect(parseCliArguments(['doctor', '-s', 'a', '-d', 'b', '-m', 'page', '-t', 'all', '-N'])).toMatchObject({
+      command: 'doctor', source: 'a', destination: 'b', scope: 'page', sourceStatus: 'all', comments: false,
+    });
+    expect(parseCliArguments(['reports', 'list', '-w', './workspace'])).toEqual({command: 'reports-list', workdir: './workspace'});
+    expect(parseCliArguments(['update', '-i', '-c', 'npm'])).toEqual({command: 'update', install: true, via: 'npm'});
+  });
+
   it('rejects unknown and conflicting options with current usage', () => {
     expect(() => parseCliArguments(['migrate', '--source', 'a', '--destination', 'b', '--target', 'c'])).toThrow(/unknown option '--target'/);
     expect(() => parseCliArguments(['migrate', '--source', 'a', '--destination', 'b', '--single-page'])).toThrow(/unknown option '--single-page'/);
     expect(() => parseCliArguments(['migrate', '--source', 'a', '--destination', 'b', '--archive'])).toThrow(/requires --format/);
+    expect(() => parseCliArguments(['migrate', '--source', 'a'])).toThrow(/requires both --source and --destination/);
+    expect(parseCliArguments(['migrate', '--interactive', '--archive'])).toMatchObject({
+      command: 'migrate', interactive: true, archive: true,
+    });
     expect(() => parseCliArguments(['doctor', '--source', 'a'])).toThrow(/both --source and --destination/);
     expect(() => parseCliArguments(['migrate', '--source', 'a', '--destination', 'https://example.com', '--format', 'html'])).toThrow(/remote HTTP/);
     expect(cliHelp('migrate')).toContain('--scope');

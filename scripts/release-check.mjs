@@ -106,6 +106,7 @@ if (JSON.stringify(readmeHeadings) !== JSON.stringify(expectedReadmeHeadings)) {
 }
 for (const [needle, reason] of [
   ['ywtc init --interactive', 'interactive initialization is not documented'],
+  ['ywtc migrate --interactive', 'interactive migration is not documented'],
   ['Обычный `ywtc init`', 'non-interactive initialization is not documented'],
   ['не права конкретных страниц', 'connection-only verification boundary is not documented'],
 ]) {

@@ -2,20 +2,23 @@ import * as prompts from '@clack/prompts';
 
 export class WizardCancelledError extends Error {
   constructor() {
-    super('Interactive initialization cancelled');
+    super('Interactive wizard cancelled');
     this.name = 'WizardCancelledError';
   }
 }
+
 interface PromptOption<T extends string> {
   value: T;
   label: string;
   hint?: string;
   disabled?: boolean;
 }
+
 interface BasePromptOptions {
   id: string;
   message: string;
 }
+
 export interface TextPromptOptions extends BasePromptOptions {
   initialValue?: string;
   placeholder?: string;
@@ -27,7 +30,7 @@ export interface SelectPromptOptions<T extends string> extends BasePromptOptions
   initialValue?: T;
 }
 
-export interface InitPrompter {
+export interface WizardPrompter {
   intro(message: string): void;
   outro(message: string): void;
   cancel(message: string): void;
@@ -46,7 +49,7 @@ function valueOrCancel<T>(value: T | symbol): T {
   return value as T;
 }
 
-export class ClackInitPrompter implements InitPrompter {
+export class ClackPrompter implements WizardPrompter {
   intro(message: string): void { prompts.intro(message); }
   outro(message: string): void { prompts.outro(message); }
   cancel(message: string): void { prompts.cancel(message); }
