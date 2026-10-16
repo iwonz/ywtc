@@ -11,36 +11,19 @@ import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {HttpRequestError, RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
 import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
-
-interface ConfluenceList<T> {
-  results: T[];
-  start?: number;
-  limit?: number;
-  size?: number;
-  _links?: {next?: string};
-}
-
-function firstResult<T>(payload: T | ConfluenceList<T>): T {
-  if (payload && typeof payload === 'object' && 'results' in payload) {
-    const first = (payload as ConfluenceList<T>).results[0];
-    if (!first) throw new Error('Confluence returned an empty result');
-    return first;
-  }
-  return payload as T;
-}
-
-interface DataCenterCommentPayload {
-  id: string;
-  type?: string;
-  status?: string;
-  title?: string;
-  ancestors?: Array<{id: string; type?: string}>;
-  version?: {number: number; when?: string; by?: Record<string, unknown>};
-  history?: {createdDate?: string; createdBy?: Record<string, unknown>};
-  body?: {storage?: {value: string; representation: string}};
-  extensions?: {location?: string; resolutionStatus?: string; inlineProperties?: {originalSelection?: string}; parentCommentId?: string};
-  _links?: {webui?: string; self?: string};
-}
+import {
+  confluenceAttachmentSchema,
+  confluenceUserSchema,
+  dataCenterCommentSchema,
+  type DataCenterCommentPayload,
+  dataCenterPageSchema,
+  dataCenterSystemInfoSchema,
+  normalizeConfluenceAttachment,
+  normalizeDataCenterPage,
+  parseConfluenceAttachmentResult,
+  parseConfluenceList,
+  parseConfluenceResponse,
+} from './confluence-response.js';
 
 function normalizeComment(comment: DataCenterCommentPayload): ConfluenceComment {
   const author = comment.history?.createdBy ?? comment.version?.by ?? {};
@@ -64,8 +47,14 @@ function normalizeComment(comment: DataCenterCommentPayload): ConfluenceComment 
       ...(typeof author.email === 'string' ? {email: author.email} : {}),
     },
     ...(comment.version ? {version: {number: comment.version.number}} : {}),
-    ...(comment.body ? {body: comment.body} : {}),
-    ...(comment._links ? {_links: comment._links} : {}),
+    ...(comment.body?.storage ? {body: {storage: {
+      value: comment.body.storage.value,
+      representation: comment.body.storage.representation,
+    }}} : {}),
+    ...(comment._links ? {_links: {
+      ...(comment._links.webui ? {webui: comment._links.webui} : {}),
+      ...(comment._links.self ? {self: comment._links.self} : {}),
+    }} : {}),
   };
 }
 
@@ -110,30 +99,34 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
 
   async getCurrentUser(): Promise<Record<string, unknown>> {
     return this.readLimit(async () => {
-      const response = await this.http.request<Record<string, unknown>>({
+      const response = await this.http.request<unknown>({
         method: 'GET',
         url: '/rest/api/user/current',
       });
-      return response.data;
+      return parseConfluenceResponse(confluenceUserSchema, response.data, 'reading the current Data Center user');
     });
   }
 
   async preflight(): Promise<ConfluencePlatformInfo> {
     return this.readLimit(async () => {
-      let systemInfo: Record<string, unknown>;
-      try {
-        const response = await this.http.request<Record<string, unknown>>({
-          method: 'GET',
-          url: '/rest/api/settings/systemInfo',
-        });
-        systemInfo = response.data;
-      } catch (error) {
-        if (!(error instanceof HttpRequestError) || ![403, 404].includes(error.status ?? 0)) throw error;
-        await this.http.request<ConfluenceList<ConfluencePage>>({
+      const probeContent = async (): Promise<void> => {
+        const response = await this.http.request<unknown>({
           method: 'GET',
           url: '/rest/api/content',
           params: {type: 'page', status: 'current', limit: 1, expand: 'space,version,body.storage'},
         });
+        parseConfluenceList(dataCenterPageSchema, response.data, 'checking the Data Center content API');
+      };
+      let systemInfo: ReturnType<typeof dataCenterSystemInfoSchema.parse>;
+      try {
+        const response = await this.http.request<unknown>({
+          method: 'GET',
+          url: '/rest/api/settings/systemInfo',
+        });
+        systemInfo = parseConfluenceResponse(dataCenterSystemInfoSchema, response.data, 'checking Data Center platform information');
+      } catch (error) {
+        if (!(error instanceof HttpRequestError) || ![403, 404].includes(error.status ?? 0)) throw error;
+        await probeContent();
         return {deployment: 'data-center', product: 'Confluence Data Center', api: '/rest/api'};
       }
       const version = typeof systemInfo.version === 'string'
@@ -146,6 +139,8 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         if (Number.isFinite(major) && (major < 7 || (major === 7 && minor < 9))) {
           throw new Error(`Unsupported Confluence Data Center ${version}: ywtc requires 7.9+ with Personal Access Tokens.`);
         }
+      } else {
+        await probeContent();
       }
       return {deployment: 'data-center', product: 'Confluence Data Center', ...(version ? {version} : {}), api: '/rest/api'};
     });
@@ -153,23 +148,24 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
 
   async getPage(id: string): Promise<ConfluencePage> {
     return this.readLimit(async () => {
-      const response = await this.http.request<ConfluencePage>({
+      const response = await this.http.request<unknown>({
         method: 'GET',
         url: `/rest/api/content/${encodeURIComponent(id)}`,
         params: {expand: 'space,version,ancestors,body.storage,body.view,operations'},
       });
-      return response.data;
+      return normalizeDataCenterPage(parseConfluenceResponse(dataCenterPageSchema, response.data, `reading Data Center page ${id}`));
     });
   }
 
   async findPageByTitle(spaceKey: string, title: string): Promise<ConfluencePage | undefined> {
     return this.readLimit(async () => {
-      const response = await this.http.request<ConfluenceList<ConfluencePage>>({
+      const response = await this.http.request<unknown>({
         method: 'GET',
         url: '/rest/api/content',
         params: {type: 'page', status: 'current', spaceKey, title, expand: 'space,version,ancestors', limit: 2},
       });
-      return response.data.results[0];
+      const page = parseConfluenceList(dataCenterPageSchema, response.data, `finding Data Center page ${spaceKey}/${title}`).results[0];
+      return page ? normalizeDataCenterPage(page) : undefined;
     });
   }
 
@@ -178,15 +174,16 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const limit = 100;
       let start = 0;
       for (;;) {
-        const response = await this.http.request<ConfluenceList<ConfluencePage>>({
+        const response = await this.http.request<unknown>({
           method: 'GET',
           url: `/rest/api/content/${encodeURIComponent(parentId)}/child/page`,
           params: {start, limit, expand: 'space,version,ancestors'},
         });
-        const match = response.data.results.find((page) => page.title === title);
-        if (match) return match;
-        const count = response.data.results.length;
-        if (count === 0 || (!response.data._links?.next && count < limit)) return undefined;
+        const page = parseConfluenceList(dataCenterPageSchema, response.data, `listing children of Data Center page ${parentId}`);
+        const match = page.results.find((candidate) => candidate.title === title);
+        if (match) return normalizeDataCenterPage(match);
+        const count = page.results.length;
+        if (count === 0 || (!page._links?.next && count < limit)) return undefined;
         start += count;
       }
     });
@@ -225,7 +222,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
 
   async createPage(input: {spaceKey: string; parentId: string; title: string; storage: string}): Promise<ConfluencePage> {
     return this.writeLimit(async () => {
-      const response = await this.http.request<ConfluencePage>({
+      const response = await this.http.request<unknown>({
         method: 'POST',
         url: '/rest/api/content',
         headers: {'Content-Type': 'application/json'},
@@ -237,7 +234,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
           body: {storage: {value: input.storage, representation: 'storage'}},
         },
       });
-      return response.data;
+      return normalizeDataCenterPage(parseConfluenceResponse(dataCenterPageSchema, response.data, `creating Data Center page "${input.title}"`));
     });
   }
 
@@ -246,7 +243,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const current = input.version ? undefined : await this.getPage(input.pageId);
       const version = input.version ?? current?.version?.number;
       if (!version) throw new Error(`Confluence page ${input.pageId} has no version information`);
-      const response = await this.http.request<ConfluencePage>({
+      const response = await this.http.request<unknown>({
         method: 'PUT',
         url: `/rest/api/content/${encodeURIComponent(input.pageId)}`,
         headers: {'Content-Type': 'application/json'},
@@ -263,18 +260,19 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
           body: {storage: {value: input.storage, representation: 'storage'}},
         },
       });
-      return response.data;
+      return normalizeDataCenterPage(parseConfluenceResponse(dataCenterPageSchema, response.data, `updating Data Center page ${input.pageId}`));
     });
   }
 
   async findAttachment(pageId: string, filename: string): Promise<ConfluenceAttachment | undefined> {
     return this.readLimit(async () => {
-      const response = await this.http.request<ConfluenceList<ConfluenceAttachment>>({
+      const response = await this.http.request<unknown>({
         method: 'GET',
         url: `/rest/api/content/${encodeURIComponent(pageId)}/child/attachment`,
         params: {filename, limit: 2, expand: 'extensions,metadata'},
       });
-      return response.data.results[0];
+      const attachment = parseConfluenceList(confluenceAttachmentSchema, response.data, `finding attachment on Data Center page ${pageId}`).results[0];
+      return attachment ? normalizeConfluenceAttachment(attachment) : undefined;
     });
   }
 
@@ -299,7 +297,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const url = input.existingAttachmentId
         ? `/rest/api/content/${pageId}/child/attachment/${encodeURIComponent(input.existingAttachmentId)}/data`
         : `/rest/api/content/${pageId}/child/attachment`;
-      const response = await this.http.request<ConfluenceAttachment | ConfluenceList<ConfluenceAttachment>>({
+      const response = await this.http.request<unknown>({
         method: 'POST',
         url,
         params: {minorEdit: true},
@@ -311,7 +309,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         maxBodyLength: Number.POSITIVE_INFINITY,
         maxContentLength: Number.POSITIVE_INFINITY,
       });
-      return firstResult(response.data);
+      return normalizeConfluenceAttachment(parseConfluenceAttachmentResult(response.data, `uploading attachment to Data Center page ${input.pageId}`));
     });
   }
 
@@ -320,14 +318,15 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const results: ConfluenceAttachment[] = [];
       let start = 0;
       while (true) {
-        const response = await this.http.request<ConfluenceList<ConfluenceAttachment>>({
+        const response = await this.http.request<unknown>({
           method: 'GET',
           url: `/rest/api/content/${encodeURIComponent(pageId)}/child/attachment`,
           params: {start, limit: 100, expand: 'extensions,metadata'},
         });
-        results.push(...response.data.results);
-        const size = response.data.size ?? response.data.results.length;
-        if (!response.data._links?.next && size < 100) break;
+        const page = parseConfluenceList(confluenceAttachmentSchema, response.data, `listing attachments on Data Center page ${pageId}`);
+        results.push(...page.results.map(normalizeConfluenceAttachment));
+        const size = page.size ?? page.results.length;
+        if (!page._links?.next && size < 100) break;
         if (size === 0) break;
         start += size;
       }
@@ -340,14 +339,15 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const results: ConfluencePage[] = [];
       let start = 0;
       while (true) {
-        const response = await this.http.request<ConfluenceList<ConfluencePage>>({
+        const response = await this.http.request<unknown>({
           method: 'GET',
           url: `/rest/api/content/${encodeURIComponent(pageId)}/descendant/page`,
           params: {start, limit: 100, expand: 'space,version,ancestors,body.storage,body.view'},
         });
-        results.push(...response.data.results);
-        const size = response.data.size ?? response.data.results.length;
-        if (!response.data._links?.next || size === 0) break;
+        const page = parseConfluenceList(dataCenterPageSchema, response.data, `listing descendants of Data Center page ${pageId}`);
+        results.push(...page.results.map(normalizeDataCenterPage));
+        const size = page.size ?? page.results.length;
+        if (!page._links?.next || size === 0) break;
         start += size;
       }
       return results;
@@ -359,14 +359,15 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const results: ConfluenceComment[] = [];
       let start = 0;
       while (true) {
-        const response = await this.http.request<ConfluenceList<DataCenterCommentPayload>>({
+        const response = await this.http.request<unknown>({
           method: 'GET',
           url: `/rest/api/content/${encodeURIComponent(pageId)}/child/comment`,
           params: {start, limit: 100, depth: 'all', expand: 'body.storage,version,history,ancestors,extensions'},
         });
-        results.push(...response.data.results.map(normalizeComment));
-        const size = response.data.size ?? response.data.results.length;
-        if (!response.data._links?.next || size === 0) break;
+        const page = parseConfluenceList(dataCenterCommentSchema, response.data, `listing comments on Data Center page ${pageId}`);
+        results.push(...page.results.map(normalizeComment));
+        const size = page.size ?? page.results.length;
+        if (!page._links?.next || size === 0) break;
         start += size;
       }
       return results;
@@ -375,17 +376,17 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
 
   async getComment(commentId: string): Promise<ConfluenceComment> {
     return this.readLimit(async () => {
-      const response = await this.http.request<DataCenterCommentPayload>({
+      const response = await this.http.request<unknown>({
         method: 'GET', url: `/rest/api/content/${encodeURIComponent(commentId)}`,
         params: {expand: 'body.storage,version,history,ancestors,extensions'},
       });
-      return normalizeComment(response.data);
+      return normalizeComment(parseConfluenceResponse(dataCenterCommentSchema, response.data, `reading Data Center comment ${commentId}`));
     });
   }
 
   async createComment(input: {pageId: string; storage: string}): Promise<ConfluenceComment> {
     return this.writeLimit(async () => {
-      const response = await this.http.request<DataCenterCommentPayload>({
+      const response = await this.http.request<unknown>({
         method: 'POST', url: '/rest/api/content', headers: {'Content-Type': 'application/json'},
         data: {
           type: 'comment',
@@ -394,7 +395,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         },
         retryMode: 'never',
       });
-      return normalizeComment(response.data);
+      return normalizeComment(parseConfluenceResponse(dataCenterCommentSchema, response.data, `creating a comment on Data Center page ${input.pageId}`));
     });
   }
 
@@ -403,7 +404,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const current = input.version ? undefined : await this.getComment(input.commentId);
       const version = input.version ?? current?.version?.number;
       if (!version) throw new Error(`Confluence comment ${input.commentId} has no version information`);
-      const response = await this.http.request<DataCenterCommentPayload>({
+      const response = await this.http.request<unknown>({
         method: 'PUT', url: `/rest/api/content/${encodeURIComponent(input.commentId)}`,
         headers: {'Content-Type': 'application/json'},
         data: {
@@ -414,7 +415,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         },
         retryMode: 'never',
       });
-      return normalizeComment(response.data);
+      return normalizeComment(parseConfluenceResponse(dataCenterCommentSchema, response.data, `updating Data Center comment ${input.commentId}`));
     });
   }
 

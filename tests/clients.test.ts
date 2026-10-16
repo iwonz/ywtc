@@ -5,6 +5,7 @@ import path from 'node:path';
 import nock from 'nock';
 import {afterEach, describe, expect, it} from 'vitest';
 import {CloudConfluenceClient} from '../src/clients/confluence-cloud.js';
+import {ConfluenceResponseError} from '../src/clients/confluence-response.js';
 import {DataCenterConfluenceClient} from '../src/clients/confluence.js';
 import {YandexWikiClient} from '../src/clients/yandex-wiki.js';
 import type {ConfluenceConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
@@ -47,6 +48,15 @@ describe('provider clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
+  it.each(['7.9.0', '8.9.0', '9.5.2', '10.0.0', '11.0.0'])('accepts Data Center %s platform responses with additive fields', async (version) => {
+    const api = nock('https://conf.example.test')
+      .get('/confluence/rest/api/settings/systemInfo')
+      .reply(200, {version, buildNumber: 'future-build', futureCapability: {enabled: true}});
+    await expect(new DataCenterConfluenceClient(dc, 5_000, limits).preflight())
+      .resolves.toMatchObject({deployment: 'data-center', version});
+    expect(api.isDone()).toBe(true);
+  });
+
   it('authenticates and identifies Confluence Cloud without writes', async () => {
     const cloud: ConfluenceConnectionProfile = {
       name: 'cloud', type: 'confluence', deployment: 'cloud', authType: 'api-token', baseUrl: 'https://example.atlassian.net',
@@ -59,6 +69,35 @@ describe('provider clients', () => {
     const client = new CloudConfluenceClient(cloud, 5_000, limits);
     await expect(client.getCurrentUser()).resolves.toMatchObject({accountId: 'abc'});
     await expect(client.preflight()).resolves.toMatchObject({deployment: 'cloud'});
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('rejects a Confluence startup HTML page returned with HTTP 200', async () => {
+    const api = nock('https://conf.example.test')
+      .get('/confluence/rest/api/settings/systemInfo')
+      .reply(200, '<!doctype html><html><head><title>Confluence had problems starting up conf-token</title></head><body><h1>Error when checking AWS S3 attachment storage connectivity</h1></body></html>', {'Content-Type': 'text/html'});
+    const error = await new DataCenterConfluenceClient(dc, 5_000, limits).preflight().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(ConfluenceResponseError);
+    expect(error).toMatchObject({kind: 'service-unavailable'});
+    expect(String(error)).toContain('Confluence is unavailable or not fully started');
+    expect(String(error)).toContain('attachment storage connectivity');
+    expect(String(error)).not.toContain('<html');
+    expect(String(error)).not.toContain('conf-token');
+    expect(String(error)).not.toContain('Cannot read properties');
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('rejects incomplete pages and malformed lists before consumers access them', async () => {
+    const api = nock('https://conf.example.test')
+      .get('/confluence/rest/api/content/10')
+      .query({expand: 'space,version,ancestors,body.storage,body.view,operations'})
+      .reply(200, {id: '10', type: 'page', title: 'Missing space'})
+      .get('/confluence/rest/api/content/10/descendant/page')
+      .query({start: 0, limit: 100, expand: 'space,version,ancestors,body.storage,body.view'})
+      .reply(200, {items: []});
+    const client = new DataCenterConfluenceClient(dc, 5_000, limits);
+    await expect(client.getPage('10')).rejects.toThrow(/invalid response.*space/iu);
+    await expect(client.getDescendants('10')).rejects.toThrow(/invalid response.*results/iu);
     expect(api.isDone()).toBe(true);
   });
 

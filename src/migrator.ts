@@ -659,13 +659,15 @@ export class Migrator {
     assertTransferCapabilities(source, destination, options.scope, sourceStatus, commentsEnabled);
     const status = options.onStatus ?? (() => undefined);
     status('Checking source and destination capabilities');
-    const [sourcePlatform, destinationPlatform, root, container] = await Promise.all([
+    const [sourcePlatform, destinationPlatform] = await Promise.all([
       source.preflight(),
       destination?.preflight(),
+    ]);
+    status(`Connected to ${sourcePlatform.product}${destinationPlatform ? ` and ${destinationPlatform.product}` : ''}`);
+    const [root, container] = await Promise.all([
       source.resolvePage(options.source.value),
       options.destination.type === 'remote' && destination ? destination.resolveContainer(options.destination.value) : undefined,
     ]);
-    status(`Connected to ${sourcePlatform.product}${destinationPlatform ? ` and ${destinationPlatform.product}` : ''}`);
 
     const identity: TransferIdentity = {
       source: sourceIdentity(options.source, root),

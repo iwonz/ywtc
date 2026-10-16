@@ -8,6 +8,7 @@ import {
 } from '../src/connection-verifier.js';
 import type {AppConfig, ConfluenceConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
 import {HttpRequestError} from '../src/http.js';
+import {ConfluenceResponseError} from '../src/clients/confluence-response.js';
 
 const limits: NetworkLimits = {
   readConcurrency: 2, writeConcurrency: 1, downloadConcurrency: 1, uploadConcurrency: 1, requestsPerSecond: 20, burst: 20,
@@ -52,6 +53,22 @@ describe('connection verification', () => {
     expect(String(error)).not.toContain(yandex.token);
   });
 
+  it('reports Confluence startup HTML as a server failure before the user probe', async () => {
+    const platform = nock('https://conf.example.test')
+      .get('/confluence/rest/api/settings/systemInfo')
+      .reply(200, '<html><body><h1>Confluence had problems starting up</h1></body></html>', {'Content-Type': 'text/html'});
+    const user = nock('https://conf.example.test')
+      .get('/confluence/rest/api/user/current')
+      .reply(200, {username: 'operator'});
+    const error = await verifyConnection(config, confluence).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ConnectionVerificationError);
+    expect(error).toMatchObject({kind: 'server', profile: 'confluence'});
+    expect(String(error)).toContain('unavailable or not fully started');
+    expect(String(error)).not.toContain('<html');
+    expect(platform.isDone()).toBe(true);
+    expect(user.isDone()).toBe(false);
+  });
+
   it.each([
     [new HttpRequestError('forbidden', 403), 'forbidden'],
     [new HttpRequestError('missing', 404), 'not-found'],
@@ -60,6 +77,8 @@ describe('connection verification', () => {
     [new HttpRequestError('timeout', undefined, 'GET', '/', 'ETIMEDOUT'), 'timeout'],
     [new HttpRequestError('dns', undefined, 'GET', '/', 'ENOTFOUND'), 'dns'],
     [new HttpRequestError('tls', undefined, 'GET', '/', 'CERT_HAS_EXPIRED'), 'tls'],
+    [new ConfluenceResponseError('service-unavailable', 'preflight', 'not started'), 'server'],
+    [new ConfluenceResponseError('invalid-response', 'preflight', 'invalid'), 'unexpected'],
     [new Error('unknown'), 'unexpected'],
   ] as const)('classifies %s as %s', (error, expected) => {
     expect(classifyConnectionFailure(error)).toBe(expected);

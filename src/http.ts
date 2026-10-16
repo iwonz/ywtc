@@ -41,11 +41,24 @@ function isRetriable(error: AxiosError): boolean {
   return error.response.status === 429 || error.response.status >= 500;
 }
 
+function stripControlCharacters(value: string): string {
+  return [...value].map((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || code === 127 ? ' ' : character;
+  }).join('');
+}
+
+function textPayloadDetail(payload: string): string {
+  const html = /<!doctype\s+html|<html\b|<head\b|<body\b|<title\b|<h1\b/iu.test(payload);
+  if (!html) return stripControlCharacters(payload).replace(/\s+/g, ' ').trim().slice(0, 500);
+  return 'provider returned an HTML error page';
+}
+
 function safeErrorMessage(error: AxiosError): string {
   const status = error.response?.status;
   const payload = error.response?.data;
   let detail = '';
-  if (typeof payload === 'string') detail = payload.slice(0, 500);
+  if (typeof payload === 'string') detail = textPayloadDetail(payload);
   else if (payload && typeof payload === 'object') {
     const body = payload as Record<string, unknown>;
     detail = String(body.debug_message ?? body.message ?? body.error_code ?? '').slice(0, 500);
@@ -62,7 +75,21 @@ function safeErrorMessage(error: AxiosError): string {
             ? 'payload too large for the destination; check Confluence attachment limits'
             : status === 429
               ? 'rate limited after bounded retries; lower configured RPS/concurrency or retry later'
-              : undefined;
+              : (status ?? 0) >= 500
+                ? 'provider service unavailable after bounded retries; retry after the service recovers'
+                : ['ECONNABORTED', 'ETIMEDOUT'].includes(error.code ?? '')
+                  ? 'connection timed out; check provider health, URL, network/VPN, and timeout settings'
+                  : ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED'].includes(error.code ?? '')
+                    ? 'provider host could not be reached; check DNS, URL, proxy, VPN, and network access'
+                    : [
+                      'CERT_HAS_EXPIRED',
+                      'DEPTH_ZERO_SELF_SIGNED_CERT',
+                      'ERR_TLS_CERT_ALTNAME_INVALID',
+                      'SELF_SIGNED_CERT_IN_CHAIN',
+                      'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+                    ].includes(error.code ?? '')
+                      ? 'TLS verification failed; install the trusted CA through NODE_EXTRA_CA_CERTS'
+                      : undefined;
   return [`HTTP request failed`, status ? `status=${status}` : undefined, guidance, detail || error.message]
     .filter(Boolean)
     .join(': ');

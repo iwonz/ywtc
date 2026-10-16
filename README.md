@@ -70,7 +70,7 @@ brew install ywtc
 | Confluence Data Center | 7.9+ без искусственной верхней границы | Bearer PAT |
 | Confluence Cloud | REST v2 для страниц, REST v1 для attachments | Email + API token |
 
-Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерживаются. Перед записью `doctor`/`migrate` проверяет необходимые API и capabilities; контрактные тесты не заменяют live-сертификацию каждой patch-версии.
+Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерживаются. Перед чтением страниц и записью `doctor`/`migrate` проверяет готовность REST API: startup/maintenance HTML и неполный JSON останавливают операцию без создания state или destination-объектов. После восстановления Confluence повторите команду; если сервер исправен, проверьте `baseUrl` и `deployment`. Контрактные тесты не заменяют live-сертификацию каждой patch-версии.
 
 ## Конфигурация
 

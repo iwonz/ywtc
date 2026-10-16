@@ -9,6 +9,7 @@ import {DestinationTitleConflictError} from '../src/domain.js';
 import type {DestinationAdapter, DestinationContainer, DestinationPage, SourceAdapter, SourcePage, SourceResource, UploadedResource} from '../src/domain.js';
 import type {Logger} from '../src/logger.js';
 import {HttpRequestError} from '../src/http.js';
+import {ConfluenceResponseError} from '../src/clients/confluence-response.js';
 import type {RemoteLocator} from '../src/locators.js';
 import {MigrationRunError, Migrator} from '../src/migrator.js';
 import type {TransferReportData} from '../src/report.js';
@@ -65,6 +66,9 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let createTitleConflicts = 0;
   let ambiguousCreate = false;
   let downloads = 0;
+  let sourceResolutions = 0;
+  let destinationResolutions = 0;
+  let destinationPreflightError: Error | undefined;
   let version = 0;
   const verificationReads = new Map<string, number>();
   let current: DestinationPage | undefined;
@@ -79,7 +83,10 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   const source = {
     profile: sourceProfile, kind: 'yandex-wiki', capabilities,
     preflight: async () => ({product: 'Yandex Wiki', warnings: []}),
-    resolvePage: async () => fixtureRoot,
+    resolvePage: async () => {
+      sourceResolutions += 1;
+      return fixtureRoot;
+    },
     getPage: async (id: string) => id === fixtureRoot.id ? fixtureRoot : descendants.find((page) => page.id === id) ?? fixtureRoot,
     getDescendants: async () => descendants,
     resolveReference: async () => undefined,
@@ -97,8 +104,14 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   } as unknown as SourceAdapter;
   const destination = {
     profile: destinationProfile, kind: 'confluence', capabilities,
-    preflight: async () => ({product: 'Confluence', warnings: []}),
-    resolveContainer: async () => container,
+    preflight: async () => {
+      if (destinationPreflightError) throw destinationPreflightError;
+      return {product: 'Confluence', warnings: []};
+    },
+    resolveContainer: async () => {
+      destinationResolutions += 1;
+      return container;
+    },
     findChild: async () => undefined,
     findTitleConflict: async (_parent: DestinationContainer | DestinationPage, title: string) => globalTitleConflict && title === root.title
       ? page(title, '<p>Unrelated page</p>', 'unrelated', 'other-parent')
@@ -180,6 +193,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setFailAttachmentListing: (value: boolean) => { failAttachmentListing = value; },
     setCreateTitleConflicts: (value: number) => { createTitleConflicts = value; },
     setAmbiguousCreate: () => { ambiguousCreate = true; },
+    setDestinationPreflightError: (error: Error) => { destinationPreflightError = error; },
     setLegacyPlaceholder: () => {
       current = page(current!.title, legacyTransferPlaceholder('confluence', fixtureRoot), current!.id);
       pages.set(current.id, current);
@@ -191,7 +205,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setCurrentMissing: () => { missingIds.add(current!.id); },
     setAllCurrentMissing: () => { for (const id of pages.keys()) missingIds.add(id); },
     snapshot: () => ({
-      created, updated, reparented, downloads, current, pages: [...pages.values()],
+      created, updated, reparented, downloads, sourceResolutions, destinationResolutions, current, pages: [...pages.values()],
       uploaded: [...uploaded.values()].reduce((total, items) => total + items.size, 0),
     }),
   };
@@ -217,6 +231,22 @@ async function setup() {
 }
 
 describe('source-derived remote page safety', () => {
+  it('stops at the preflight barrier before locators, state, reports, or writes', async () => {
+    const {config, options} = await setup();
+    const instance = fixture();
+    instance.setDestinationPreflightError(new ConfluenceResponseError(
+      'service-unavailable',
+      'checking Data Center platform information',
+      'Confluence is unavailable or not fully started; retry after attachment storage connectivity is restored.',
+    ));
+    const factory = (profile: ConnectionProfile) => (profile.type === 'yandex-wiki' ? instance.source : instance.destination) as SourceAdapter & DestinationAdapter;
+
+    await expect(new Migrator(config, logger, factory).run(options)).rejects.toThrow(/unavailable or not fully started/);
+    expect(instance.snapshot()).toMatchObject({sourceResolutions: 0, destinationResolutions: 0, created: 0, updated: 0});
+    await expect(readdir(options.runtimeDirectory)).rejects.toThrow();
+    await expect(readdir(options.reportsDirectory)).rejects.toThrow();
+  });
+
   it('keeps full content with a source fallback when upload fails, then resumes without duplication', async () => {
     const {directory, config, options} = await setup();
     const adapters = fixture();

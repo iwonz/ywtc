@@ -11,52 +11,22 @@ import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
 import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
-
-interface CloudList<T> {
-  results: T[];
-  _links?: {next?: string};
-}
-
-interface CloudPage {
-  id: string;
-  status?: string;
-  title: string;
-  spaceId: string;
-  parentId?: string;
-  version?: {number: number};
-  body?: {
-    storage?: {value: string; representation: string};
-  };
-  operations?: Array<{operation: string; targetType: string}>;
-  _links?: {webui?: string; base?: string; self?: string};
-}
-
-interface CloudSpace {
-  id: string;
-  key: string;
-  name?: string;
-}
-
-interface CloudComment {
-  id: string;
-  status?: string;
-  title?: string;
-  authorId?: string;
-  parentCommentId?: string;
-  createdAt?: string;
-  resolutionStatus?: string;
-  inlineContext?: string;
-  version?: {number: number};
-  body?: {storage?: {value: string; representation: string}; value?: string; representation?: string};
-  _links?: {webui?: string; self?: string};
-}
-
-interface CloudUser {
-  accountId: string;
-  displayName?: string;
-  publicName?: string;
-  email?: string;
-}
+import {
+  cloudCommentSchema,
+  type CloudCommentPayload,
+  cloudPageSchema,
+  type CloudPagePayload,
+  cloudSpaceSchema,
+  type CloudSpacePayload,
+  cloudUserSchema,
+  type CloudUserPayload,
+  confluenceAttachmentSchema,
+  confluenceUserSchema,
+  normalizeConfluenceAttachment,
+  parseConfluenceAttachmentResult,
+  parseConfluenceList,
+  parseConfluenceResponse,
+} from './confluence-response.js';
 
 function cloudRoot(baseUrl: string): string {
   const url = new URL(baseUrl);
@@ -66,24 +36,15 @@ function cloudRoot(baseUrl: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
-function firstAttachment(payload: ConfluenceAttachment | CloudList<ConfluenceAttachment>): ConfluenceAttachment {
-  if (payload && typeof payload === 'object' && 'results' in payload) {
-    const result = payload.results[0];
-    if (!result) throw new Error('Confluence Cloud returned an empty attachment result');
-    return result;
-  }
-  return payload as ConfluenceAttachment;
-}
-
 export class CloudConfluenceClient implements ConfluenceApi {
   private readonly baseUrl: string;
   private readonly http: RetryingHttpClient;
   private readonly readLimit: <T>(task: () => Promise<T>) => Promise<T>;
   private readonly writeLimit: <T>(task: () => Promise<T>) => Promise<T>;
   private readonly uploadLimit: <T>(task: () => Promise<T>) => Promise<T>;
-  private readonly spacesByKey = new Map<string, CloudSpace>();
-  private readonly spacesById = new Map<string, CloudSpace>();
-  private readonly usersById = new Map<string, CloudUser>();
+  private readonly spacesByKey = new Map<string, CloudSpacePayload>();
+  private readonly spacesById = new Map<string, CloudSpacePayload>();
+  private readonly usersById = new Map<string, CloudUserPayload>();
 
   constructor(
     config: ConfluenceConnectionProfile,
@@ -112,48 +73,48 @@ export class CloudConfluenceClient implements ConfluenceApi {
 
   async getCurrentUser(): Promise<Record<string, unknown>> {
     return this.readLimit(async () => {
-      const response = await this.http.request<Record<string, unknown>>({method: 'GET', url: '/rest/api/user/current'});
-      return response.data;
+      const response = await this.http.request<unknown>({method: 'GET', url: '/rest/api/user/current'});
+      return parseConfluenceResponse(confluenceUserSchema, response.data, 'reading the current Confluence Cloud user');
     });
   }
 
   async preflight(): Promise<ConfluencePlatformInfo> {
     await this.readLimit(async () => {
-      await this.http.request<CloudList<CloudSpace>>({method: 'GET', url: '/api/v2/spaces', params: {limit: 1}});
+      const response = await this.http.request<unknown>({method: 'GET', url: '/api/v2/spaces', params: {limit: 1}});
+      parseConfluenceList(cloudSpaceSchema, response.data, 'checking the Confluence Cloud spaces API');
     });
     return {deployment: 'cloud', product: 'Confluence Cloud', api: 'REST v2 pages/spaces + REST v1 attachments'};
   }
 
-  private rememberSpace(space: CloudSpace): CloudSpace {
+  private rememberSpace(space: CloudSpacePayload): CloudSpacePayload {
     this.spacesById.set(space.id, space);
     this.spacesByKey.set(space.key, space);
     return space;
   }
 
-  private async getSpaceById(id: string): Promise<CloudSpace> {
+  private async getSpaceById(id: string): Promise<CloudSpacePayload> {
     const cached = this.spacesById.get(id);
     if (cached) return cached;
     return this.readLimit(async () => {
-      const response = await this.http.request<CloudSpace>({method: 'GET', url: `/api/v2/spaces/${encodeURIComponent(id)}`});
-      return this.rememberSpace(response.data);
+      const response = await this.http.request<unknown>({method: 'GET', url: `/api/v2/spaces/${encodeURIComponent(id)}`});
+      return this.rememberSpace(parseConfluenceResponse(cloudSpaceSchema, response.data, `reading Confluence Cloud space ${id}`));
     });
   }
 
-  private async getSpaceByKey(key: string): Promise<CloudSpace> {
+  private async getSpaceByKey(key: string): Promise<CloudSpacePayload> {
     const cached = this.spacesByKey.get(key);
     if (cached) return cached;
     return this.readLimit(async () => {
-      const response = await this.http.request<CloudList<CloudSpace>>({
+      const response = await this.http.request<unknown>({
         method: 'GET', url: '/api/v2/spaces', params: {keys: key, limit: 2},
       });
-      const space = response.data.results[0];
+      const space = parseConfluenceList(cloudSpaceSchema, response.data, `finding Confluence Cloud space ${key}`).results[0];
       if (!space) throw new Error(`Confluence Cloud space not found: ${key}`);
       return this.rememberSpace(space);
     });
   }
 
-  private async normalizePage(page: CloudPage): Promise<ConfluencePage> {
-    if (!page.id || !page.title || !page.spaceId) throw new Error('Confluence Cloud page response is missing id, title, or spaceId');
+  private async normalizePage(page: CloudPagePayload): Promise<ConfluencePage> {
     const space = await this.getSpaceById(page.spaceId);
     return {
       id: page.id,
@@ -163,19 +124,26 @@ export class CloudConfluenceClient implements ConfluenceApi {
       space: {id: space.id, key: space.key, ...(space.name ? {name: space.name} : {})},
       ...(page.parentId ? {ancestors: [{id: page.parentId}]} : {}),
       ...(page.version ? {version: page.version} : {}),
-      ...(page.body ? {body: page.body} : {}),
+      ...(page.body?.storage ? {body: {storage: {
+        value: page.body.storage.value,
+        representation: page.body.storage.representation,
+      }}} : {}),
       ...(page.operations ? {operations: page.operations} : {}),
-      ...(page._links ? {_links: page._links} : {}),
+      ...(page._links ? {_links: {
+        ...(page._links.webui ? {webui: page._links.webui} : {}),
+        ...(page._links.base ? {base: page._links.base} : {}),
+        ...(page._links.self ? {self: page._links.self} : {}),
+      }} : {}),
     };
   }
 
   async getPage(id: string): Promise<ConfluencePage> {
     const page = await this.readLimit(async () => {
-      const response = await this.http.request<CloudPage>({
+      const response = await this.http.request<unknown>({
         method: 'GET', url: `/api/v2/pages/${encodeURIComponent(id)}`,
         params: {'body-format': 'storage', 'include-operations': true},
       });
-      return response.data;
+      return parseConfluenceResponse(cloudPageSchema, response.data, `reading Confluence Cloud page ${id}`);
     });
     return this.normalizePage(page);
   }
@@ -183,10 +151,10 @@ export class CloudConfluenceClient implements ConfluenceApi {
   async findPageByTitle(spaceKey: string, title: string): Promise<ConfluencePage | undefined> {
     const space = await this.getSpaceByKey(spaceKey);
     const page = await this.readLimit(async () => {
-      const response = await this.http.request<CloudList<CloudPage>>({
+      const response = await this.http.request<unknown>({
         method: 'GET', url: '/api/v2/pages', params: {'space-id': space.id, title, status: 'current', limit: 2},
       });
-      return response.data.results[0];
+      return parseConfluenceList(cloudPageSchema, response.data, `finding Confluence Cloud page ${spaceKey}/${title}`).results[0];
     });
     return page ? this.normalizePage(page) : undefined;
   }
@@ -211,21 +179,21 @@ export class CloudConfluenceClient implements ConfluenceApi {
 
   async createPage(input: {spaceKey: string; parentId: string; title: string; storage: string}): Promise<ConfluencePage> {
     const space = await this.getSpaceByKey(input.spaceKey);
-    const response = await this.writeLimit(() => this.http.request<CloudPage>({
+    const response = await this.writeLimit(() => this.http.request<unknown>({
       method: 'POST', url: '/api/v2/pages', headers: {'Content-Type': 'application/json'},
       data: {
         spaceId: space.id, status: 'current', title: input.title, parentId: input.parentId,
         body: {representation: 'storage', value: input.storage},
       },
     }));
-    return this.normalizePage(response.data);
+    return this.normalizePage(parseConfluenceResponse(cloudPageSchema, response.data, `creating Confluence Cloud page "${input.title}"`));
   }
 
   async updatePage(input: {pageId: string; title: string; storage: string; parentId?: string; version?: number}): Promise<ConfluencePage> {
     const current = input.version ? undefined : await this.getPage(input.pageId);
     const versionNumber = input.version ?? current?.version?.number;
     if (!versionNumber) throw new Error(`Confluence Cloud page ${input.pageId} has no version information`);
-    const response = await this.writeLimit(() => this.http.request<CloudPage>({
+    const response = await this.writeLimit(() => this.http.request<unknown>({
       method: 'PUT', url: `/api/v2/pages/${encodeURIComponent(input.pageId)}`, headers: {'Content-Type': 'application/json'},
       data: {
         id: input.pageId, status: 'current', title: input.title,
@@ -234,15 +202,16 @@ export class CloudConfluenceClient implements ConfluenceApi {
         version: {number: versionNumber + 1, message: 'Transferred by ywtc'},
       },
     }));
-    return this.normalizePage(response.data);
+    return this.normalizePage(parseConfluenceResponse(cloudPageSchema, response.data, `updating Confluence Cloud page ${input.pageId}`));
   }
 
   async findAttachment(pageId: string, filename: string): Promise<ConfluenceAttachment | undefined> {
-    const response = await this.readLimit(() => this.http.request<CloudList<ConfluenceAttachment>>({
+    const response = await this.readLimit(() => this.http.request<unknown>({
       method: 'GET', url: `/rest/api/content/${encodeURIComponent(pageId)}/child/attachment`,
       params: {filename, limit: 2, expand: 'extensions,metadata'},
     }));
-    return response.data.results[0];
+    const attachment = parseConfluenceList(confluenceAttachmentSchema, response.data, `finding attachment on Confluence Cloud page ${pageId}`).results[0];
+    return attachment ? normalizeConfluenceAttachment(attachment) : undefined;
   }
 
   async uploadAttachment(input: {
@@ -260,11 +229,11 @@ export class CloudConfluenceClient implements ConfluenceApi {
       const url = input.existingAttachmentId
         ? `/rest/api/content/${pageId}/child/attachment/${encodeURIComponent(input.existingAttachmentId)}/data`
         : `/rest/api/content/${pageId}/child/attachment`;
-      const response = await this.http.request<ConfluenceAttachment | CloudList<ConfluenceAttachment>>({
+      const response = await this.http.request<unknown>({
         method: 'POST', url, headers: {...form.getHeaders(), 'X-Atlassian-Token': 'nocheck'}, data: form,
         maxBodyLength: Number.POSITIVE_INFINITY, maxContentLength: Number.POSITIVE_INFINITY,
       });
-      return firstAttachment(response.data);
+      return normalizeConfluenceAttachment(parseConfluenceAttachmentResult(response.data, `uploading attachment to Confluence Cloud page ${input.pageId}`));
     });
   }
 
@@ -272,13 +241,14 @@ export class CloudConfluenceClient implements ConfluenceApi {
     const results: ConfluenceAttachment[] = [];
     let start = 0;
     while (true) {
-      const response = await this.readLimit(() => this.http.request<CloudList<ConfluenceAttachment> & {size?: number}>({
+      const response = await this.readLimit(() => this.http.request<unknown>({
         method: 'GET', url: `/rest/api/content/${encodeURIComponent(pageId)}/child/attachment`,
         params: {start, limit: 100, expand: 'extensions,metadata'},
       }));
-      results.push(...response.data.results);
-      const size = response.data.size ?? response.data.results.length;
-      if (!response.data._links?.next || size === 0) break;
+      const page = parseConfluenceList(confluenceAttachmentSchema, response.data, `listing attachments on Confluence Cloud page ${pageId}`);
+      results.push(...page.results.map(normalizeConfluenceAttachment));
+      const size = page.size ?? page.results.length;
+      if (!page._links?.next || size === 0) break;
       start += size;
     }
     return results;
@@ -293,20 +263,21 @@ export class CloudConfluenceClient implements ConfluenceApi {
         if (seenCursors.has(cursor)) throw new Error(`Confluence Cloud descendants cursor repeated for page ${pageId}: ${cursor}`);
         seenCursors.add(cursor);
       }
-      const response = await this.readLimit(() => this.http.request<CloudList<CloudPage>>({
+      const response = await this.readLimit(() => this.http.request<unknown>({
         method: 'GET',
         url: `/api/v2/pages/${encodeURIComponent(pageId)}/descendants`,
         params: {limit: 100, depth: 'all', ...(cursor ? {cursor} : {})},
       }));
-      for (const page of response.data.results) results.push(await this.normalizePage(page));
-      const next = response.data._links?.next;
+      const page = parseConfluenceList(cloudPageSchema, response.data, `listing descendants of Confluence Cloud page ${pageId}`);
+      for (const item of page.results) results.push(await this.normalizePage(item));
+      const next = page._links?.next;
       cursor = next ? new URL(next, `${this.baseUrl}/`).searchParams.get('cursor') ?? undefined : undefined;
     } while (cursor);
     return results;
   }
 
-  private async pagedComments(url: string): Promise<CloudComment[]> {
-    const results: CloudComment[] = [];
+  private async pagedComments(url: string): Promise<CloudCommentPayload[]> {
+    const results: CloudCommentPayload[] = [];
     let cursor: string | undefined;
     const seen = new Set<string>();
     do {
@@ -314,11 +285,12 @@ export class CloudConfluenceClient implements ConfluenceApi {
         if (seen.has(cursor)) throw new Error(`Confluence Cloud comment cursor repeated for ${url}: ${cursor}`);
         seen.add(cursor);
       }
-      const response = await this.readLimit(() => this.http.request<CloudList<CloudComment>>({
+      const response = await this.readLimit(() => this.http.request<unknown>({
         method: 'GET', url, params: {limit: 100, 'body-format': 'storage', ...(cursor ? {cursor} : {})},
       }));
-      results.push(...response.data.results);
-      const next = response.data._links?.next;
+      const page = parseConfluenceList(cloudCommentSchema, response.data, `listing Confluence Cloud comments from ${url}`);
+      results.push(...page.results);
+      const next = page._links?.next;
       cursor = next ? new URL(next, `${this.baseUrl}/`).searchParams.get('cursor') ?? undefined : undefined;
     } while (cursor);
     return results;
@@ -328,14 +300,15 @@ export class CloudConfluenceClient implements ConfluenceApi {
     const missing = [...new Set(ids.filter((id) => id && !this.usersById.has(id)))];
     for (let index = 0; index < missing.length; index += 100) {
       const batch = missing.slice(index, index + 100);
-      const response = await this.readLimit(() => this.http.request<CloudList<CloudUser>>({
+      const response = await this.readLimit(() => this.http.request<unknown>({
         method: 'GET', url: '/api/v2/users-bulk', params: {'account-ids': batch.join(','), limit: 100},
       }));
-      for (const user of response.data.results) this.usersById.set(user.accountId, user);
+      const page = parseConfluenceList(cloudUserSchema, response.data, 'resolving Confluence Cloud comment authors');
+      for (const user of page.results) this.usersById.set(user.accountId, user);
     }
   }
 
-  private normalizeComment(comment: CloudComment): ConfluenceComment {
+  private normalizeComment(comment: CloudCommentPayload): ConfluenceComment {
     const user = comment.authorId ? this.usersById.get(comment.authorId) : undefined;
     const body = comment.body?.storage
       ?? (comment.body?.value !== undefined ? {value: comment.body.value, representation: comment.body.representation ?? 'storage'} : undefined);
@@ -355,13 +328,16 @@ export class CloudConfluenceClient implements ConfluenceApi {
       },
       ...(comment.version ? {version: comment.version} : {}),
       ...(body ? {body: {storage: body}} : {}),
-      ...(comment._links ? {_links: comment._links} : {}),
+      ...(comment._links ? {_links: {
+        ...(comment._links.webui ? {webui: comment._links.webui} : {}),
+        ...(comment._links.self ? {self: comment._links.self} : {}),
+      }} : {}),
     };
   }
 
   async getPageComments(pageId: string): Promise<ConfluenceComment[]> {
-    const collected: CloudComment[] = [];
-    const walk = async (kind: 'footer' | 'inline', comment: CloudComment): Promise<void> => {
+    const collected: CloudCommentPayload[] = [];
+    const walk = async (kind: 'footer' | 'inline', comment: CloudCommentPayload): Promise<void> => {
       collected.push(comment);
       const children = await this.pagedComments(`/api/v2/${kind}-comments/${encodeURIComponent(comment.id)}/children`);
       for (const child of children) {
@@ -376,39 +352,40 @@ export class CloudConfluenceClient implements ConfluenceApi {
     for (const comment of footer) await walk('footer', comment);
     for (const comment of inline) await walk('inline', comment);
     await this.resolveUsers(collected.flatMap((comment) => comment.authorId ? [comment.authorId] : []));
-    const unique = new Map<string, CloudComment>();
+    const unique = new Map<string, CloudCommentPayload>();
     for (const comment of collected) if (!unique.has(comment.id)) unique.set(comment.id, comment);
     return [...unique.values()].map((comment) => this.normalizeComment(comment));
   }
 
   async getComment(commentId: string): Promise<ConfluenceComment> {
-    const response = await this.readLimit(() => this.http.request<CloudComment>({
+    const response = await this.readLimit(() => this.http.request<unknown>({
       method: 'GET', url: `/api/v2/footer-comments/${encodeURIComponent(commentId)}`, params: {'body-format': 'storage'},
     }));
-    if (response.data.authorId) await this.resolveUsers([response.data.authorId]);
-    return this.normalizeComment(response.data);
+    const comment = parseConfluenceResponse(cloudCommentSchema, response.data, `reading Confluence Cloud comment ${commentId}`);
+    if (comment.authorId) await this.resolveUsers([comment.authorId]);
+    return this.normalizeComment(comment);
   }
 
   async createComment(input: {pageId: string; storage: string}): Promise<ConfluenceComment> {
-    const response = await this.writeLimit(() => this.http.request<CloudComment>({
+    const response = await this.writeLimit(() => this.http.request<unknown>({
       method: 'POST', url: '/api/v2/footer-comments', headers: {'Content-Type': 'application/json'},
       data: {pageId: input.pageId, body: {representation: 'storage', value: input.storage}},
       retryMode: 'never',
     }));
-    return this.normalizeComment(response.data);
+    return this.normalizeComment(parseConfluenceResponse(cloudCommentSchema, response.data, `creating a comment on Confluence Cloud page ${input.pageId}`));
   }
 
   async updateComment(input: {commentId: string; storage: string; version?: number}): Promise<ConfluenceComment> {
     const current = input.version ? undefined : await this.getComment(input.commentId);
     const version = input.version ?? current?.version?.number;
     if (!version) throw new Error(`Confluence Cloud comment ${input.commentId} has no version information`);
-    const response = await this.writeLimit(() => this.http.request<CloudComment>({
+    const response = await this.writeLimit(() => this.http.request<unknown>({
       method: 'PUT', url: `/api/v2/footer-comments/${encodeURIComponent(input.commentId)}`,
       headers: {'Content-Type': 'application/json'},
       data: {version: {number: version + 1, message: 'Comment archive updated by ywtc'}, body: {representation: 'storage', value: input.storage}},
       retryMode: 'never',
     }));
-    return this.normalizeComment(response.data);
+    return this.normalizeComment(parseConfluenceResponse(cloudCommentSchema, response.data, `updating Confluence Cloud comment ${input.commentId}`));
   }
 
   async downloadAttachment(pageId: string, attachment: ConfluenceAttachment, destination: string): Promise<DownloadedFile> {

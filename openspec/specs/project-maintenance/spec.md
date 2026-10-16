@@ -371,3 +371,15 @@ Project and package checks SHALL exercise interactive migration parsing and the 
 #### Scenario: Safe live handoff is tested
 - **WHEN** dry-run results contain blocking or non-blocking outcomes
 - **THEN** tests SHALL prove live is offered only for the non-blocking result and starts only after an explicit selection with the same effective migration request
+
+### Requirement: Packaged provider-failure regression verification
+Package verification SHALL execute the built and isolated installed CLI against deterministic local provider fixtures for invalid successful HTTP responses so source-only tests cannot mask missing runtime validation in the published artifact.
+
+#### Scenario: Installed CLI receives Confluence startup HTML
+- **WHEN** the packed CLI runs a non-mutating migration against a local Confluence fixture that returns a startup/error HTML page with HTTP 200
+- **THEN** package verification SHALL require a non-zero exit with an actionable provider-unavailable diagnostic
+- **AND** it SHALL fail if output contains raw markup, a property-access TypeError, or evidence of destination mutation
+
+#### Scenario: Source test and built artifact differ
+- **WHEN** generated JavaScript omits or changes provider response validation covered by source tests
+- **THEN** package verification SHALL fail by exercising the installed binary behavior rather than accepting help, version, and initialization checks alone

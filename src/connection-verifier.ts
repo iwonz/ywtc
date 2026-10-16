@@ -1,4 +1,5 @@
 import {createConfluenceClient} from './clients/confluence-factory.js';
+import {ConfluenceResponseError} from './clients/confluence-response.js';
 import {YandexWikiClient} from './clients/yandex-wiki.js';
 import {
   type AppConfig,
@@ -42,6 +43,9 @@ export class ConnectionVerificationError extends Error {
 }
 
 export function classifyConnectionFailure(error: unknown): ConnectionFailureKind {
+  if (error instanceof ConfluenceResponseError) {
+    return error.kind === 'service-unavailable' ? 'server' : 'unexpected';
+  }
   if (error instanceof HttpRequestError) {
     if (error.status === 401) return 'authentication';
     if (error.status === 403) return 'forbidden';
@@ -94,7 +98,8 @@ async function verifyYandex(config: AppConfig, profile: YandexConnectionProfile)
 
 async function verifyConfluence(config: AppConfig, profile: ConfluenceConnectionProfile): Promise<ConnectionVerification> {
   const client = createConfluenceClient(profile, config.timeoutMs);
-  const [, platform] = await Promise.all([client.getCurrentUser(), client.preflight?.()]);
+  const platform = await client.preflight?.();
+  await client.getCurrentUser();
   return {
     profile: profile.name,
     provider: profile.type,

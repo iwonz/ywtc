@@ -29,9 +29,11 @@ export async function runCapabilityDoctor(
   const source = createProviderAdapter(sourceLocator.profile, config);
   const destination = destinationLocator.type === 'remote' ? createProviderAdapter(destinationLocator.profile, config) : undefined;
   assertTransferCapabilities(source, destination, scope, sourceStatus, comments);
-  const [sourcePlatform, destinationPlatform, root, container] = await Promise.all([
+  const [sourcePlatform, destinationPlatform] = await Promise.all([
     source.preflight(),
     destination?.preflight(),
+  ]);
+  const [root, container] = await Promise.all([
     source.resolvePage(sourceLocator.value),
     destinationLocator.type === 'remote' && destination ? destination.resolveContainer(destinationLocator.value) : undefined,
   ]);

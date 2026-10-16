@@ -1,9 +1,11 @@
 import {execFile} from 'node:child_process';
-import {access, mkdtemp, readFile, stat} from 'node:fs/promises';
+import {createServer} from 'node:http';
+import {access, mkdir, mkdtemp, readdir, readFile, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
+import {stringify as stringifyYaml} from 'yaml';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +38,7 @@ function readPackResult(output: string): PackResult {
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-package-'));
 const npmEnvironment = {...process.env, npm_config_cache: path.join(temporary, 'npm-cache')};
+process.stdout.write('Packing release artifact...\n');
 const packed = await execFileAsync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', temporary], {
   cwd: process.cwd(),
   encoding: 'utf8',
@@ -58,6 +61,7 @@ for (const required of ['dist/report-ui/index.html', 'docs/assets/report-header-
 }
 
 const prefix = path.join(temporary, 'prefix');
+process.stdout.write('Installing packed CLI in an isolated prefix...\n');
 await execFileAsync('npm', ['install', '--global', '--ignore-scripts', '--prefix', prefix, archive], {
   cwd: temporary,
   encoding: 'utf8',
@@ -163,7 +167,68 @@ await Promise.all([
   stat(path.join(automaticWorkspace, '.states', 'reports')),
 ]);
 
+const providerFailureWorkspace = path.join(temporary, 'provider-failure-workspace');
+process.stdout.write('Verifying packaged provider-failure handling...\n');
+await mkdir(providerFailureWorkspace, {recursive: true});
+const providerRequests: string[] = [];
+const unavailableServer = createServer((request, response) => {
+  providerRequests.push(request.url ?? '');
+  response.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+  response.end('<!doctype html><html><head><title>Confluence had problems starting up</title></head><body><h1>Error when checking AWS S3 attachment storage connectivity</h1></body></html>');
+});
+await new Promise<void>((resolve, reject) => {
+  unavailableServer.once('error', reject);
+  unavailableServer.listen(0, '127.0.0.1', resolve);
+});
+try {
+  const address = unavailableServer.address();
+  if (!address || typeof address === 'string') throw new Error('Could not start the package provider-failure fixture');
+  await writeFile(path.join(providerFailureWorkspace, 'ywtc.config.yaml'), stringifyYaml({
+    defaults: {timeoutMs: 1_000, concurrency: 1},
+    connections: {
+      confluence: {
+        type: 'confluence', deployment: 'data-center', baseUrl: `http://127.0.0.1:${address.port}/confluence`,
+        authType: 'pat', token: 'package-smoke-token',
+        limits: {
+          readConcurrency: 1, writeConcurrency: 1, downloadConcurrency: 1, uploadConcurrency: 1,
+          requestsPerSecond: 20, burst: 20,
+        },
+      },
+    },
+  }), {mode: 0o600});
+  let failure: {code?: number; stdout?: string; stderr?: string} | undefined;
+  try {
+    await execFileAsync(executable, [
+      'migrate', '--workdir', providerFailureWorkspace,
+      '--source-profile', 'confluence', '--source', '1',
+      '--destination-profile', 'confluence', '--destination', '2',
+      '--scope', 'page', '--dry-run', '--no-comments',
+    ], {encoding: 'utf8', timeout: 15_000});
+  } catch (error) {
+    failure = error as {code?: number; stdout?: string; stderr?: string};
+  }
+  if (!failure || failure.code === 0) throw new Error('Installed ywtc accepted a Confluence startup HTML page');
+  const output = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`;
+  if (!output.includes('unavailable or not fully started') || !output.includes('attachment storage connectivity')) {
+    throw new Error(`Installed ywtc provider diagnosis is not actionable: ${output}`);
+  }
+  if (output.includes('Cannot read properties') || output.includes('<html')) {
+    throw new Error(`Installed ywtc exposed an implementation error or raw provider HTML: ${output}`);
+  }
+  if (providerRequests.some((request) => /\/rest\/api\/content(?:\/|\?|$)/u.test(request))) {
+    throw new Error(`Installed ywtc resolved page locators after failed provider preflight: ${providerRequests.join(', ')}`);
+  }
+  const runtimeEntries = await readdir(path.join(providerFailureWorkspace, '.states'), {recursive: true});
+  if (runtimeEntries.some((entry) => entry.endsWith('.json') || entry.endsWith('index.html'))) {
+    throw new Error(`Installed ywtc created state or report data after failed provider preflight: ${runtimeEntries.join(', ')}`);
+  }
+} finally {
+  unavailableServer.closeAllConnections();
+  await new Promise<void>((resolve, reject) => unavailableServer.close((error) => error ? reject(error) : resolve()));
+}
+
 const installedReportModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'report.js');
+process.stdout.write('Verifying packaged autonomous report generation...\n');
 const installedReportDirectory = path.join(temporary, 'installed-report');
 const reportSmoke = `
   import {TransferReport} from ${JSON.stringify(pathToFileURL(installedReportModule).toString())};

@@ -42,6 +42,32 @@ describe('HTTP retry and log safety', () => {
     await expect(client.request({method: 'GET', url: `/status-${status}`})).rejects.toThrow(message);
   });
 
+  it('sanitizes provider HTML error pages and explains server recovery', async () => {
+    nock('https://errors.example.test').get('/startup').reply(
+      503,
+      '<html><head><title>Confluence unavailable</title></head><body><h1>Attachment storage check failed</h1><script>secret()</script></body></html>',
+      {'Content-Type': 'text/html'},
+    );
+    const client = new RetryingHttpClient({baseURL: 'https://errors.example.test', timeoutMs: 5_000, maxRetries: 0});
+    const error = await client.request({method: 'GET', url: '/startup'}).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect(String(error)).toContain('provider service unavailable after bounded retries');
+    expect(String(error)).toContain('provider returned an HTML error page');
+    expect(String(error)).not.toContain('<html');
+    expect(String(error)).not.toContain('<script>');
+  });
+
+  it.each([
+    ['ETIMEDOUT', /connection timed out/],
+    ['ENOTFOUND', /provider host could not be reached/],
+    ['CERT_HAS_EXPIRED', /TLS verification failed/],
+  ] as const)('adds corrective guidance for transport error %s', async (code, message) => {
+    const transportError = Object.assign(new Error('transport failed'), {code});
+    nock('https://errors.example.test').get(`/transport-${code}`).replyWithError(transportError);
+    const client = new RetryingHttpClient({baseURL: 'https://errors.example.test', timeoutMs: 5_000, maxRetries: 0});
+    await expect(client.request({method: 'GET', url: `/transport-${code}`})).rejects.toThrow(message);
+  });
+
   it('redacts every occurrence of configured secrets', () => {
     expect(redact('token=secret and secret again', ['secret'])).toBe('token=[REDACTED] and [REDACTED] again');
   });
