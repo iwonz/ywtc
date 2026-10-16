@@ -2,6 +2,7 @@ import transform from '@diplodoc/transform';
 import {load} from 'cheerio';
 import {LinkifyIt} from 'linkify-it';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
+import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
 import type {YandexGrid} from './types.js';
 
 export interface DestinationPageReference {
@@ -425,9 +426,12 @@ function renderHtmlToStorage(
   return $.root().contents().toArray().map((node) => renderNode(node)).join('');
 }
 
-export function convertYfmToStorage(content: string, context: ConversionContext): ConversionResult {
-  const warnings = new Set<string>();
-  const stats = emptyConversionStats();
+function convertYfmFragmentToStorage(
+  content: string,
+  context: ConversionContext,
+  warnings: Set<string>,
+  stats: ConversionStats,
+): string {
   try {
     const output = transform(content || '', {
       allowHTML: true,
@@ -439,16 +443,54 @@ export function convertYfmToStorage(content: string, context: ConversionContext)
       linkify: false,
     });
     for (const warning of [...(output.logs.warn ?? []), ...(output.logs.error ?? [])]) warnings.add(warning);
-    const storage = renderHtmlToStorage(output.result.html, context, warnings, stats);
-    return {storage: storage || '<p></p>', warnings: [...warnings], stats};
+    return renderHtmlToStorage(output.result.html, context, warnings, stats);
   } catch (error) {
     warnings.add(`YFM transformation failed; original source was preserved: ${error instanceof Error ? error.message : String(error)}`);
-    return {
-      storage: `<ac:structured-macro ac:name="code" ac:schema-version="1"><ac:parameter ac:name="title">Original YFM</ac:parameter><ac:plain-text-body><![CDATA[${cdata(content)}]]></ac:plain-text-body></ac:structured-macro>`,
-      warnings: [...warnings],
-      stats,
-    };
+    return `<ac:structured-macro ac:name="code" ac:schema-version="1"><ac:parameter ac:name="title">Original YFM</ac:parameter><ac:plain-text-body><![CDATA[${cdata(content)}]]></ac:plain-text-body></ac:structured-macro>`;
   }
+}
+
+function confluenceLayoutType(cellCount: number): 'single' | 'two_equal' | 'three_equal' {
+  if (cellCount <= 1) return 'single';
+  if (cellCount === 2) return 'two_equal';
+  return 'three_equal';
+}
+
+export function convertYfmToStorage(content: string, context: ConversionContext): ConversionResult {
+  const warnings = new Set<string>();
+  const stats = emptyConversionStats();
+  const segments = parseYfmDocumentSegments(content);
+  if (!hasYfmLayouts(segments)) {
+    const storage = convertYfmFragmentToStorage(content, context, warnings, stats);
+    return {storage: storage || '<p></p>', warnings: [...warnings], stats};
+  }
+
+  const sections: string[] = [];
+  for (const segment of segments) {
+    if (segment.type === 'content') {
+      if (!segment.raw.trim()) continue;
+      const body = convertYfmFragmentToStorage(segment.raw, context, warnings, stats);
+      if (!body.trim()) continue;
+      sections.push(`<ac:layout-section ac:type="single"><ac:layout-cell>${body}</ac:layout-cell></ac:layout-section>`);
+      continue;
+    }
+    if (segment.cells.length > 3) {
+      warnings.add(`YFM layout with ${segment.cells.length} columns was split into Confluence rows of at most three columns`);
+    }
+    for (let offset = 0; offset < segment.cells.length; offset += 3) {
+      const cells = segment.cells.slice(offset, offset + 3);
+      const type = confluenceLayoutType(cells.length);
+      const body = cells.map((cell) => (
+        `<ac:layout-cell>${convertYfmFragmentToStorage(cell, context, warnings, stats) || '<p></p>'}</ac:layout-cell>`
+      )).join('');
+      sections.push(`<ac:layout-section ac:type="${type}">${body}</ac:layout-section>`);
+    }
+  }
+  return {
+    storage: `<ac:layout>${sections.join('')}</ac:layout>`,
+    warnings: [...warnings],
+    stats,
+  };
 }
 
 /**

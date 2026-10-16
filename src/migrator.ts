@@ -526,7 +526,9 @@ async function renderRemoteDocument(input: {
     const rendered = input.destination.kind === 'confluence'
       ? await renderConfluenceStorage(input.document, input.page, input.context, input.container.space ?? '')
       : await renderYfm(input.document, input.context);
-    if (!rendered.body.trim()) return rawContentFallback(input.page, input.destination.kind, emptyRendererFallbackReason(input.document));
+    if (!rendered.body.trim() && !input.document.semanticallyEmpty) {
+      return rawContentFallback(input.page, input.destination.kind, emptyRendererFallbackReason(input.document));
+    }
     return rendered;
   } catch (error) {
     return rawContentFallback(input.page, input.destination.kind, error instanceof Error ? error.message : String(error));

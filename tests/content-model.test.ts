@@ -6,6 +6,7 @@ import {
   extractPageReferences,
   legacyTransferPlaceholder,
   normalizePageContent,
+  normalizedPreviewHtml,
   rawContentFallback,
   renderConfluenceStorage,
   renderMarkdown,
@@ -166,6 +167,117 @@ describe('normalized content pipeline', () => {
       'confluence',
       page,
     ).status).toBe('failed');
+  });
+
+  it('treats empty editor scaffolding as a complete empty page without fallback', async () => {
+    const page = source('### ');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    expect(document.semanticallyEmpty).toBe(true);
+    expect(document.degraded).toBe(false);
+    expect(document.normalizations).toEqual([expect.stringContaining('empty heading')]);
+    await expect(renderConfluenceStorage(document, page, context, 'DOC')).resolves.toMatchObject({body: '<p></p>', degraded: false});
+    await expect(renderYfm(document, context)).resolves.toMatchObject({body: '', degraded: false});
+    await expect(renderMarkdown(document, context)).resolves.toMatchObject({body: '', degraded: false});
+    expect(verifyDestinationContent('<p></p>', '', 'confluence', page)).toEqual({status: 'complete', differences: []});
+    expect(verifyDestinationContent('<p></p>', '<p>Unexpected</p>', 'confluence', page).status).toBe('failed');
+  });
+
+  it('preserves YFM columns as typed layouts, native Confluence storage, and responsive HTML', async () => {
+    const page = source([
+      'Intro',
+      '',
+      '{% layout gap=l %}',
+      '{% block %}',
+      '**Left**',
+      '{% endblock %}',
+      '{% block %}',
+      'Middle',
+      '{% endblock %}',
+      '{% block %}',
+      'Right',
+      '{% endblock %}',
+      '{% endlayout %}',
+      '',
+      'Outro',
+    ].join('\n'));
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    expect(document.semanticallyEmpty).toBe(false);
+    expect(document.root.children?.map((node) => node.type)).toContain('layout');
+    expect(normalizedPreviewHtml(document)).toContain('ywtc-layout-columns-3');
+    const storage = await renderConfluenceStorage(document, page, context, 'DOC');
+    expect(storage.body).toContain('<ac:layout>');
+    expect(storage.body).toContain('<ac:layout-section ac:type="three_equal">');
+    expect(storage.body.match(/<ac:layout-cell>/g)).toHaveLength(5);
+    expect(storage.body.indexOf('Left')).toBeLessThan(storage.body.indexOf('Middle'));
+    expect(storage.body.indexOf('Middle')).toBeLessThan(storage.body.indexOf('Right'));
+    expect(storage.degraded).toBe(false);
+    const html = await renderStaticHtml(document, context);
+    expect(html.body).toContain('ywtc-layout-columns-3');
+    expect(html.degraded).toBe(false);
+    const markdown = await renderMarkdown(document, context);
+    expect(markdown.body).toContain('### Column 1');
+    expect(markdown.body).toContain('### Column 3');
+    expect(markdown.degraded).toBe(true);
+    expect(markdown.warnings).toContainEqual(expect.stringContaining('linearized'));
+  });
+
+  it('maps supported Confluence layouts and macros to native YFM constructs', async () => {
+    const page = source([
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell><ac:structured-macro ac:name="info"><ac:parameter ac:name="title">Read me</ac:parameter><ac:rich-text-body><p>Left</p></ac:rich-text-body></ac:structured-macro></ac:layout-cell>',
+      '<ac:layout-cell><ac:structured-macro ac:name="expand"><ac:parameter ac:name="title">More</ac:parameter><ac:rich-text-body><p>Right</p></ac:rich-text-body></ac:structured-macro></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+      '<ac:task-list><ac:task><ac:task-status>complete</ac:task-status><ac:task-body>Done</ac:task-body></ac:task></ac:task-list>',
+      '<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">typescript</ac:parameter><ac:plain-text-body><![CDATA[const x = 1;]]></ac:plain-text-body></ac:structured-macro>',
+      '<ac:structured-macro ac:name="children"><ac:parameter ac:name="depth">2</ac:parameter><ac:parameter ac:name="sort">title</ac:parameter></ac:structured-macro>',
+      '<ac:structured-macro ac:name="anchor"><ac:parameter ac:name="">part</ac:parameter></ac:structured-macro>',
+    ].join(''), 'confluence-storage');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const yfm = await renderYfm(document, context);
+    expect(yfm.body).toContain('{% layout %}');
+    expect(yfm.body.match(/{% block %}/g)).toHaveLength(2);
+    expect(yfm.body).toContain('{% note info "Read me" %}');
+    expect(yfm.body).toContain('{% cut "More" %}');
+    expect(yfm.body).toContain('- [x] Done');
+    expect(yfm.body).toContain('```typescript');
+    expect(yfm.body).toContain('{% tree depth="2" sort_by="title" sort="asc" %}');
+    expect(yfm.body).toContain('<a id="part"></a>');
+    expect(yfm.degraded).toBe(false);
+  });
+
+  it('preserves invalid or unequal Confluence layout content with explicit degradation', async () => {
+    const page = source('<ac:layout><ac:layout-section ac:type="two_left_sidebar"><ac:layout-cell><p>Narrow</p></ac:layout-cell><ac:layout-cell><p>Wide</p></ac:layout-cell></ac:layout-section><ac:layout-section ac:type="unknown"><ac:layout-cell><p>Other</p></ac:layout-cell></ac:layout-section></ac:layout>', 'confluence-storage');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    expect(document.warnings).toContainEqual(expect.stringContaining('unsupported-width'));
+    expect(normalizedPreviewHtml(document)).toContain('Narrow');
+    expect(normalizedPreviewHtml(document)).toContain('Other');
+    const yfm = await renderYfm(document, context);
+    expect(yfm.body).toContain('Narrow');
+    expect(yfm.body).toContain('Wide');
+    expect(yfm.body).toContain('Other');
+    expect(yfm.warnings).toContainEqual(expect.stringContaining('equal YFM columns'));
+    expect(yfm.degraded).toBe(true);
+  });
+
+  it('verifies native layouts structurally without confusing provider padding with loss', () => {
+    const page = source('Body');
+    const expected = '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell><p>Left</p></ac:layout-cell><ac:layout-cell><p>Right</p></ac:layout-cell></ac:layout-section></ac:layout>';
+    const padded = '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell><p>Left</p><p></p></ac:layout-cell><ac:layout-cell><p>Right</p></ac:layout-cell></ac:layout-section></ac:layout>';
+    expect(verifyDestinationContent(expected, padded, 'confluence', page).status).toBe('complete');
+    expect(verifyDestinationContent(expected, '<p>Left</p><p>Right</p>', 'confluence', page)).toMatchObject({status: 'partial'});
+    expect(verifyDestinationContent(expected, '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell><p>Left</p></ac:layout-cell><ac:layout-cell></ac:layout-cell></ac:layout-section></ac:layout>', 'confluence', page).status).toBe('failed');
   });
 
   it('renders supported YFM tree directives natively and as static navigation', async () => {

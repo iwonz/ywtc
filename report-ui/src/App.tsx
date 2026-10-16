@@ -309,7 +309,7 @@ function DefinitionGrid({items}: {items: Array<[string, React.ReactNode]>}) {
 
 function isolatedPreview(body: string): string {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'";
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>body{font:14px/1.55 system-ui,sans-serif;margin:18px;color:#182230;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #ccd;padding:6px}pre{white-space:pre-wrap;background:#f3f4f6;padding:10px;border-radius:6px}a{color:#175cd3}</style></head><body>${body}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>body{font:14px/1.55 system-ui,sans-serif;margin:18px;color:#182230;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #ccd;padding:6px}pre{white-space:pre-wrap;background:#f3f4f6;padding:10px;border-radius:6px}a{color:#175cd3}.ywtc-layout{display:grid;gap:18px}.ywtc-layout-section{display:grid;grid-template-columns:repeat(var(--columns,1),minmax(0,1fr));gap:18px;align-items:start}.ywtc-layout-columns-2{--columns:2}.ywtc-layout-columns-3{--columns:3}.ywtc-layout-cell{min-width:0}@media(max-width:620px){.ywtc-layout-section{grid-template-columns:1fr}}</style></head><body>${body}</body></html>`;
 }
 
 function IssueList({issues, locale, t}: {issues: TransferReportIssue[]; locale: Locale; t: (key: TranslationKey) => string}) {

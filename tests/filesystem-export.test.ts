@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {mkdtemp, readFile, stat, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
@@ -78,6 +78,39 @@ describe('transactional filesystem export', () => {
     const html = path.join(temporary, 'html');
     await exporter.export({graph: treeGraph, directory: html, format: 'html', identity: 'tree-html', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources});
     expect(await readFile(path.join(html, 'index.html'), 'utf8')).toContain('aria-label="Child pages"');
+  });
+
+  it('keeps responsive HTML columns, records Markdown linearization, and leaves empty pages fallback-free', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-layout-'));
+    const layoutRoot = {
+      ...root,
+      rawContent: '{% layout gap=l %}\n{% block %}\nLeft\n{% endblock %}\n{% block %}\nRight\n{% endblock %}\n{% endlayout %}',
+      references: [],
+    };
+    const layoutGraph: PageGraph = {
+      rootId: layoutRoot.canonicalId, pages: [layoutRoot], edges: [], warnings: [],
+      selection: {...selection, returnedDescendants: 0, selectedDescendants: 0, maximumDepth: 0},
+    };
+    const resources = new Map<string, SourceResource[]>([[layoutRoot.canonicalId, []]]);
+    const exporter = new FilesystemExporter({} as SourceAdapter, 1);
+    const htmlOutput = path.join(temporary, 'html');
+    const htmlResult = await exporter.export({graph: layoutGraph, directory: htmlOutput, format: 'html', identity: 'layout-html', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources});
+    expect(htmlResult.manifest.pages[0]).toMatchObject({degraded: false});
+    expect(await readFile(path.join(htmlOutput, 'index.html'), 'utf8')).toContain('ywtc-layout-columns-2');
+    expect(await readFile(path.join(htmlOutput, 'assets/site.css'), 'utf8')).toContain('grid-template-columns');
+
+    const markdownOutput = path.join(temporary, 'markdown');
+    const markdownResult = await exporter.export({graph: layoutGraph, directory: markdownOutput, format: 'markdown', identity: 'layout-markdown', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources});
+    expect(markdownResult.manifest.pages[0]).toMatchObject({degraded: true, warnings: [expect.stringContaining('linearized')]});
+    expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toContain('### Column 2');
+    expect(await readdir(path.join(markdownOutput, '_source'))).toHaveLength(1);
+
+    const emptyRoot = {...root, rawContent: '### ', references: []};
+    const emptyGraph: PageGraph = {...layoutGraph, rootId: emptyRoot.canonicalId, pages: [emptyRoot]};
+    const emptyOutput = path.join(temporary, 'empty');
+    const emptyResult = await exporter.export({graph: emptyGraph, directory: emptyOutput, format: 'html', identity: 'empty-html', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: new Map([[emptyRoot.canonicalId, []]])});
+    expect(emptyResult.manifest.pages[0]).toMatchObject({degraded: false});
+    expect(await readFile(path.join(emptyOutput, 'index.html'), 'utf8')).not.toContain('Source content fallback');
   });
 
   it('preserves an export with an unknown manifest field instead of adopting it', async () => {

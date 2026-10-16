@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import type {AppConfig, ConfluenceConnectionProfile, ConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
-import {legacyTransferPlaceholder} from '../src/content-model.js';
+import {legacyTransferPlaceholder, rawContentFallback} from '../src/content-model.js';
 import {DestinationTitleConflictError} from '../src/domain.js';
 import type {DestinationAdapter, DestinationContainer, DestinationPage, SourceAdapter, SourcePage, SourceResource, UploadedResource} from '../src/domain.js';
 import type {Logger} from '../src/logger.js';
@@ -184,6 +184,10 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
       current = page(current!.title, legacyTransferPlaceholder('confluence', fixtureRoot), current!.id);
       pages.set(current.id, current);
     },
+    setCurrentBody: (body: string) => {
+      current = page(current!.title, body, current!.id, current!.parentId ?? container.id);
+      pages.set(current.id, current);
+    },
     setCurrentMissing: () => { missingIds.add(current!.id); },
     setAllCurrentMissing: () => { for (const id of pages.keys()) missingIds.add(id); },
     snapshot: () => ({
@@ -350,6 +354,32 @@ describe('source-derived remote page safety', () => {
     await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({
       status: 'completed', hasErrors: false, summary: {complete: 1, resources: 0},
     });
+  });
+
+  it('transfers an empty hierarchy page as complete and repairs its prior managed raw fallback', async () => {
+    const {directory, config, options} = await setup();
+    const emptyRoot: SourcePage = {...root, rawContent: '### ', references: []};
+    const adapters = fixture([], emptyRoot, false);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+
+    const first = await migrator.run(options);
+    expect(first).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 1, partial: 0, resources: 0}});
+    expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 0});
+    expect(adapters.snapshot().current?.content).toBe('<p></p>');
+
+    adapters.setCurrentBody(rawContentFallback(emptyRoot, 'confluence', 'renderer returned an empty body for non-empty yfm content').body);
+    const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
+    const stateFilename = path.join(directory, '.states', stateNames[0]!);
+    const state = JSON.parse(await readFile(stateFilename, 'utf8')) as TransferState;
+    state.pages[emptyRoot.canonicalId]!.destinationFingerprint = adapters.snapshot().current!.fingerprint!;
+    state.pages[emptyRoot.canonicalId]!.status = 'partial';
+    await writeFile(stateFilename, `${JSON.stringify(state, null, 2)}\n`);
+
+    const resumed = await migrator.run(options);
+    expect(resumed).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 1, partial: 0}});
+    expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 0});
+    expect(adapters.snapshot().current?.content).toBe('<p></p>');
   });
 
   it('reconciles an existing raw source snapshot when its state mapping is unavailable', async () => {

@@ -299,12 +299,17 @@ export interface NormalizedReference {
 }
 
 export interface NormalizedNode {
-  type: 'document' | 'html' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback' | 'tree-directive';
+  type: 'document' | 'html' | 'layout' | 'layout-section' | 'layout-cell' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback' | 'tree-directive';
   value?: string;
   children?: NormalizedNode[];
   reference?: NormalizedReference;
   vendor?: ProviderKind;
   tree?: {depth?: number; sort?: 'asc' | 'desc'; sortBy?: 'title'};
+  layout?: {
+    source: ProviderKind;
+    gap?: string;
+    sectionType?: 'single' | 'two_equal' | 'two_left_sidebar' | 'two_right_sidebar' | 'three_equal' | 'three_with_sidebars' | 'unsupported';
+  };
 }
 
 export interface NormalizedDocument {
@@ -315,6 +320,7 @@ export interface NormalizedDocument {
   warnings: string[];
   normalizations: string[];
   degraded: boolean;
+  semanticallyEmpty: boolean;
   metrics: {
     links: number;
     images: number;

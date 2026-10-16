@@ -268,3 +268,18 @@ The packaged report application SHALL render its interface with self-hosted font
 #### Scenario: Package is installed in isolation
 - **WHEN** the npm tarball generates a report outside the source checkout
 - **THEN** the resulting single HTML file SHALL contain the font resources required to render the dashboard autonomously
+
+### Requirement: Content-equivalence documentation
+The README supported-content table SHALL describe current bidirectional native equivalents and SHALL distinguish exact preservation, safe normalization, static representation, and loss-aware fallback without adding another second-level section.
+
+#### Scenario: Operator evaluates layout fidelity
+- **WHEN** the operator reads `Возможности`
+- **THEN** the table SHALL explain Yandex Wiki and Confluence column-layout preservation, responsive HTML behavior, and Markdown's recorded linearization
+
+#### Scenario: Operator evaluates provider constructs
+- **WHEN** the operator compares Yandex Wiki and Confluence features
+- **THEN** the table SHALL identify supported pairs for notes/callouts, cuts/expand, tree/children, task lists, code, anchors, links, images, and attachments and SHALL keep unsupported constructs in the concise limitations table
+
+#### Scenario: Empty structural page is documented
+- **WHEN** a source page has no meaningful content and exists only as a hierarchy container
+- **THEN** the documentation SHALL state that it transfers as a valid empty page rather than a fallback or degradation

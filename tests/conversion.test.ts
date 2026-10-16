@@ -104,4 +104,24 @@ describe('YFM conversion', () => {
     expect(result.storage).not.toContain('&amp;nbsp;');
     expect(result.stats.externalLinks).toBe(2);
   });
+
+  it('emits documented native Confluence page layouts before Diplodoc can flatten blocks', () => {
+    const source = [
+      'Before',
+      '{% layout gap=l %}',
+      '{% block %}', 'One', '{% endblock %}',
+      '{% block %}', 'Two', '{% endblock %}',
+      '{% block %}', 'Three', '{% endblock %}',
+      '{% block %}', 'Four', '{% endblock %}',
+      '{% endlayout %}',
+      'After',
+    ].join('\n');
+    const result = convertYfmToStorage(source, context());
+    expect(result.storage).toMatch(/^<ac:layout>/);
+    expect(result.storage).toContain('ac:type="single"');
+    expect(result.storage).toContain('ac:type="three_equal"');
+    expect(result.storage.match(/<ac:layout-cell>/g)).toHaveLength(6);
+    expect(result.storage.indexOf('One')).toBeLessThan(result.storage.indexOf('Four'));
+    expect(result.warnings).toContainEqual(expect.stringContaining('split into Confluence rows'));
+  });
 });

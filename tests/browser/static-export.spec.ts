@@ -9,7 +9,7 @@ import {FilesystemExporter} from '../../src/filesystem-export.js';
 
 const root: SourcePage & {depth: number} = {
   provider: 'yandex-wiki', profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root', locator: 'root',
-  url: 'https://wiki.example.com/root', rawContent: '# Root\n\n[Child](/child)\n\n![Pixel](pixel.png)', rawFormat: 'yfm',
+  url: 'https://wiki.example.com/root', rawContent: '# Root\n\n{% layout gap=l %}\n{% block %}\n[Child](/child)\n{% endblock %}\n{% block %}\n![Pixel](pixel.png)\n{% endblock %}\n{% endlayout %}', rawFormat: 'yfm',
   references: [{raw: '/child', href: '/child', kind: 'page'}, {raw: 'pixel.png', href: 'pixel.png', kind: 'attachment'}], depth: 0,
 };
 const child: SourcePage & {depth: number; projectedParentId: string} = {
@@ -66,6 +66,8 @@ for (const viewport of [{name: 'desktop', width: 1440, height: 900}, {name: 'mob
       await access(fileURLToPath(new URL(reference, page.url()).toString()));
     }
     expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    const columns = await page.locator('.ywtc-layout-section').first().evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length);
+    expect(columns).toBe(viewport.name === 'mobile' ? 1 : 2);
     await page.getByRole('link', {name: 'Child'}).first().click();
     await expect(page.getByRole('heading', {name: 'Child', level: 1, exact: true})).toBeVisible();
     if (viewport.name === 'mobile') {

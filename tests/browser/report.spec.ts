@@ -52,7 +52,10 @@ test.beforeAll(async () => {
         destinationUrl: 'https://docs.example.com/comments/1',
       }],
     },
-  }), {source: '<h1>Knowledge base</h1><p>Source text</p>', destination: '<h1>Knowledge base</h1><p>Destination text</p><script>top.ywtcInjected=true</script>'});
+  }), {
+    source: '<h1>Knowledge base</h1><section class="ywtc-layout"><section class="ywtc-layout-section ywtc-layout-columns-2"><div class="ywtc-layout-cell"><p>Source left</p></div><div class="ywtc-layout-cell"><p>Source right</p></div></section></section>',
+    destination: '<h1>Knowledge base</h1><section class="ywtc-layout"><section class="ywtc-layout-section ywtc-layout-columns-2"><div class="ywtc-layout-cell"><p>Destination left</p></div><div class="ywtc-layout-cell"><p>Destination right</p></div></section></section><script>top.ywtcInjected=true</script>',
+  });
   report.addPage(reportPage({
     sourceCanonicalId: 'wiki:2', sourceId: '2', sourceTitle: 'Partial child', status: 'partial', depth: 1,
     sourceParentId: '1', parentId: 'wiki:1', projectedParentId: 'wiki:1', destinationParentId: '11', degraded: true,
@@ -111,6 +114,10 @@ test('interactive report works offline through file:// with exact details and ke
   await expect(page.getByRole('dialog')).toBeHidden();
   await root.getByRole('button', {name: 'View details'}).click();
   await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByRole('tab', {name: 'Comparison'}).click();
+  const sourceFrame = page.getByRole('dialog').locator('iframe').first().contentFrame();
+  await expect(sourceFrame.locator('.ywtc-layout-cell')).toHaveCount(2);
+  expect(await sourceFrame.locator('.ywtc-layout-section').evaluate((element) => getComputedStyle(element).display)).toBe('grid');
   await page.keyboard.press('Escape');
 
   await page.getByPlaceholder('Search pages, files, IDs, or diagnostics…').fill('manual.pdf');

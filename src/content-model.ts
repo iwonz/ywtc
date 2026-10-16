@@ -24,6 +24,7 @@ import type {
 } from './domain.js';
 import {convertYfmToStorage} from './conversion.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
+import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
 
 const linkifier = new LinkifyIt();
 
@@ -209,26 +210,70 @@ export function extractPageReferences(content: string, format: SourcePage['rawFo
   return uniqueReferences(references);
 }
 
+const confluenceLayoutCellCounts = new Map([
+  ['single', 1],
+  ['two_equal', 2],
+  ['two_left_sidebar', 2],
+  ['two_right_sidebar', 2],
+  ['three_equal', 3],
+  ['three_with_sidebars', 3],
+]);
+
 function storageToSemanticHtml(storage: string, warnings: string[]): string {
   const $ = load(`<main data-ywtc-root>${storage}</main>`, {xmlMode: false}, false);
   $('script, iframe, object, embed, form').each((_index, element) => {
     warnings.push(`Active or embedded element <${element.tagName}> was replaced by a safe fallback`);
     $(element).replaceWith(`<pre data-ywtc-fallback>${escapeHtml($.html(element))}</pre>`);
   });
+  $('ac\\:layout').toArray().reverse().forEach((element) => {
+    const layout = $(element);
+    if (layout.parents('ac\\:layout').length > 0) warnings.push('Nested Confluence layout was preserved as a readable layout fallback');
+    const sections = layout.children('ac\\:layout-section').toArray().map((section) => {
+      const item = $(section);
+      const requestedType = item.attr('ac:type') ?? 'unsupported';
+      const expectedCells = confluenceLayoutCellCounts.get(requestedType);
+      const cells = item.children('ac\\:layout-cell').toArray();
+      const sectionType = expectedCells === cells.length ? requestedType : 'unsupported';
+      if (sectionType === 'unsupported') {
+        warnings.push(`Confluence layout section "${requestedType}" with ${cells.length} cells was preserved as an unsupported-width layout fallback`);
+      }
+      const body = cells.map((cell) => `<div class="ywtc-layout-cell">${$(cell).html() ?? ''}</div>`).join('');
+      return `<section class="ywtc-layout-section ywtc-layout-${escapeHtml(sectionType)} ywtc-layout-columns-${cells.length}" data-ywtc-layout-type="${escapeHtml(sectionType)}">${body}</section>`;
+    }).join('');
+    layout.replaceWith(`<section class="ywtc-layout" data-ywtc-layout-source="confluence">${sections}</section>`);
+  });
   $('ac\\:structured-macro').toArray().reverse().forEach((element) => {
     const macro = $(element);
     const name = macro.attr('ac:name') ?? 'unknown';
     const richBody = macro.children('ac\\:rich-text-body').html() ?? '';
     const plainBody = macro.children('ac\\:plain-text-body').text();
-    const title = macro.children('ac\\:parameter').filter((_index, item) => $(item).attr('ac:name') === 'title').text().trim();
-    if (name === 'code') macro.replaceWith(`<pre><code>${escapeHtml(plainBody)}</code></pre>`);
-    else if (name === 'expand') macro.replaceWith(`<details open><summary>${escapeHtml(title || 'Details')}</summary>${richBody}</details>`);
-    else if (['info', 'tip', 'warning', 'note'].includes(name)) macro.replaceWith(`<aside class="ywtc-${name}"><strong>${escapeHtml(title || name)}</strong>${richBody}</aside>`);
-    else if (name === 'anchor') macro.replaceWith(`<span id="${escapeHtml(macro.children('ac\\:parameter').first().text())}"></span>`);
-    else {
+    const parameters = new Map(macro.children('ac\\:parameter').toArray().map((item) => [$(item).attr('ac:name') ?? '', $(item).text().trim()]));
+    const title = parameters.get('title') ?? '';
+    if (name === 'code') {
+      const language = parameters.get('language');
+      macro.replaceWith(`<pre><code${language ? ` class="language-${escapeHtml(language)}"` : ''}>${escapeHtml(plainBody)}</code></pre>`);
+    } else if (name === 'expand') {
+      macro.replaceWith(`<details class="ywtc-expand" data-ywtc-title="${escapeHtml(title || 'Details')}" open><summary>${escapeHtml(title || 'Details')}</summary>${richBody}</details>`);
+    } else if (['info', 'tip', 'warning', 'note'].includes(name)) {
+      macro.replaceWith(`<aside class="ywtc-note ywtc-${name}" data-ywtc-note-type="${name}" data-ywtc-title="${escapeHtml(title)}">${richBody}</aside>`);
+    } else if (name === 'anchor') {
+      macro.replaceWith(`<span class="ywtc-anchor" id="${escapeHtml(macro.children('ac\\:parameter').first().text())}"></span>`);
+    } else if (name === 'children' && !parameters.get('page')) {
+      const depth = Number(parameters.get('depth'));
+      macro.replaceWith(`<nav class="ywtc-children" data-ywtc-depth="${Number.isInteger(depth) && depth > 0 ? depth : ''}" data-ywtc-sort="${escapeHtml(parameters.get('sort') ?? '')}" data-ywtc-reverse="${parameters.get('reverse') === 'true' ? 'true' : 'false'}"></nav>`);
+    } else {
       warnings.push(`Confluence macro "${name}" was converted to a static fallback`);
       macro.replaceWith(`<aside class="ywtc-fallback"><strong>${escapeHtml(name)}</strong>${richBody || `<pre>${escapeHtml(plainBody)}</pre>`}</aside>`);
     }
+  });
+  $('ac\\:task-list').toArray().reverse().forEach((element) => {
+    const tasks = $(element).children('ac\\:task').toArray().map((task) => {
+      const item = $(task);
+      const status = item.children('ac\\:task-status').text().trim() === 'complete' ? 'complete' : 'incomplete';
+      const body = item.children('ac\\:task-body').html() ?? '';
+      return `<li class="ywtc-task" data-ywtc-task-status="${status}">${body}</li>`;
+    }).join('');
+    $(element).replaceWith(`<ul class="ywtc-task-list">${tasks}</ul>`);
   });
   $('ac\\:image').each((_index, element) => {
     const image = $(element);
@@ -332,7 +377,7 @@ function containsEmptyYfmHeading(content: string): boolean {
   return /^\s{0,3}#{1,6}\s*$/m.test(content);
 }
 
-function yfmToHtml(content: string, warnings: string[], normalizations: string[] = []): string {
+function yfmFragmentToHtml(content: string, warnings: string[], normalizations: string[]): string {
   try {
     const result = transform(content || '', {
       allowHTML: true,
@@ -369,9 +414,64 @@ function yfmToHtml(content: string, warnings: string[], normalizations: string[]
   }
 }
 
+function yfmToHtml(content: string, warnings: string[], normalizations: string[] = []): string {
+  const segments = parseYfmDocumentSegments(content);
+  if (!hasYfmLayouts(segments)) return yfmFragmentToHtml(content, warnings, normalizations);
+  return segments.map((segment) => {
+    if (segment.type === 'content') {
+      return segment.raw.trim() ? yfmFragmentToHtml(segment.raw, warnings, normalizations) : '';
+    }
+    const gap = segment.gap?.replace(/[^a-z0-9_-]/gi, '') || 'default';
+    const cells = segment.cells.map((cell) => `<div class="ywtc-layout-cell">${yfmFragmentToHtml(cell, warnings, normalizations)}</div>`).join('');
+    return `<section class="ywtc-layout" data-ywtc-layout-source="yandex-wiki"><section class="ywtc-layout-section ywtc-layout-columns-${segment.cells.length} ywtc-layout-gap-${gap}" data-ywtc-layout-type="${segment.cells.length === 1 ? 'single' : segment.cells.length === 2 ? 'two_equal' : segment.cells.length === 3 ? 'three_equal' : 'unsupported'}">${cells}</section></section>`;
+  }).join('');
+}
+
 function metrics(html: string): NormalizedDocument['metrics'] {
   const $ = load(html, null, false);
   return {links: $('a').length, images: $('img').length, tables: $('table').length, codeBlocks: $('pre').length};
+}
+
+function normalizedNodesFromHtml(html: string, provider: SourcePage['provider']): NormalizedNode[] {
+  const $ = load(`<main data-ywtc-nodes>${html}</main>`, null, false);
+  const nodes: NormalizedNode[] = [];
+  let pending = '';
+  const flush = (): void => {
+    if (!pending) return;
+    nodes.push({type: 'html', value: pending});
+    pending = '';
+  };
+  for (const element of $('main[data-ywtc-nodes]').contents().toArray()) {
+    const item = $(element);
+    if (!item.is('section.ywtc-layout')) {
+      pending += $.html(element);
+      continue;
+    }
+    flush();
+    const sections = item.children('section.ywtc-layout-section').toArray().map<NormalizedNode>((section) => {
+      const sectionItem = $(section);
+      const rawType = sectionItem.attr('data-ywtc-layout-type') ?? 'unsupported';
+      const sectionType: Exclude<NonNullable<NormalizedNode['layout']>['sectionType'], undefined> = confluenceLayoutCellCounts.has(rawType) || rawType === 'unsupported'
+        ? rawType as Exclude<NonNullable<NormalizedNode['layout']>['sectionType'], undefined>
+        : 'unsupported';
+      const gap = String(sectionItem.attr('class') ?? '').split(/\s+/).find((value) => value.startsWith('ywtc-layout-gap-'))?.slice('ywtc-layout-gap-'.length);
+      const cells = sectionItem.children('.ywtc-layout-cell').toArray().map<NormalizedNode>((cell) => ({
+        type: 'layout-cell',
+        children: [{type: 'html', value: $(cell).html() ?? ''}],
+      }));
+      return {type: 'layout-section', layout: {source: provider, sectionType, ...(gap ? {gap} : {})}, children: cells};
+    });
+    nodes.push({type: 'layout', layout: {source: provider}, children: sections});
+  }
+  flush();
+  return nodes.length > 0 ? nodes : [{type: 'html', value: '<p></p>'}];
+}
+
+function semanticallyEmptyHtml(html: string): boolean {
+  const $ = load(html, null, false);
+  $('script,style').remove();
+  if (semanticText($.root().text())) return false;
+  return $('a[href],a[name],[id],img,video,audio,table,pre,code,hr,blockquote,ul,ol,.ywtc-note,.ywtc-expand,.ywtc-children,.ywtc-task-list,.ywtc-fallback').length === 0;
 }
 
 export function normalizePageContent(page: SourcePage): NormalizedDocument {
@@ -387,7 +487,7 @@ export function normalizePageContent(page: SourcePage): NormalizedDocument {
     label: reference.pageTitle ?? reference.href ?? reference.raw,
     ...(reference.anchor ? {anchor: reference.anchor} : {}),
   }));
-  const children: NormalizedNode[] = [{type: 'html', value: html}];
+  const children: NormalizedNode[] = normalizedNodesFromHtml(html, page.provider);
   children.push(...tree.directives.map((directive): NormalizedNode => ({
     type: 'tree-directive',
     value: directive.raw,
@@ -406,6 +506,7 @@ export function normalizePageContent(page: SourcePage): NormalizedDocument {
     warnings,
     normalizations,
     degraded: warnings.length > 0,
+    semanticallyEmpty: tree.directives.length === 0 && semanticallyEmptyHtml(html),
     metrics: metrics(html),
   };
 }
@@ -433,10 +534,12 @@ export function appendGridSnapshots(document: NormalizedDocument, resources: Sou
   }).join('');
   const htmlNode = document.root.children?.find((node) => node.type === 'html');
   if (htmlNode) htmlNode.value = `${htmlNode.value ?? ''}${html}`;
+  else document.root.children?.push({type: 'html', value: html});
   return {
     ...document,
     warnings: [...document.warnings, ...grids.map((resource) => `Dynamic table "${resource.name}" was converted to a static table`)],
     degraded: true,
+    semanticallyEmpty: false,
     metrics: {...document.metrics, tables: document.metrics.tables + grids.length},
   };
 }
@@ -451,21 +554,135 @@ async function htmlToMarkdown(html: string): Promise<string> {
   return `${String(result).trimEnd()}\n`;
 }
 
+function linearizeLayoutsForMarkdown(html: string): {html: string; layouts: number} {
+  const $ = load(html, null, false);
+  let layouts = 0;
+  $('section.ywtc-layout').toArray().reverse().forEach((layout) => {
+    const sourceSections = $(layout).children('section.ywtc-layout-section').toArray();
+    if (sourceSections.some((section) => $(section).children('.ywtc-layout-cell').length > 1)) layouts += 1;
+    const sections = sourceSections.map((section) => {
+      const cells = $(section).children('.ywtc-layout-cell').toArray();
+      if (cells.length <= 1) return cells.map((cell) => $(cell).html() ?? '').join('');
+      return cells.map((cell, index) => `<section class="ywtc-layout-linear-cell"><h3>Column ${index + 1}</h3>${$(cell).html() ?? ''}</section>`).join('');
+    }).join('');
+    $(layout).replaceWith(sections);
+  });
+  return {html: $.html(), layouts};
+}
+
+interface YfmSemanticResult {
+  body: string;
+  warnings: string[];
+}
+
+async function semanticHtmlToYfm(html: string): Promise<YfmSemanticResult> {
+  const warnings = new Set<string>();
+  let tokenSequence = 0;
+  const convert = async (fragment: string): Promise<string> => {
+    const $ = load(fragment, null, false);
+    const tokens = new Map<string, string>();
+    const selector = 'section.ywtc-layout,details.ywtc-expand,aside.ywtc-note,nav.ywtc-children,ul.ywtc-task-list,span.ywtc-anchor';
+    const elements = $(selector).filter((_index, element) => $(element).parents(selector).length === 0).toArray().reverse();
+    for (const element of elements) {
+      const item = $(element);
+      let rendered = '';
+      if (item.is('section.ywtc-layout')) {
+        const sections: string[] = [];
+        for (const section of item.children('section.ywtc-layout-section').toArray()) {
+          const sectionItem = $(section);
+          const sectionType = sectionItem.attr('data-ywtc-layout-type') ?? 'unsupported';
+          if (['two_left_sidebar', 'two_right_sidebar', 'three_with_sidebars', 'unsupported'].includes(sectionType)) {
+            warnings.add(`Confluence ${sectionType} layout widths were converted to equal YFM columns`);
+          }
+          const blocks: string[] = [];
+          for (const cell of sectionItem.children('.ywtc-layout-cell').toArray()) {
+            const body = (await convert($(cell).html() ?? '')).trim();
+            blocks.push(`{% block %}\n\n${body}\n\n{% endblock %}`);
+          }
+          sections.push(`{% layout %}\n\n${blocks.join('\n\n')}\n\n{% endlayout %}`);
+        }
+        rendered = sections.join('\n\n');
+      } else if (item.is('details.ywtc-expand')) {
+        const title = item.attr('data-ywtc-title') ?? (item.children('summary').first().text().trim() || 'Details');
+        const clone = item.clone();
+        clone.children('summary').first().remove();
+        rendered = `{% cut "${title.replaceAll('"', '\\"')}" %}\n\n${(await convert(clone.html() ?? '')).trim()}\n\n{% endcut %}`;
+      } else if (item.is('aside.ywtc-note')) {
+        const rawType = item.attr('data-ywtc-note-type') ?? 'info';
+        const type = rawType === 'note' ? 'info' : rawType;
+        const title = item.attr('data-ywtc-title')?.trim();
+        rendered = `{% note ${type}${title ? ` "${title.replaceAll('"', '\\"')}"` : ''} %}\n\n${(await convert(item.html() ?? '')).trim()}\n\n{% endnote %}`;
+      } else if (item.is('nav.ywtc-children')) {
+        const depth = item.attr('data-ywtc-depth');
+        const sort = item.attr('data-ywtc-sort');
+        const reverse = item.attr('data-ywtc-reverse') === 'true';
+        const attributes = [
+          depth ? `depth="${depth}"` : '',
+          sort === 'title' ? 'sort_by="title"' : '',
+          sort === 'title' ? `sort="${reverse ? 'desc' : 'asc'}"` : '',
+        ].filter(Boolean).join(' ');
+        rendered = `{% tree${attributes ? ` ${attributes}` : ''} %}`;
+      } else if (item.is('ul.ywtc-task-list')) {
+        const tasks: string[] = [];
+        for (const task of item.children('li.ywtc-task').toArray()) {
+          const marker = $(task).attr('data-ywtc-task-status') === 'complete' ? 'x' : ' ';
+          const body = (await convert($(task).html() ?? '')).trim().replace(/\n/g, '\n  ');
+          tasks.push(`- [${marker}] ${body}`);
+        }
+        rendered = tasks.join('\n');
+      } else if (item.is('span.ywtc-anchor')) {
+        const id = item.attr('id');
+        rendered = id ? `<a id="${escapeHtml(id)}"></a>` : '';
+      }
+      const token = `YWTCBLOCKTOKEN${tokenSequence++}END`;
+      tokens.set(token, rendered);
+      item.replaceWith(`<p>${token}</p>`);
+    }
+    let markdown = await htmlToMarkdown($.html());
+    for (const [token, rendered] of tokens) markdown = markdown.replaceAll(token, rendered);
+    return markdown.trim();
+  };
+  return {body: `${await convert(html)}\n`, warnings: [...warnings]};
+}
+
 async function sanitizeHtml(html: string): Promise<string> {
+  const parsed = load(html, null, false);
+  parsed('[class]').each((_index, element) => {
+    const safeClasses = String(parsed(element).attr('class') ?? '').split(/\s+/).filter((value) => /^ywtc-[\w-]+$/.test(value));
+    if (safeClasses.length > 0) parsed(element).attr('class', safeClasses.join(' '));
+    else parsed(element).removeAttr('class');
+  });
   const schema: SanitizeSchema = {
     ...defaultSchema,
     tagNames: [...(defaultSchema.tagNames ?? []), 'aside', 'details', 'summary'],
     attributes: {
       ...defaultSchema.attributes,
-      '*': [...(defaultSchema.attributes?.['*'] ?? []), ['className', /^ywtc-[\w-]+$/]],
+      '*': [...(defaultSchema.attributes?.['*'] ?? []), 'className'],
+      section: [...(defaultSchema.attributes?.section ?? []).filter((attribute) => !(Array.isArray(attribute) && attribute[0] === 'className')), 'className'],
     },
   };
-  const result = await unified().use(rehypeParse, {fragment: true}).use(rehypeSanitize, schema).use(rehypeStringify).process(html);
+  const result = await unified().use(rehypeParse, {fragment: true}).use(rehypeSanitize, schema).use(rehypeStringify).process(parsed.html());
   return String(result);
 }
 
+function normalizedNodeHtml(node: NormalizedNode): string {
+  if (node.type === 'html') return node.value ?? '';
+  if (node.type === 'layout-cell') return `<div class="ywtc-layout-cell">${(node.children ?? []).map(normalizedNodeHtml).join('')}</div>`;
+  if (node.type === 'layout-section') {
+    const cells = node.children ?? [];
+    const type = node.layout?.sectionType ?? 'unsupported';
+    const gap = node.layout?.gap ? ` ywtc-layout-gap-${node.layout.gap.replace(/[^a-z0-9_-]/gi, '')}` : '';
+    return `<section class="ywtc-layout-section ywtc-layout-${type} ywtc-layout-columns-${cells.length}${gap}" data-ywtc-layout-type="${type}">${cells.map(normalizedNodeHtml).join('')}</section>`;
+  }
+  if (node.type === 'layout') {
+    return `<section class="ywtc-layout" data-ywtc-layout-source="${node.layout?.source ?? 'yandex-wiki'}">${(node.children ?? []).map(normalizedNodeHtml).join('')}</section>`;
+  }
+  return '';
+}
+
 function htmlFromDocument(document: NormalizedDocument): string {
-  return document.root.children?.find((node) => node.type === 'html')?.value ?? '<p></p>';
+  const html = document.root.children?.map(normalizedNodeHtml).join('') ?? '';
+  return html || '<p></p>';
 }
 
 export function normalizedPreviewHtml(document: NormalizedDocument): string {
@@ -546,6 +763,7 @@ interface SemanticContent {
   anchors: string[];
   structure: {lists: number; rows: number; details: number; asides: number; codeBlocks: number};
   macros: string[];
+  layouts: string[];
 }
 
 function semanticContent(body: string, provider: SourcePage['provider']): SemanticContent {
@@ -554,7 +772,7 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
   $('script,style').remove();
   $('h1,h2,h3,h4,h5,h6,p,div,span').each((_index, element) => {
     const node = $(element);
-    if (!semanticText(node.text()) && node.find('img,table,pre,code,a[href]').length === 0) node.remove();
+    if (!semanticText(node.text()) && node.find('img,table,pre,code,a[href],[id],a[name]').length === 0 && !node.is('[id],a[name]')) node.remove();
   });
   const textValues = (selector: string): string[] => $(selector).toArray().map((element) => semanticText($(element).text()));
   const macroNames: string[] = [];
@@ -569,6 +787,23 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
       macroNames.push(`${name}[${parameters.join(',')}]`);
     });
   }
+  const layouts = $('.ywtc-layout').toArray().flatMap((layout, layoutIndex) => $(layout).children('.ywtc-layout-section').toArray().flatMap((section, sectionIndex) => {
+    const item = $(section);
+    const cells = item.children('.ywtc-layout-cell').toArray().map((cell) => {
+      const value = $(cell);
+      const signature = [
+        semanticText(value.text()),
+        `links=${value.find('a[href]').length}`,
+        `images=${value.find('img').length}`,
+        `tables=${value.find('table').length}`,
+        `code=${value.find('pre,code').length}`,
+        `anchors=${value.find('[id],a[name]').length}`,
+      ].join('|');
+      return signature === '|links=0|images=0|tables=0|code=0|anchors=0' ? '' : signature;
+    });
+    if (cells.every((cell) => !cell)) return [];
+    return [`${layoutIndex}:${sectionIndex}:${item.attr('data-ywtc-layout-type') ?? 'unsupported'}:${cells.join('::')}`];
+  }));
   return {
     text: semanticText($.root().text()),
     headings: $('h1,h2,h3,h4,h5,h6').toArray().map((element) => `${element.tagName}:${semanticText($(element).text())}`),
@@ -587,7 +822,22 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
       codeBlocks: $('pre').length,
     },
     macros: macroNames.sort(),
+    layouts,
   };
+}
+
+function semanticContentIsEmpty(content: SemanticContent): boolean {
+  return !content.text
+    && content.headings.length === 0
+    && content.listItems.length === 0
+    && content.tableCells.length === 0
+    && content.code.length === 0
+    && content.links.length === 0
+    && content.images.length === 0
+    && content.anchors.length === 0
+    && content.macros.length === 0
+    && content.layouts.length === 0
+    && Object.values(content.structure).every((count) => count === 0);
 }
 
 export function semanticContentFingerprint(body: string, provider: SourcePage['provider']): string {
@@ -606,12 +856,18 @@ export function verifyDestinationContent(
   page: SourcePage,
 ): ContentVerificationResult {
   if (actualBody === undefined) return {status: 'failed', differences: [`Verification could not read destination content for ${page.title}`]};
-  if (actualBody.trim().length === 0) return {status: 'failed', differences: [`Verification found empty destination content for ${page.title}`]};
   if (isLegacyTransferPlaceholder(actualBody, provider, page)) {
     return {status: 'failed', differences: [`Verification found a transfer placeholder instead of source content for ${page.title}`]};
   }
   const expected = semanticContent(expectedBody, provider);
   const actual = semanticContent(actualBody, provider);
+  const expectedEmpty = semanticContentIsEmpty(expected);
+  const actualEmpty = semanticContentIsEmpty(actual);
+  if (expectedEmpty && actualEmpty) return {status: 'complete', differences: []};
+  if (!expectedEmpty && actualEmpty) return {status: 'failed', differences: [`Verification found empty destination content for ${page.title}`]};
+  if (expectedEmpty && !actualEmpty) {
+    return {status: 'failed', differences: [`Verification found unexpected destination content for semantically empty source page ${page.title}`]};
+  }
   const differs = (key: keyof SemanticContent): boolean => JSON.stringify(expected[key]) !== JSON.stringify(actual[key]);
   const missingData = (['text', 'tableCells', 'code', 'links', 'images', 'anchors', 'macros'] as const).filter(differs);
   if (missingData.length > 0) {
@@ -620,7 +876,7 @@ export function verifyDestinationContent(
       differences: [`Verification found destination content that differs from the rendered source for ${page.title}: ${missingData.join(', ')}`],
     };
   }
-  const simplifiedFormatting = (['headings', 'listItems', 'imageLabels', 'structure'] as const).filter(differs);
+  const simplifiedFormatting = (['headings', 'listItems', 'imageLabels', 'structure', 'layouts'] as const).filter(differs);
   if (simplifiedFormatting.length > 0) {
     return {
       status: 'partial',
@@ -729,22 +985,40 @@ function renderTreeHtml(context: RenderContext, directive: NonNullable<Normalize
 }
 
 export async function renderMarkdown(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
-  const html = rewritePortableHtml(htmlFromDocument(document), context);
+  if (document.semanticallyEmpty) {
+    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+  }
+  const portable = rewritePortableHtml(htmlFromDocument(document), context);
+  const linearized = linearizeLayoutsForMarkdown(portable);
   const tree = treeDirectiveNodes(document).map((node) => renderTreeMarkdown(context, node.tree ?? {})).filter(Boolean).join('\n\n');
-  const content = await htmlToMarkdown(html);
+  const content = await htmlToMarkdown(linearized.html);
   const body = tree ? `${content.trimEnd()}\n\n${tree}\n` : content;
-  return {body, warnings: [...document.warnings], normalizations: [...(document.normalizations ?? [])], degraded: document.degraded, representedReferences: document.references.length};
+  const layoutWarnings = linearized.layouts > 0 ? [`${linearized.layouts} column layout${linearized.layouts === 1 ? ' was' : 's were'} linearized for portable Markdown`] : [];
+  return {body, warnings: [...document.warnings, ...layoutWarnings], normalizations: [...(document.normalizations ?? [])], degraded: document.degraded || layoutWarnings.length > 0, representedReferences: document.references.length};
 }
 
 export async function renderStaticHtml(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
+  if (document.semanticallyEmpty) {
+    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+  }
   const rewritten = rewritePortableHtml(htmlFromDocument(document), context);
   const content = await sanitizeHtml(rewritten);
   const tree = treeDirectiveNodes(document).map((node) => renderTreeHtml(context, node.tree ?? {})).filter(Boolean).join('');
   const body = `${content}${tree}`;
-  return {body, warnings: [...document.warnings], normalizations: [...(document.normalizations ?? [])], degraded: document.degraded, representedReferences: document.references.length};
+  const unsupportedLayouts: number[] = [];
+  const visit = (node: NormalizedNode): void => {
+    if (node.type === 'layout-section' && node.layout?.sectionType === 'unsupported') unsupportedLayouts.push(node.children?.length ?? 0);
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(document.root);
+  const layoutWarnings = unsupportedLayouts.map((cells) => `Unsupported ${cells}-cell layout was stacked in static HTML without losing cell content`);
+  return {body, warnings: [...document.warnings, ...layoutWarnings], normalizations: [...(document.normalizations ?? [])], degraded: document.degraded || layoutWarnings.length > 0, representedReferences: document.references.length};
 }
 
 export async function renderYfm(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
+  if (document.semanticallyEmpty) {
+    return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+  }
   if (document.rawFormat === 'yfm') {
     let body = document.raw;
     const resourceWarnings = new Set<string>();
@@ -786,11 +1060,20 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
       representedReferences: document.references.length,
     };
   }
-  const body = await htmlToMarkdown(rewritePortableHtml(htmlFromDocument(document), context));
-  return {body, warnings: [...document.warnings, 'Confluence Storage Format was converted to YFM-compatible Markdown'], normalizations: [...(document.normalizations ?? [])], degraded: document.degraded, representedReferences: document.references.length};
+  const converted = await semanticHtmlToYfm(rewritePortableHtml(htmlFromDocument(document), context));
+  return {
+    body: converted.body,
+    warnings: [...document.warnings, ...converted.warnings],
+    normalizations: [...(document.normalizations ?? []), 'Converted supported Confluence Storage Format constructs to native YFM equivalents'],
+    degraded: document.degraded || converted.warnings.length > 0,
+    representedReferences: document.references.length,
+  };
 }
 
 export async function renderConfluenceStorage(document: NormalizedDocument, page: SourcePage, context: RenderContext, spaceKey: string): Promise<RenderedDocument> {
+  if (document.semanticallyEmpty) {
+    return {body: '<p></p>', warnings: [...document.warnings], normalizations: [...document.normalizations], degraded: document.degraded, representedReferences: document.references.length};
+  }
   if (document.rawFormat === 'confluence-storage') {
     const $ = load(`<main data-root>${document.raw}</main>`, {xmlMode: true}, false);
     const warnings = [...document.warnings];
