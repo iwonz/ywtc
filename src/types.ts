@@ -59,6 +59,29 @@ export interface YandexAttachment {
   check_status?: string;
 }
 
+export interface YandexCommentAuthor {
+  id?: string | number;
+  uid?: string;
+  cloud_uid?: string;
+  display_name?: string;
+  name?: string;
+  username?: string;
+  public_name?: string;
+  email?: string;
+}
+
+export interface YandexComment {
+  id: string | number;
+  body?: string;
+  inline_text?: string | null;
+  parent_id?: string | number | null;
+  thread_id?: string | number | null;
+  author?: YandexCommentAuthor | null;
+  created_at?: string;
+  is_deleted?: boolean;
+  resolve_status?: string | null;
+}
+
 export interface YandexGridColumn {
   id?: string;
   slug: string;
@@ -152,6 +175,32 @@ export interface ConfluenceAttachment {
   };
 }
 
+export interface ConfluenceCommentAuthor {
+  accountId?: string;
+  userKey?: string;
+  username?: string;
+  displayName?: string;
+  publicName?: string;
+  email?: string;
+}
+
+export interface ConfluenceComment {
+  id: string;
+  type?: string;
+  status?: string;
+  title?: string;
+  parentCommentId?: string;
+  threadId?: string;
+  createdAt?: string;
+  resolutionStatus?: string;
+  inlineContext?: string;
+  author?: ConfluenceCommentAuthor;
+  version?: {number: number};
+  body?: {storage?: {value: string; representation: string}};
+  children?: ConfluenceComment[];
+  _links?: {webui?: string; self?: string};
+}
+
 export interface ConfluencePlatformInfo {
   deployment: 'data-center' | 'cloud';
   product: string;
@@ -170,6 +219,9 @@ export interface YandexWikiApi {
   createPage(input: {slug: string; title: string; content: string}): Promise<YandexPageDetails>;
   updatePage(input: {id: number; title: string; content: string}): Promise<YandexPageDetails>;
   uploadAttachment(input: {pageId: number; filename: string; path: string; size: number}): Promise<YandexAttachment>;
+  getPageComments(pageId: number): Promise<YandexComment[]>;
+  getCommentThread(pageId: number, commentId: string): Promise<YandexComment[]>;
+  createComment(input: {pageId: number; body: string; inlineText?: string; parentId?: string; threadId?: string}): Promise<YandexComment>;
 }
 
 export interface ConfluenceApi {
@@ -204,4 +256,8 @@ export interface ConfluenceApi {
   getDescendants(pageId: string): Promise<ConfluencePage[]>;
   downloadAttachment(pageId: string, attachment: ConfluenceAttachment, destination: string): Promise<DownloadedFile>;
   pageWebUrl(page: ConfluencePage): string;
+  getPageComments(pageId: string): Promise<ConfluenceComment[]>;
+  getComment(commentId: string): Promise<ConfluenceComment>;
+  createComment(input: {pageId: string; storage: string}): Promise<ConfluenceComment>;
+  updateComment(input: {commentId: string; storage: string; version?: number}): Promise<ConfluenceComment>;
 }

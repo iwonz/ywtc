@@ -89,7 +89,7 @@ async function setup() {
   const source: RemoteLocator = {type: 'remote', profile: sourceProfile, value: 'root'};
   const destination: RemoteLocator = {type: 'remote', profile: destinationProfile, value: '100'};
   const options = {
-    source, destination, scope: 'page' as const, dryRun: false, archive: false, concurrency: 2,
+    source, destination, scope: 'page' as const, dryRun: false, archive: false, comments: false, concurrency: 2,
     runtimeDirectory: path.join(directory, '.states'), cacheDirectory: path.join(directory, '.states/cache'),
     reportsDirectory: path.join(directory, '.states/reports'),
   };

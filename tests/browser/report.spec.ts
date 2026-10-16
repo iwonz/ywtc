@@ -24,6 +24,7 @@ function reportPage(input: Partial<TransferReportPage> & Pick<TransferReportPage
     resourceFallbacks: [],
     warnings: [],
     normalizations: [],
+    comments: {status: 'complete', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0},
     ...input,
   };
 }
@@ -44,6 +45,7 @@ test.beforeAll(async () => {
     sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Knowledge base', status: 'complete', links: 4, images: 1, tables: 1,
     resources: 1, sourceBytes: 8, transferredBytes: 8,
     resourceItems: [{sourceId: 'logo', sourceName: 'logo.png', kind: 'image', status: 'complete', sourceBytes: 8, transferredBytes: 8, destinationName: 'logo.png'}],
+    comments: {status: 'complete', threads: 1, comments: 2, participants: 2, attachments: 1, bytes: 128, archiveName: 'comments.zip', destinationId: 'comment-1', preview: 'Архив комментариев из оригинала'},
   }), {source: '<h1>Knowledge base</h1><p>Source text</p>', destination: '<h1>Knowledge base</h1><p>Destination text</p>'});
   report.addPage(reportPage({
     sourceCanonicalId: 'wiki:2', sourceId: '2', sourceTitle: 'Partial child', status: 'partial', depth: 1, parentId: 'wiki:1', degraded: true,
@@ -65,6 +67,11 @@ for (const viewport of [{name: 'desktop', width: 1440, height: 900}, {name: 'mob
     await expect(page.getByRole('heading', {name: 'Transfer outcomes'})).toBeVisible();
     await expect(page.getByRole('heading', {name: 'Needs attention'})).toBeVisible();
     await expect(page.getByText('accessible in selected scope')).toBeVisible();
+    await expect(page.getByText('1 threads').first()).toBeVisible();
+    const rootDetails = page.locator('details.page').filter({hasText: 'Knowledge base'});
+    await rootDetails.locator(':scope > summary').click();
+    await expect(rootDetails.getByText('comments.zip')).toBeVisible();
+    await expect(rootDetails.getByText('Destination archive preview')).toBeVisible();
     const attention = page.locator('.attention');
     await expect(attention.getByText('Attachment upload was rejected')).toBeVisible();
     await expect(attention.getByText('resource manual.pdf')).toBeVisible();

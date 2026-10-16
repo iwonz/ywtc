@@ -1,7 +1,9 @@
+import {createHash} from 'node:crypto';
 import {mkdtemp, readFile, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
+import {normalizeCommentForest, resolveCommentAttachmentReferences} from '../src/comments.js';
 import type {PageGraph, SourceAdapter, SourcePage, SourceResource} from '../src/domain.js';
 import {FilesystemExporter} from '../src/filesystem-export.js';
 
@@ -21,27 +23,37 @@ describe('transactional filesystem export', () => {
   it('writes a portable HTML site, local attachments, manifest, backup, and ZIP', async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-'));
     const output = path.join(temporary, 'site');
-    const resources = new Map<string, SourceResource[]>([[root.canonicalId, [{provider: 'yandex-wiki', id: 'a', pageId: '1', name: 'image.png', size: 5, mimeType: 'image/png', kind: 'image'}]], [child.canonicalId, []]]);
+    const resources = new Map<string, SourceResource[]>([[root.canonicalId, [{provider: 'yandex-wiki', id: 'a', pageId: '1', name: 'image.png', referenceAliases: ['image.png'], size: 5, mimeType: 'image/png', kind: 'image'}]], [child.canonicalId, []]]);
+    const comments = normalizeCommentForest([
+      {id: 'c1', author: {providerId: 'u1', displayName: 'Иван'}, createdAt: '2026-01-01', body: 'Смотрите [image](image.png)'},
+      {id: 'c2', parentId: 'c1', author: {providerId: 'u2', username: 'anna'}, body: 'Ответ'},
+    ], 'yfm');
+    resolveCommentAttachmentReferences(comments, resources.get(root.canonicalId)!);
+    const commentsByPage = new Map([[root.canonicalId, comments]]);
     const source = {
       listResources: async (page: SourcePage) => resources.get(page.canonicalId) ?? [],
       downloadResource: async (_resource: SourceResource, destination: string) => {
         await writeFile(destination, 'hello');
-        return {path: destination, size: 5, sha256: 'hash', mimeType: 'image/png'};
+        return {path: destination, size: 5, sha256: createHash('sha256').update('hello').digest('hex'), mimeType: 'image/png'};
       },
     } as unknown as SourceAdapter;
     const exporter = new FilesystemExporter(source, 2);
-    const first = await exporter.export({graph, directory: output, format: 'html', identity: 'id', archive: true, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources});
+    const first = await exporter.export({graph, directory: output, format: 'html', identity: 'id', archive: true, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources, commentsByPage});
     expect(first.archive).toMatch(/\.zip$/);
     const manifest = JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8')) as Record<string, unknown>;
-    expect(manifest).toMatchObject({tool: 'ywtc', pages: [{title: 'Root'}, {title: 'Child'}]});
+    expect(manifest).toMatchObject({tool: 'ywtc', pages: [{title: 'Root', comments: {status: 'complete', threads: 1, comments: 2, attachments: 1}}, {title: 'Child'}]});
     expect(manifest).not.toHaveProperty('schemaVersion');
-    expect(await readFile(path.join(output, 'index.html'), 'utf8')).toContain('pages/child-');
-    const second = await exporter.export({graph, directory: output, format: 'html', identity: 'id', archive: false, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources});
+    const html = await readFile(path.join(output, 'index.html'), 'utf8');
+    expect(html).toContain('pages/child-');
+    expect(html).toContain('<section class="ywtc-comments">');
+    expect(html).toContain('<details>');
+    const second = await exporter.export({graph, directory: output, format: 'html', identity: 'id', archive: false, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources, commentsByPage});
     expect(second.backup).toContain('.backup-');
     const markdownOutput = path.join(temporary, 'markdown');
-    await exporter.export({graph, directory: markdownOutput, format: 'markdown', identity: 'markdown-id', archive: false, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources});
+    await exporter.export({graph, directory: markdownOutput, format: 'markdown', identity: 'markdown-id', archive: false, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources, commentsByPage});
     expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toMatch(/pages\/child-[a-f0-9]+\.md/);
     expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toContain('attachments/root-');
+    expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toContain('## Комментарии');
   });
 
   it('does not write a destination during dry-run', async () => {

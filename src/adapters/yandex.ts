@@ -4,7 +4,10 @@ import type {YandexConnectionProfile} from '../config.js';
 import {extractPageReferences, resolveYandexReferenceSlug} from '../content-model.js';
 import type {
   AdapterCapabilities,
+  CommentAuthor,
+  CommentInventory,
   DestinationAdapter,
+  DestinationComment,
   DestinationContainer,
   DestinationPage,
   PageReference,
@@ -14,6 +17,7 @@ import type {
   SourceResource,
   UploadedResource,
 } from '../domain.js';
+import {normalizeCommentForest} from '../comments.js';
 import {HttpRequestError} from '../http.js';
 import {normalizeWikiSlug, safeFilename} from '../input.js';
 import type {YandexWikiClient} from '../clients/yandex-wiki.js';
@@ -27,6 +31,9 @@ const capabilities: AdapterCapabilities = {
   writeResources: true,
   verifyWrites: true,
   reparentPages: false,
+  readComments: true,
+  writeComments: true,
+  updateComments: false,
 };
 
 function pageUrl(profile: YandexConnectionProfile, slug: string): string {
@@ -152,6 +159,28 @@ function attachmentResource(profile: YandexConnectionProfile, page: SourcePage, 
   };
 }
 
+function yandexAuthor(value: import('../types.js').YandexComment['author']): CommentAuthor {
+  const providerId = String(value?.id ?? value?.uid ?? value?.cloud_uid ?? value?.username ?? value?.email ?? 'unknown');
+  return {
+    providerId,
+    ...(value?.display_name ?? value?.name ? {displayName: value?.display_name ?? value?.name} : {}),
+    ...(value?.username ? {username: value.username} : {}),
+    ...(value?.public_name ? {publicName: value.public_name} : {}),
+    ...(value?.email ? {email: value.email} : {}),
+  };
+}
+
+function destinationComment(pageId: string, value: import('../types.js').YandexComment): DestinationComment {
+  const body = value.body ?? '';
+  return {
+    id: String(value.id),
+    pageId,
+    body,
+    ...(value.created_at ? {version: value.created_at} : {}),
+    fingerprint: createHash('sha256').update(body).digest('hex'),
+  };
+}
+
 export class YandexAdapter implements SourceAdapter, DestinationAdapter {
   readonly kind = 'yandex-wiki' as const;
   readonly capabilities = capabilities;
@@ -249,6 +278,26 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     return [...attachmentItems, ...gridItems];
   }
 
+  async readComments(page: SourcePage): Promise<CommentInventory> {
+    const topLevel = await this.client.getPageComments(Number(page.id));
+    const all = new Map<string, import('../types.js').YandexComment>();
+    for (const root of topLevel) {
+      all.set(String(root.id), root);
+      const thread = await this.client.getCommentThread(Number(page.id), String(root.id));
+      for (const entry of thread) if (!all.has(String(entry.id))) all.set(String(entry.id), entry);
+    }
+    return normalizeCommentForest([...all.values()].map((entry) => ({
+      id: String(entry.id),
+      ...(entry.parent_id !== undefined && entry.parent_id !== null ? {parentId: String(entry.parent_id)} : {}),
+      ...(entry.thread_id !== undefined && entry.thread_id !== null ? {threadId: String(entry.thread_id)} : {}),
+      author: yandexAuthor(entry.author),
+      ...(entry.created_at ? {createdAt: entry.created_at} : {}),
+      body: entry.body ?? (entry.is_deleted ? '[Комментарий удалён]' : ''),
+      ...(entry.inline_text ? {inlineContext: entry.inline_text} : {}),
+      status: entry.is_deleted ? 'deleted' : /resolved/i.test(entry.resolve_status ?? '') ? 'resolved' : 'open',
+    })), 'yfm');
+  }
+
   downloadResource(resource: SourceResource, destination: string) {
     if (resource.kind === 'grid') throw new Error(`Grid ${resource.name} is normalized as page content and is not downloadable`);
     return this.client.download(Number(resource.pageId), Number(resource.id), destination);
@@ -328,5 +377,26 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
   renderResourceReference(resource: UploadedResource, label: string, image: boolean): string {
     const href = resource.url ?? resource.name;
     return image ? `![${label}](${href})` : `[${label}](${href})`;
+  }
+
+  async findArchiveComment(page: DestinationPage, fingerprint?: string): Promise<DestinationComment | undefined> {
+    const comments = await this.client.getPageComments(Number(page.id));
+    const matches = comments.filter((comment) => (comment.body ?? '').includes('Архив комментариев из'));
+    const match = fingerprint
+      ? matches.find((comment) => (comment.body ?? '').includes(fingerprint))
+      : matches.at(-1);
+    return match ? destinationComment(page.id, match) : undefined;
+  }
+
+  async createArchiveComment(input: {page: DestinationPage; body: string}): Promise<DestinationComment> {
+    return destinationComment(input.page.id, await this.client.createComment({pageId: Number(input.page.id), body: input.body}));
+  }
+
+  async readArchiveComment(input: {page: DestinationPage; commentId: string}): Promise<DestinationComment> {
+    const comments = await this.client.getCommentThread(Number(input.page.id), input.commentId);
+    const found = comments.find((comment) => String(comment.id) === input.commentId)
+      ?? (await this.client.getPageComments(Number(input.page.id))).find((comment) => String(comment.id) === input.commentId);
+    if (!found) throw new Error(`Yandex Wiki comment ${input.commentId} was not found on page ${input.page.id}`);
+    return destinationComment(input.page.id, found);
   }
 }

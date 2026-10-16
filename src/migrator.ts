@@ -18,8 +18,17 @@ import {
   sourceResourceBindings,
   verifyDestinationContent,
 } from './content-model.js';
+import {
+  commentAttachmentUses,
+  createCommentArchiveZip,
+  renderCommentArchive,
+  renderCommentArchiveIndex,
+  resolveCommentAttachmentReferences,
+  verifyCommentArchive,
+} from './comments.js';
 import {ConfirmedDestinationMissingError, type ConsistencyRetryOptions, verifyConfirmedDestinationPage} from './consistency.js';
 import type {
+  CommentInventory,
   DestinationAdapter,
   DestinationContainer,
   DestinationPage,
@@ -36,6 +45,7 @@ import type {
 import {assertTransferCapabilities} from './domain.js';
 import {FilesystemExporter, type FilesystemExportResult} from './filesystem-export.js';
 import {discoverPageGraph} from './graph.js';
+import {safeFilename} from './input.js';
 import type {Logger} from './logger.js';
 import type {DirectoryLocator, RemoteLocator, ResolvedLocator} from './locators.js';
 import {profileBaseUrl, sameRemoteInstance} from './locators.js';
@@ -50,6 +60,7 @@ import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} f
 import {
   resolveStateLocation,
   StateStore,
+  type CommentTransferState,
   type EndpointIdentity,
   type PageTransferState,
   type PageTransferStatus,
@@ -63,6 +74,7 @@ export interface TransferOptions {
   destination: ResolvedLocator;
   scope: TransferScope;
   sourceStatus?: SourceStatus;
+  comments?: boolean;
   dryRun: boolean;
   archive: boolean;
   fresh?: boolean;
@@ -218,6 +230,9 @@ function reportPage(input: {
   resourceStates?: Record<string, ResourceTransferState>;
   resourceStatusOverride?: ResourceTransferState['status'];
   error?: string;
+  commentsEnabled?: boolean;
+  commentInventory?: CommentInventory | undefined;
+  commentState?: CommentTransferState | undefined;
 }): TransferReportPage {
   const transferable = input.resources.filter(
     (resource): resource is SourceResource & {kind: 'attachment' | 'image'} => resource.kind !== 'grid',
@@ -240,6 +255,14 @@ function reportPage(input: {
   });
   const knownBytes = resourceItems.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
   const transferredBytes = resourceItems.reduce((total, resource) => total + (resource.transferredBytes ?? 0), 0);
+  const commentsEnabled = input.commentsEnabled ?? true;
+  const inventory = input.commentInventory;
+  const commentState = input.commentState;
+  const commentStatus = !commentsEnabled
+    ? 'skipped' as const
+    : commentState?.status
+      ?? (inventory?.status === 'failed' ? 'failed' as const : inventory?.status === 'empty' ? 'complete' as const : 'planned' as const);
+  const commentError = commentState?.lastError ?? inventory?.error;
   return {
     sourceCanonicalId: input.page.canonicalId,
     sourceId: input.page.id,
@@ -269,6 +292,20 @@ function reportPage(input: {
     warnings: [...new Set([...input.document.warnings, ...(input.warnings ?? [])])],
     normalizations: [...new Set([...(input.document.normalizations ?? []), ...(input.normalizations ?? [])])],
     ...(input.error ? {error: input.error} : {}),
+    comments: {
+      status: commentStatus,
+      threads: commentState?.threads ?? inventory?.threads.length ?? 0,
+      comments: commentState?.comments ?? inventory?.comments ?? 0,
+      participants: commentState?.participants ?? inventory?.participants ?? 0,
+      attachments: commentState?.attachments ?? inventory?.attachments ?? 0,
+      bytes: commentState?.bytes ?? inventory?.knownBytes ?? 0,
+      ...(commentState?.archiveName ? {archiveName: commentState.archiveName} : {}),
+      ...(commentState?.destinationId ? {destinationId: commentState.destinationId} : {}),
+      ...(commentState?.previousDestinationIds?.length ? {revision: true} : {}),
+      ...(commentState?.status === 'stale' ? {stale: true} : {}),
+      ...(commentError ? {error: commentError} : {}),
+      ...(commentState?.preview ? {preview: commentState.preview} : {}),
+    },
   };
 }
 
@@ -321,11 +358,12 @@ export class Migrator {
 
   async run(options: TransferOptions): Promise<TransferResult> {
     const sourceStatus = options.sourceStatus ?? 'all';
+    const commentsEnabled = options.comments ?? true;
     const source = this.adapterFactory(options.source.profile, this.config);
     const destination = options.destination.type === 'remote'
       ? this.adapterFactory(options.destination.profile, this.config)
       : undefined;
-    assertTransferCapabilities(source, destination, options.scope, sourceStatus);
+    assertTransferCapabilities(source, destination, options.scope, sourceStatus, commentsEnabled);
     const status = options.onStatus ?? (() => undefined);
     status('Checking source and destination capabilities');
     const [sourcePlatform, destinationPlatform, root, container] = await Promise.all([
@@ -349,9 +387,10 @@ export class Migrator {
     const store = new StateStore(stateLocation.filename);
     await store.load(identity, {fresh: options.fresh ?? false, dryRun: options.dryRun});
     if (!options.dryRun) await store.save();
-    const run = await store.beginRun(options.scope, options.dryRun, sourceStatus);
+    const run = await store.beginRun(options.scope, options.dryRun, sourceStatus, commentsEnabled);
     const report = new TransferReport({
       dryRun: options.dryRun,
+      commentsEnabled,
       scope: options.scope,
       sourceStatus,
       direction: `${source.kind} → ${options.destination.type === 'directory' ? options.destination.format : destination!.kind}`,
@@ -421,8 +460,9 @@ export class Migrator {
     }
 
     const resourcesByPage = new Map<string, SourceResource[]>();
+    const commentsByPage = new Map<string, CommentInventory>();
     const inventoryQueue = new PQueue({concurrency: options.concurrency});
-    const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0};
+    const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
     status(`Inspecting content and resources for ${graph.pages.length} pages`);
     const inventoryErrors: string[] = [];
     await Promise.all(graph.pages.map((page) => inventoryQueue.add(async () => {
@@ -431,6 +471,33 @@ export class Migrator {
         const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
         const resources = await source.listResources(page);
         resourcesByPage.set(page.canonicalId, resources);
+        let commentInventory: CommentInventory | undefined;
+        if (commentsEnabled) {
+          try {
+            if (!source.readComments) throw new Error(`${source.profile.name} does not implement comment reads`);
+            commentInventory = await source.readComments(cachedPage);
+            resolveCommentAttachmentReferences(commentInventory, resources);
+            commentsByPage.set(page.canonicalId, commentInventory);
+            inventory.commentThreads += commentInventory.threads.length;
+            inventory.comments += commentInventory.comments;
+            inventory.commentParticipants += commentInventory.participants;
+            inventory.commentAttachments += commentInventory.attachments;
+            inventory.commentBytes += commentInventory.knownBytes;
+            for (const warning of commentInventory.warnings) report.issue({
+              code: `comment-inventory-warning:${warning}`,
+              severity: 'warning',
+              phase: 'inventory',
+              pageId: page.canonicalId,
+              retryable: false,
+              message: `${page.title}: ${warning}`,
+            });
+          } catch (error) {
+            const message = `${page.title}: comments could not be read: ${error instanceof Error ? error.message : String(error)}`;
+            commentInventory = {status: 'failed', threads: [], comments: 0, participants: 0, attachments: 0, knownBytes: 0, unknownSizes: 0, warnings: [], error: message};
+            commentsByPage.set(page.canonicalId, commentInventory);
+            report.issue({code: 'comment-inventory-failed', severity: 'error', phase: 'inventory', pageId: page.canonicalId, retryable: true, message});
+          }
+        }
         const document = appendGridSnapshots(normalizePageContent(cachedPage), resources);
         await cacheDocument(
           options.cacheDirectory,
@@ -450,6 +517,8 @@ export class Migrator {
           status: 'planned',
           resources,
           document,
+          commentsEnabled,
+          ...(commentInventory ? {commentInventory} : {}),
         }), undefined, false);
         status(`Inspected ${page.title} · ${resources.length} resources`);
       } catch (error) {
@@ -466,6 +535,7 @@ export class Migrator {
         });
       }
     })));
+    await store.setRunComments(run.id, {threads: inventory.commentThreads, comments: inventory.comments, attachments: inventory.commentAttachments});
     if (inventoryErrors.length > 0) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       report.finish(finalStatus);
@@ -477,7 +547,7 @@ export class Migrator {
       });
       throw new MigrationRunError('Resource preflight failed before destination mutation', reportPaths, stateLocation.filename);
     }
-    const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks`;
+    const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
     status(planSummary);
     this.logger.info(planSummary);
 
@@ -485,7 +555,7 @@ export class Migrator {
     let archive: string | undefined;
     try {
       if (options.destination.type === 'directory') {
-        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage);
+        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage);
         output = result.directory;
         archive = result.archive;
         report.output('directory', result.directory);
@@ -502,6 +572,7 @@ export class Migrator {
           report,
           sourceFingerprints,
           resourcesByPage,
+          commentsByPage,
         });
         output = container!.url;
         report.output('destination', container!.url);
@@ -554,6 +625,7 @@ export class Migrator {
     report: TransferReport,
     sourceFingerprints: Map<string, string>,
     resourcesByPage: Map<string, SourceResource[]>,
+    commentsByPage: Map<string, CommentInventory>,
   ): Promise<FilesystemExportResult> {
     const exporter = new FilesystemExporter(source, options.concurrency);
     const totalResources = [...resourcesByPage.values()].reduce(
@@ -576,6 +648,8 @@ export class Migrator {
         options.onStatus?.(`Progress ${Math.min(100, Math.floor((processed / total) * 100))}% · ${processed}/${total} · ${message}`);
       }} : {}),
       resourcesByPage,
+      commentsByPage,
+      commentsEnabled: options.comments ?? true,
       loadPage: (page) => loadCachedPage(options.cacheDirectory, page.canonicalId),
       loadDocument: (page) => loadCachedDocument(options.cacheDirectory, page.canonicalId),
     });
@@ -599,7 +673,8 @@ export class Migrator {
         updatedAt: new Date().toISOString(),
       }];
       }));
-      const pageStatus: PageTransferStatus = options.dryRun ? 'planned' : manifestPage?.degraded ? 'partial' : 'complete';
+      const commentIncomplete = manifestPage?.comments && !['complete', 'skipped'].includes(manifestPage.comments.status);
+      const pageStatus: PageTransferStatus = options.dryRun ? 'planned' : manifestPage?.degraded || commentIncomplete ? 'partial' : 'complete';
       await store.setPage({
         sourceId: page.id,
         sourceCanonicalId: page.canonicalId,
@@ -615,6 +690,19 @@ export class Migrator {
         status: pageStatus,
         resources,
         degradations: manifestPage?.warnings ?? [],
+        ...(manifestPage?.comments ? {comments: {
+          status: manifestPage.comments.status,
+          ...(manifestPage.comments.fingerprint ? {fingerprint: manifestPage.comments.fingerprint} : {}),
+          ...(manifestPage.comments.archivePath ? {archivePath: manifestPage.comments.archivePath} : {}),
+          ...(manifestPage.comments.archiveName ? {archiveName: manifestPage.comments.archiveName} : {}),
+          threads: manifestPage.comments.threads,
+          comments: manifestPage.comments.comments,
+          participants: manifestPage.comments.participants,
+          attachments: manifestPage.comments.attachments,
+          bytes: manifestPage.comments.bytes,
+          ...(manifestPage.comments.error ? {lastError: manifestPage.comments.error} : {}),
+          updatedAt: new Date().toISOString(),
+        }} : {}),
         updatedAt: new Date().toISOString(),
       });
       report.addPage(reportPage({
@@ -625,11 +713,347 @@ export class Migrator {
         resourceStates: resources,
         ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
         ...(manifestPage?.warnings ? {warnings: manifestPage.warnings} : {}),
+        commentsEnabled: options.comments ?? true,
+        ...(commentsByPage.get(page.canonicalId) ? {commentInventory: commentsByPage.get(page.canonicalId)} : {}),
+        ...(manifestPage?.comments ? {commentState: {
+          status: manifestPage.comments.status,
+          ...(manifestPage.comments.fingerprint ? {fingerprint: manifestPage.comments.fingerprint} : {}),
+          ...(manifestPage.comments.archivePath ? {archivePath: manifestPage.comments.archivePath} : {}),
+          ...(manifestPage.comments.archiveName ? {archiveName: manifestPage.comments.archiveName} : {}),
+          threads: manifestPage.comments.threads,
+          comments: manifestPage.comments.comments,
+          participants: manifestPage.comments.participants,
+          attachments: manifestPage.comments.attachments,
+          bytes: manifestPage.comments.bytes,
+          ...(manifestPage.comments.error ? {lastError: manifestPage.comments.error} : {}),
+          updatedAt: new Date().toISOString(),
+        }} : {}),
       }), {source: normalizedPreviewHtml(document), destination: normalizedPreviewHtml(document)});
+      if (
+        manifestPage?.comments
+        && !['complete', 'skipped', 'planned'].includes(manifestPage.comments.status)
+        && !(manifestPage.comments.status === 'failed' && commentsByPage.get(page.canonicalId)?.status === 'failed')
+        && !(manifestPage.comments.status === 'partial' && (commentsByPage.get(page.canonicalId)?.warnings.length ?? 0) > 0)
+      ) {
+        report.issue({
+          code: `comment-${manifestPage.comments.status}`,
+          severity: manifestPage.comments.status === 'partial' || manifestPage.comments.status === 'stale' ? 'degradation' : 'error',
+          phase: 'comment',
+          pageId: page.canonicalId,
+          retryable: manifestPage.comments.status === 'failed',
+          message: `${page.title}: ${manifestPage.comments.error ?? `comment archive is ${manifestPage.comments.status}`}`,
+        });
+      }
     }
     for (const warning of result.warnings) report.warning(warning);
     for (const error of result.errors) report.error(error);
     return result;
+  }
+
+  private async transferRemoteComments(input: {
+    source: SourceAdapter;
+    destination: DestinationAdapter;
+    page: SourcePage;
+    destinationPage: DestinationPage;
+    inventory: CommentInventory | undefined;
+    resources: SourceResource[];
+    pageState: PageTransferState;
+    cacheDirectory: string;
+    dryRun: boolean;
+    destinationPages: Map<string, DestinationPage>;
+    sourcePages: Map<string, SourcePage>;
+    report: TransferReport;
+    store: StateStore;
+    signal?: AbortSignal;
+  }): Promise<CommentTransferState> {
+    const {source, destination, page, destinationPage, inventory, resources, pageState, report, store} = input;
+    const now = (): string => new Date().toISOString();
+    const counts = {
+      threads: inventory?.threads.length ?? 0,
+      comments: inventory?.comments ?? 0,
+      participants: inventory?.participants ?? 0,
+      attachments: inventory?.attachments ?? 0,
+      bytes: inventory?.knownBytes ?? 0,
+    };
+    if (!inventory) return {status: 'skipped', ...counts, updatedAt: now()};
+    if (inventory.status === 'failed') {
+      return {status: 'failed', ...counts, ...(inventory.error ? {lastError: inventory.error} : {}), updatedAt: now()};
+    }
+    if (inventory.status === 'empty') {
+      if (pageState.comments?.destinationId) {
+        return {...pageState.comments, status: 'stale', lastError: 'Source no longer returns the previously archived comments; the destination archive was preserved.', updatedAt: now()};
+      }
+      return {status: 'complete', ...counts, updatedAt: now()};
+    }
+    const fingerprint = inventory.fingerprint;
+    if (!fingerprint) return {status: 'failed', ...counts, lastError: 'Comment inventory fingerprint is missing', updatedAt: now()};
+    if (input.dryRun) return {status: 'planned', fingerprint, ...counts, updatedAt: now()};
+    if (!destination.createArchiveComment || !destination.readArchiveComment) {
+      return {status: 'failed', fingerprint, ...counts, lastError: `${destination.profile.name} does not implement comment archive writes`, updatedAt: now()};
+    }
+
+    try {
+      if (input.signal?.aborted) throw input.signal.reason ?? new Error('Transfer cancelled');
+      const resourceById = new Map(resources.map((resource) => [resource.id, resource]));
+      const downloads = new Map<string, {path: string; size: number; sha256: string}>();
+      const archiveFiles = [] as Array<{commentId: string; reference: string; originalName: string; path: string; size: number; sha256: string}>;
+      for (const use of commentAttachmentUses(inventory)) {
+        if (input.signal?.aborted) throw input.signal.reason ?? new Error('Transfer cancelled');
+        const resourceId = use.reference.resourceId;
+        if (!resourceId) continue;
+        const resource = resourceById.get(resourceId);
+        if (!resource) continue;
+        let downloaded = downloads.get(resourceId);
+        if (!downloaded) {
+          const resourceState = pageState.resources[resourceId];
+          const filename = containedCachePath(input.cacheDirectory, resourceState?.cachePath)
+            ?? cachePath(input.cacheDirectory, page, resource);
+          const cached = await verifiedCacheFile(filename, resourceState?.sha256 ? {
+            sha256: resourceState.sha256,
+            ...(resourceState.size !== undefined ? {size: resourceState.size} : {}),
+          } : undefined);
+          downloaded = cached ?? await source.downloadResource(resource, filename);
+          downloads.set(resourceId, downloaded);
+        }
+        archiveFiles.push({
+          commentId: use.commentId,
+          reference: use.reference.href,
+          originalName: resource.preferredName ?? resource.name,
+          ...downloaded,
+        });
+      }
+      const zip = await createCommentArchiveZip({
+        pageKey: page.id,
+        fingerprint,
+        files: archiveFiles,
+        destinationDirectory: path.join(input.cacheDirectory, 'comments', sha256(page.canonicalId).slice(0, 16)),
+      });
+      let current: import('./domain.js').DestinationComment | undefined;
+      const previous = pageState.comments;
+      if (previous?.destinationId) {
+        try {
+          current = await destination.readArchiveComment({page: destinationPage, commentId: previous.destinationId});
+        } catch (error) {
+          report.issue({
+            code: 'comment-mapping-missing', severity: 'warning', phase: 'comment', pageId: page.canonicalId,
+            retryable: true, message: `${page.title}: mapped comment ${previous.destinationId} could not be read and will be recreated: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+      current ??= await destination.findArchiveComment?.(destinationPage, fingerprint);
+      if (current && previous?.destinationFingerprint && current.fingerprint !== previous.destinationFingerprint) {
+        const conflict: CommentTransferState = {
+          fingerprint,
+          destinationId: current.id,
+          destinationFingerprint: current.fingerprint,
+          ...counts,
+          ...(previous.archiveResourceId ? {archiveResourceId: previous.archiveResourceId} : {}),
+          ...(previous.archiveName ? {archiveName: previous.archiveName} : {}),
+          ...(previous.archivePath ? {archivePath: previous.archivePath} : {}),
+          ...(previous.archiveSha256 ? {archiveSha256: previous.archiveSha256} : {}),
+          status: 'conflict',
+          lastError: 'Destination comment archive was changed manually and was preserved.',
+          updatedAt: now(),
+        };
+        return conflict;
+      }
+
+      const remoteResources = await destination.listUploadedResources(destinationPage);
+      const remoteMatches = async (
+        remote: (typeof remoteResources)[number],
+        file: {path: string; size: number; sha256: string},
+        trustedMapping: boolean,
+      ): Promise<boolean> => {
+        if (remote.size !== undefined && remote.size !== file.size) return false;
+        if (!destination.downloadUploadedResource) return trustedMapping && (remote.size === undefined || remote.size === file.size);
+        const comparison = `${file.path}.destination-${sha256(remote.id).slice(0, 8)}`;
+        try {
+          const actual = await destination.downloadUploadedResource({page: destinationPage, resource: remote, destination: comparison});
+          return actual.size === file.size && actual.sha256 === file.sha256;
+        } finally {
+          await rm(comparison, {force: true});
+        }
+      };
+      const uploadArchive = async (file: {path: string; name: string; size: number; sha256: string}, mappedId?: string, mimeType?: string) => {
+        const mapped = mappedId ? remoteResources.find((resource) => resource.id === mappedId) : undefined;
+        const byName = remoteResources.find((resource) => resource.name.toLocaleLowerCase() === file.name.toLocaleLowerCase());
+        const reusable = mapped && await remoteMatches(mapped, file, true)
+          ? mapped
+          : byName && await remoteMatches(byName, file, false) ? byName : undefined;
+        if (reusable) return reusable;
+        const extension = path.extname(file.name);
+        const alternativeName = `${file.name.slice(0, file.name.length - extension.length)}-${file.sha256.slice(0, 8)}${extension}`;
+        const alternative = remoteResources.find((resource) => resource.name.toLocaleLowerCase() === alternativeName.toLocaleLowerCase());
+        if (alternative && await remoteMatches(alternative, file, false)) return alternative;
+        const uploadName = mapped || byName ? alternativeName : file.name;
+        return destination.uploadResource({
+          page: destinationPage,
+          name: uploadName,
+          filePath: file.path,
+          size: file.size,
+          ...(mimeType ? {mimeType} : {}),
+        });
+      };
+
+      const archiveResource = zip
+        ? await uploadArchive(zip, previous?.archiveResourceId, 'application/zip')
+        : undefined;
+      if (input.signal?.aborted) throw input.signal.reason ?? new Error('Transfer cancelled');
+      const attachmentNames = new Map<string, string>();
+      if (zip) {
+        const nameByHash = new Map(zip.files.map((entry) => [entry.sha256, entry.archiveName]));
+        for (const [resourceId, downloaded] of downloads) {
+          const name = nameByHash.get(downloaded.sha256);
+          if (name) attachmentNames.set(resourceId, name);
+        }
+      }
+      const render = (presentation: 'native' | 'quote' | 'code', replaces?: string): string => renderCommentArchive(inventory, destination.kind, {
+        sourceUrl: page.url,
+        ...(zip ? {archiveName: archiveResource?.name ?? zip.name, archiveHref: archiveResource?.url ?? archiveResource?.name ?? zip.name} : {}),
+        ...(replaces ? {archiveReplaces: replaces} : {}),
+        attachmentNames,
+        pages: input.destinationPages,
+        sourcePages: input.sourcePages,
+        presentation,
+      });
+      const archiveState = zip ? {
+        ...(archiveResource ? {archiveResourceId: archiveResource.id} : {}),
+        archiveName: archiveResource?.name ?? zip.name,
+        archivePath: zip.path,
+        archiveSha256: zip.sha256,
+      } : {};
+      const replacement = destination.capabilities.updateComments ? undefined : current?.id;
+      let expectedBody = render('native', replacement);
+      let fallbackReason: string | undefined;
+      let fullArchiveState: Pick<CommentTransferState, 'fullArchiveResourceId' | 'fullArchiveName' | 'fullArchivePath' | 'fullArchiveSha256'> = {};
+      const maximumInlineBytes = 1_000_000;
+      const prepareFullArchive = async (reason: string): Promise<void> => {
+        if (fullArchiveState.fullArchiveName) return;
+        const fullBody = renderCommentArchive(inventory, 'markdown', {
+          sourceUrl: page.url,
+          ...(zip ? {archiveName: archiveResource?.name ?? zip.name, archiveHref: archiveResource?.url ?? archiveResource?.name ?? zip.name} : {}),
+          ...(replacement ? {archiveReplaces: replacement} : {}),
+          attachmentNames,
+          pages: input.destinationPages,
+          sourcePages: input.sourcePages,
+        });
+        const fullArchiveName = `ywtc-comments-${safeFilename(page.id)}-${fingerprint.slice(0, 12)}.md`;
+        const fullArchivePath = path.join(input.cacheDirectory, 'comments', sha256(page.canonicalId).slice(0, 16), fullArchiveName);
+        await mkdir(path.dirname(fullArchivePath), {recursive: true, mode: 0o700});
+        await writeFile(fullArchivePath, `${fullBody}\n`, {mode: 0o600});
+        const fullArchiveSha256 = sha256(`${fullBody}\n`);
+        const fullArchiveResource = await uploadArchive({
+          path: fullArchivePath,
+          name: fullArchiveName,
+          size: Buffer.byteLength(`${fullBody}\n`),
+          sha256: fullArchiveSha256,
+        }, previous?.fullArchiveResourceId, 'text/markdown');
+        const destinationFullArchiveName = fullArchiveResource.name;
+        expectedBody = renderCommentArchiveIndex(inventory, destination.kind, {
+          sourceUrl: page.url,
+          fullArchiveName: destinationFullArchiveName,
+          fullArchiveHref: fullArchiveResource.url ?? destinationFullArchiveName,
+          ...(zip ? {archiveName: archiveResource?.name ?? zip.name, archiveHref: archiveResource?.url ?? archiveResource?.name ?? zip.name} : {}),
+        });
+        fullArchiveState = {
+          fullArchiveResourceId: fullArchiveResource.id,
+          fullArchiveName: destinationFullArchiveName,
+          fullArchivePath,
+          fullArchiveSha256,
+        };
+        fallbackReason = reason;
+      };
+      if (Buffer.byteLength(expectedBody) > maximumInlineBytes) {
+        await prepareFullArchive(`Full comment archive exceeded ${maximumInlineBytes} inline bytes and was attached as Markdown.`);
+      }
+      let result = current;
+      const requiresWrite = !result || previous?.fingerprint !== fingerprint;
+      if (requiresWrite) {
+        const write = async (body: string) => {
+          if (input.signal?.aborted) throw input.signal.reason ?? new Error('Transfer cancelled');
+          if (!result || !destination.capabilities.updateComments || !destination.updateArchiveComment) {
+            return destination.createArchiveComment!({page: destinationPage, body});
+          }
+          return destination.updateArchiveComment({comment: result, body});
+        };
+        const presentations = fallbackReason ? [] : ['native', 'quote', 'code'] as const;
+        let lastError: unknown;
+        if (fallbackReason) {
+          result = await write(expectedBody);
+        } else {
+          for (const presentation of presentations) {
+            try {
+              expectedBody = render(presentation, replacement);
+              result = await write(expectedBody);
+              if (presentation !== 'native') fallbackReason = `Destination rejected the native collapsible archive; ${presentation} fallback was used.`;
+              lastError = undefined;
+              break;
+            } catch (error) {
+              lastError = error;
+              const status = (error as {status?: unknown}).status;
+              if (status === 413 || /(?:status[=: ]+413|too large|payload too large)/i.test(error instanceof Error ? error.message : String(error))) {
+                try {
+                  await prepareFullArchive('Destination rejected the inline archive size; the full archive was attached as Markdown.');
+                  result = await write(expectedBody);
+                  lastError = undefined;
+                  break;
+                } catch (fallbackError) {
+                  lastError = fallbackError;
+                }
+              }
+              const reconciled = await destination.findArchiveComment?.(destinationPage, fingerprint);
+              if (reconciled) {
+                result = reconciled;
+                expectedBody = reconciled.body;
+                fallbackReason = presentation === 'native' ? undefined : `Destination accepted the ${presentation} fallback after an ambiguous response.`;
+                lastError = undefined;
+                break;
+              }
+            }
+          }
+          if (lastError) throw lastError;
+        }
+      }
+      if (!result) throw new Error('Destination comment archive was not created');
+      const verified = await destination.readArchiveComment({page: destinationPage, commentId: result.id});
+      const verification = verifyCommentArchive(fullArchiveState.fullArchiveName ? fingerprint : inventory, verified.body, archiveResource?.name);
+      if (fullArchiveState.fullArchiveName && !verified.body.includes(fullArchiveState.fullArchiveName)) {
+        verification.ok = false;
+        verification.differences.push('full Markdown comment archive reference is missing');
+      }
+      if (!verification.ok) throw new Error(`Comment verification failed: ${verification.differences.join('; ')}`);
+      const previousIds = result.id !== current?.id && current
+        ? [...new Set([...(previous?.previousDestinationIds ?? []), current.id])]
+        : previous?.previousDestinationIds;
+      const state: CommentTransferState = {
+        fingerprint,
+        destinationId: verified.id,
+        destinationFingerprint: verified.fingerprint,
+        ...(previousIds?.length ? {previousDestinationIds: previousIds} : {}),
+        ...archiveState,
+        ...fullArchiveState,
+        status: inventory.warnings.length > 0 || fallbackReason ? 'partial' : 'complete',
+        ...counts,
+        preview: verified.body,
+        ...(fallbackReason ? {lastError: fallbackReason} : {}),
+        updatedAt: now(),
+      };
+      pageState.comments = state;
+      await store.setPage({...pageState, comments: state, updatedAt: now()});
+      return state;
+    } catch (error) {
+      if (input.signal?.aborted) throw input.signal.reason ?? error;
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        fingerprint,
+        ...counts,
+        ...(pageState.comments?.destinationId ? {destinationId: pageState.comments.destinationId} : {}),
+        ...(pageState.comments?.destinationFingerprint ? {destinationFingerprint: pageState.comments.destinationFingerprint} : {}),
+        status: /conflict/i.test(message) ? 'conflict' : 'failed',
+        lastError: message,
+        updatedAt: now(),
+      };
+    }
   }
 
   private async transferRemote(input: {
@@ -642,8 +1066,9 @@ export class Migrator {
     report: TransferReport;
     sourceFingerprints: Map<string, string>;
     resourcesByPage: Map<string, SourceResource[]>;
+    commentsByPage: Map<string, CommentInventory>;
   }): Promise<void> {
-    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage} = input;
+    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage} = input;
     const destinationPages = new Map<string, DestinationPage>();
     const stagingFailures = new Map<string, {status: PageTransferStatus; message: string}>();
     const sourcePages = new Map(graph.pages.map((page) => [page.canonicalId, page]));
@@ -652,11 +1077,12 @@ export class Migrator {
       (total, resources) => total + resources.filter((resource) => resource.kind !== 'grid').length,
       0,
     );
-    const progress = {staged: 0, pages: 0, resources: 0};
-    const totalUnits = Math.max(1, graph.pages.length * 2 + totalResources);
+    const totalCommentArchives = (options.comments ?? true) ? graph.pages.length : 0;
+    const progress = {staged: 0, pages: 0, resources: 0, comments: 0};
+    const totalUnits = Math.max(1, graph.pages.length * 2 + totalResources + totalCommentArchives);
     const updateProgress = (active: string): void => {
-      const completed = progress.staged + progress.pages + progress.resources;
-      options.onStatus?.(`Progress ${Math.min(100, Math.floor((completed / totalUnits) * 100))}% · pages ${progress.pages}/${graph.pages.length} · files ${progress.resources}/${totalResources} · ${active}`);
+      const completed = progress.staged + progress.pages + progress.resources + progress.comments;
+      options.onStatus?.(`Progress ${Math.min(100, Math.floor((completed / totalUnits) * 100))}% · pages ${progress.pages}/${graph.pages.length} · files ${progress.resources}/${totalResources} · comments ${progress.comments}/${totalCommentArchives} · ${active}`);
     };
 
     for (const page of graph.pages) {
@@ -705,6 +1131,7 @@ export class Migrator {
         let created: DestinationPage;
         let title = saved?.destinationTitle ?? page.title;
         let resourcesForState = saved?.resources ?? {};
+        let commentsForState = saved?.comments;
         let previousDestinationIds = saved?.previousDestinationIds ?? [];
         let mappingRecovered = false;
         const findTitleConflict = (candidateTitle: string) => destination.findTitleConflict
@@ -797,6 +1224,7 @@ export class Migrator {
             }
             previousDestinationIds = [...new Set([...previousDestinationIds, mapped.id])];
             resourcesForState = resetResourceDestinations(saved.resources);
+            commentsForState = undefined;
             mappingRecovered = true;
             report.issue({
               code: 'destination-mapping-recovered',
@@ -885,6 +1313,7 @@ export class Migrator {
               }
               previousDestinationIds = [...new Set([...previousDestinationIds, oldPage.id])];
               resourcesForState = resetResourceDestinations(saved.resources);
+              commentsForState = undefined;
               mappingRecovered = true;
               report.addHierarchyRepair({
                 sourceCanonicalId: page.canonicalId,
@@ -968,12 +1397,14 @@ export class Migrator {
           ...(created.fingerprint ? {destinationFingerprint: created.fingerprint} : {}),
           status: options.dryRun ? 'planned' : saved?.status ?? 'skeleton-created',
           resources: resourcesForState,
+          ...(commentsForState ? {comments: commentsForState} : {}),
           degradations: saved?.degradations ?? [],
           updatedAt: new Date().toISOString(),
         };
         await store.setPage(next);
         options.onStatus?.(`${options.dryRun ? 'Planned' : 'Staged content for'} ${page.title}`);
       } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason ?? error;
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         const failureStatus: PageTransferStatus = /conflict/i.test(message) ? 'conflict' : 'failed';
         stagingFailures.set(page.canonicalId, {status: failureStatus, message});
@@ -1011,6 +1442,9 @@ export class Migrator {
           document,
           ...(failedState?.resources ? {resourceStates: failedState.resources} : {}),
           ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
+          commentsEnabled: options.comments ?? true,
+          ...(commentsByPage.get(page.canonicalId) ? {commentInventory: commentsByPage.get(page.canonicalId)} : {}),
+          ...(failedState?.comments ? {commentState: failedState.comments} : {}),
           error: currentFailure?.message ?? failedState?.lastError ?? 'Destination page with source-derived content was not created',
         }));
         progress.pages += 1;
@@ -1363,7 +1797,53 @@ export class Migrator {
           const verification = assertDestinationContent(rendered.body, verified.content, destination.kind, cachedPage);
           verificationDegradations = verification.status === 'partial' ? verification.differences : [];
         }
-        const partial = rendered.degraded || resourceProblems.length > 0 || verificationDegradations.length > 0;
+        const commentInventory = commentsByPage.get(page.canonicalId);
+        const commentState = (options.comments ?? true)
+          ? await this.transferRemoteComments({
+            source,
+            destination,
+            page: cachedPage,
+            destinationPage: verified,
+            inventory: commentInventory,
+            resources,
+            pageState: state,
+            cacheDirectory: options.cacheDirectory,
+            dryRun: options.dryRun,
+            destinationPages,
+            sourcePages,
+            report,
+            store,
+            ...(options.signal ? {signal: options.signal} : {}),
+          })
+          : {
+            status: 'skipped' as const,
+            threads: 0,
+            comments: 0,
+            participants: 0,
+            attachments: 0,
+            bytes: 0,
+            updatedAt: new Date().toISOString(),
+          };
+        if (options.comments ?? true) {
+          progress.comments += 1;
+          updateProgress(`comments ${commentState.status} → ${page.title}`);
+        }
+        if (
+          ['failed', 'conflict', 'stale', 'partial'].includes(commentState.status)
+          && !(commentState.status === 'failed' && commentInventory?.status === 'failed')
+          && !(commentState.status === 'partial' && (commentInventory?.warnings.length ?? 0) > 0 && !commentState.lastError)
+        ) {
+          report.issue({
+            code: `comment-${commentState.status}`,
+            severity: commentState.status === 'partial' || commentState.status === 'stale' ? 'degradation' : 'error',
+            phase: 'comment',
+            pageId: page.canonicalId,
+            retryable: commentState.status === 'failed',
+            message: `${page.title}: ${commentState.lastError ?? `comment archive is ${commentState.status}`}`,
+          });
+        }
+        const commentPartial = !['complete', 'skipped', 'planned'].includes(commentState.status);
+        const partial = rendered.degraded || resourceProblems.length > 0 || verificationDegradations.length > 0 || commentPartial;
         const lastResourceProblem = resourceProblems.at(-1);
         const clearedState = {...state};
         delete clearedState.lastError;
@@ -1375,6 +1855,7 @@ export class Migrator {
           destinationTitle: verified.title,
           ...(verified.fingerprint ? {destinationFingerprint: verified.fingerprint} : {}),
           status: options.dryRun ? 'planned' : partial ? 'partial' : 'complete',
+          comments: commentState,
           degradations: [...new Set([...rendered.warnings, ...resourceProblems, ...verificationDegradations])],
           ...(lastResourceProblem ? {lastError: lastResourceProblem} : {}),
           updatedAt: new Date().toISOString(),
@@ -1397,6 +1878,9 @@ export class Migrator {
           resourceFallbacks: fallbackDetails,
           warnings: [...rendered.warnings, ...verificationDegradations],
           normalizations: rendered.normalizations,
+          commentsEnabled: options.comments ?? true,
+          ...(commentInventory ? {commentInventory} : {}),
+          commentState,
         }), {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(verified.content ?? rendered.body, destination.kind)});
       } catch (error) {
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
@@ -1443,6 +1927,9 @@ export class Migrator {
             ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
             resourceFallbacks: fallbackDetails,
             error: message,
+            commentsEnabled: options.comments ?? true,
+            ...(commentsByPage.get(page.canonicalId) ? {commentInventory: commentsByPage.get(page.canonicalId)} : {}),
+            ...(state.comments ? {commentState: state.comments} : {}),
           }),
           actual?.content ? {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(actual.content, destination.kind)} : undefined,
         );

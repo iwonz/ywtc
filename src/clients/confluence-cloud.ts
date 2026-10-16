@@ -10,7 +10,7 @@ import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
 
 interface CloudList<T> {
   results: T[];
@@ -35,6 +35,27 @@ interface CloudSpace {
   id: string;
   key: string;
   name?: string;
+}
+
+interface CloudComment {
+  id: string;
+  status?: string;
+  title?: string;
+  authorId?: string;
+  parentCommentId?: string;
+  createdAt?: string;
+  resolutionStatus?: string;
+  inlineContext?: string;
+  version?: {number: number};
+  body?: {storage?: {value: string; representation: string}; value?: string; representation?: string};
+  _links?: {webui?: string; self?: string};
+}
+
+interface CloudUser {
+  accountId: string;
+  displayName?: string;
+  publicName?: string;
+  email?: string;
 }
 
 function cloudRoot(baseUrl: string): string {
@@ -62,6 +83,7 @@ export class CloudConfluenceClient implements ConfluenceApi {
   private readonly uploadLimit: <T>(task: () => Promise<T>) => Promise<T>;
   private readonly spacesByKey = new Map<string, CloudSpace>();
   private readonly spacesById = new Map<string, CloudSpace>();
+  private readonly usersById = new Map<string, CloudUser>();
 
   constructor(
     config: ConfluenceConnectionProfile,
@@ -281,6 +303,112 @@ export class CloudConfluenceClient implements ConfluenceApi {
       cursor = next ? new URL(next, `${this.baseUrl}/`).searchParams.get('cursor') ?? undefined : undefined;
     } while (cursor);
     return results;
+  }
+
+  private async pagedComments(url: string): Promise<CloudComment[]> {
+    const results: CloudComment[] = [];
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      if (cursor) {
+        if (seen.has(cursor)) throw new Error(`Confluence Cloud comment cursor repeated for ${url}: ${cursor}`);
+        seen.add(cursor);
+      }
+      const response = await this.readLimit(() => this.http.request<CloudList<CloudComment>>({
+        method: 'GET', url, params: {limit: 100, 'body-format': 'storage', ...(cursor ? {cursor} : {})},
+      }));
+      results.push(...response.data.results);
+      const next = response.data._links?.next;
+      cursor = next ? new URL(next, `${this.baseUrl}/`).searchParams.get('cursor') ?? undefined : undefined;
+    } while (cursor);
+    return results;
+  }
+
+  private async resolveUsers(ids: string[]): Promise<void> {
+    const missing = [...new Set(ids.filter((id) => id && !this.usersById.has(id)))];
+    for (let index = 0; index < missing.length; index += 100) {
+      const batch = missing.slice(index, index + 100);
+      const response = await this.readLimit(() => this.http.request<CloudList<CloudUser>>({
+        method: 'GET', url: '/api/v2/users-bulk', params: {'account-ids': batch.join(','), limit: 100},
+      }));
+      for (const user of response.data.results) this.usersById.set(user.accountId, user);
+    }
+  }
+
+  private normalizeComment(comment: CloudComment): ConfluenceComment {
+    const user = comment.authorId ? this.usersById.get(comment.authorId) : undefined;
+    const body = comment.body?.storage
+      ?? (comment.body?.value !== undefined ? {value: comment.body.value, representation: comment.body.representation ?? 'storage'} : undefined);
+    return {
+      id: comment.id,
+      ...(comment.status ? {status: comment.status} : {}),
+      ...(comment.title ? {title: comment.title} : {}),
+      ...(comment.parentCommentId ? {parentCommentId: comment.parentCommentId} : {}),
+      ...(comment.createdAt ? {createdAt: comment.createdAt} : {}),
+      ...(comment.resolutionStatus ? {resolutionStatus: comment.resolutionStatus} : {}),
+      ...(comment.inlineContext ? {inlineContext: comment.inlineContext} : {}),
+      author: {
+        ...(comment.authorId ? {accountId: comment.authorId} : {}),
+        ...(user?.displayName ? {displayName: user.displayName} : {}),
+        ...(user?.publicName ? {publicName: user.publicName} : {}),
+        ...(user?.email ? {email: user.email} : {}),
+      },
+      ...(comment.version ? {version: comment.version} : {}),
+      ...(body ? {body: {storage: body}} : {}),
+      ...(comment._links ? {_links: comment._links} : {}),
+    };
+  }
+
+  async getPageComments(pageId: string): Promise<ConfluenceComment[]> {
+    const collected: CloudComment[] = [];
+    const walk = async (kind: 'footer' | 'inline', comment: CloudComment): Promise<void> => {
+      collected.push(comment);
+      const children = await this.pagedComments(`/api/v2/${kind}-comments/${encodeURIComponent(comment.id)}/children`);
+      for (const child of children) {
+        if (!child.parentCommentId) child.parentCommentId = comment.id;
+        await walk(kind, child);
+      }
+    };
+    const [footer, inline] = await Promise.all([
+      this.pagedComments(`/api/v2/pages/${encodeURIComponent(pageId)}/footer-comments`),
+      this.pagedComments(`/api/v2/pages/${encodeURIComponent(pageId)}/inline-comments`),
+    ]);
+    for (const comment of footer) await walk('footer', comment);
+    for (const comment of inline) await walk('inline', comment);
+    await this.resolveUsers(collected.flatMap((comment) => comment.authorId ? [comment.authorId] : []));
+    const unique = new Map<string, CloudComment>();
+    for (const comment of collected) if (!unique.has(comment.id)) unique.set(comment.id, comment);
+    return [...unique.values()].map((comment) => this.normalizeComment(comment));
+  }
+
+  async getComment(commentId: string): Promise<ConfluenceComment> {
+    const response = await this.readLimit(() => this.http.request<CloudComment>({
+      method: 'GET', url: `/api/v2/footer-comments/${encodeURIComponent(commentId)}`, params: {'body-format': 'storage'},
+    }));
+    if (response.data.authorId) await this.resolveUsers([response.data.authorId]);
+    return this.normalizeComment(response.data);
+  }
+
+  async createComment(input: {pageId: string; storage: string}): Promise<ConfluenceComment> {
+    const response = await this.writeLimit(() => this.http.request<CloudComment>({
+      method: 'POST', url: '/api/v2/footer-comments', headers: {'Content-Type': 'application/json'},
+      data: {pageId: input.pageId, body: {representation: 'storage', value: input.storage}},
+      retryMode: 'never',
+    }));
+    return this.normalizeComment(response.data);
+  }
+
+  async updateComment(input: {commentId: string; storage: string; version?: number}): Promise<ConfluenceComment> {
+    const current = input.version ? undefined : await this.getComment(input.commentId);
+    const version = input.version ?? current?.version?.number;
+    if (!version) throw new Error(`Confluence Cloud comment ${input.commentId} has no version information`);
+    const response = await this.writeLimit(() => this.http.request<CloudComment>({
+      method: 'PUT', url: `/api/v2/footer-comments/${encodeURIComponent(input.commentId)}`,
+      headers: {'Content-Type': 'application/json'},
+      data: {version: {number: version + 1, message: 'Comment archive updated by ywtc'}, body: {representation: 'storage', value: input.storage}},
+      retryMode: 'never',
+    }));
+    return this.normalizeComment(response.data);
   }
 
   async downloadAttachment(pageId: string, attachment: ConfluenceAttachment, destination: string): Promise<DownloadedFile> {

@@ -15,6 +15,7 @@ export interface DoctorResult {
   sourceStatus: SourceStatus;
   links: number;
   warnings: string[];
+  comments: {enabled: boolean; readable: boolean; threads: number; entries: number; destinationWrite: 'supported' | 'unproven' | 'skipped'};
 }
 
 export async function runCapabilityDoctor(
@@ -23,10 +24,11 @@ export async function runCapabilityDoctor(
   destinationLocator: ResolvedLocator,
   scope: TransferScope,
   sourceStatus: SourceStatus = 'all',
+  comments = true,
 ): Promise<DoctorResult> {
   const source = createProviderAdapter(sourceLocator.profile, config);
   const destination = destinationLocator.type === 'remote' ? createProviderAdapter(destinationLocator.profile, config) : undefined;
-  assertTransferCapabilities(source, destination, scope, sourceStatus);
+  assertTransferCapabilities(source, destination, scope, sourceStatus, comments);
   const [sourcePlatform, destinationPlatform, root, container] = await Promise.all([
     source.preflight(),
     destination?.preflight(),
@@ -34,6 +36,16 @@ export async function runCapabilityDoctor(
     destinationLocator.type === 'remote' && destination ? destination.resolveContainer(destinationLocator.value) : undefined,
   ]);
   const graph = await discoverPageGraph({adapter: source, root, scope, sourceStatus});
+  const commentInventory = comments && source.readComments ? await source.readComments(root) : undefined;
+  const commentWarnings = [...(commentInventory?.warnings ?? [])];
+  const destinationCommentWrite = !comments || destinationLocator.type === 'directory'
+    ? 'skipped' as const
+    : destination?.capabilities.writeComments
+      ? 'supported' as const
+      : 'unproven' as const;
+  if (destinationCommentWrite === 'unproven') {
+    commentWarnings.push(`${destination?.profile.name ?? 'Destination'} comment write access cannot be proven read-only; migrate will preserve the page and report a partial result if writing is denied.`);
+  }
   if (
     container
     && destinationLocator.type === 'remote'
@@ -67,6 +79,13 @@ export async function runCapabilityDoctor(
     maximumDepth: graph.selection.maximumDepth,
     sourceStatus: graph.selection.effectiveStatus,
     links: graph.edges.length,
-    warnings: [...sourcePlatform.warnings, ...(destinationPlatform?.warnings ?? []), ...graph.warnings],
+    warnings: [...sourcePlatform.warnings, ...(destinationPlatform?.warnings ?? []), ...graph.warnings, ...commentWarnings],
+    comments: {
+      enabled: comments,
+      readable: !comments || Boolean(commentInventory),
+      threads: commentInventory?.threads.length ?? 0,
+      entries: commentInventory?.comments ?? 0,
+      destinationWrite: destinationCommentWrite,
+    },
   };
 }

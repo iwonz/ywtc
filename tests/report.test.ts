@@ -24,6 +24,7 @@ function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sou
     resourceFallbacks: [],
     warnings: [],
     normalizations: [],
+    comments: {status: 'complete', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0},
     ...input,
   };
 }
@@ -54,6 +55,7 @@ describe('transfer report', () => {
       sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete', links: 3, images: 1, tables: 1,
       resources: 1, sourceBytes: 7, transferredBytes: 7,
       resourceItems: [{sourceId: 'image', sourceName: 'image.png', kind: 'image', status: 'complete', sourceBytes: 7, transferredBytes: 7, destinationName: 'image.png'}],
+      comments: {status: 'complete', threads: 1, comments: 2, participants: 2, attachments: 1, bytes: 512, archiveName: 'comments.zip', destinationId: 'comment-1', preview: 'Архив комментариев из оригинала'},
     }), {source: '<p>private source preview</p>', destination: '<p>private destination preview</p>'});
     report.addPage(page({
       sourceCanonicalId: 'wiki:2', sourceId: '2', sourceTitle: 'Partial child', status: 'partial', depth: 1, parentId: 'wiki:1', degraded: true,
@@ -64,6 +66,7 @@ describe('transfer report', () => {
       ],
       resourceFallbacks: [{name: 'manual.pdf', error: 'upload failed'}],
       warnings: ['Formatting was simplified'],
+      comments: {status: 'partial', threads: 1, comments: 1, participants: 1, attachments: 0, bytes: 0, error: 'quote fallback used'},
     }));
     report.addPage(page({
       sourceCanonicalId: 'wiki:3', sourceId: '3', sourceTitle: 'Inventory failure', status: 'failed', inventoryStatus: 'failed', error: 'resource inventory failed',
@@ -83,6 +86,8 @@ describe('transfer report', () => {
       resources: 3, attachments: 2, resourceImages: 1, resourcesComplete: 1, resourcesFailed: 1, resourcesPlanned: 1,
       sourceBytes: 16, bytes: 7, bytesUnknown: 1, links: 3, images: 1, tables: 1,
       inventoryComplete: false, inventoriedPages: 2, inventoryFailedPages: 1,
+      commentThreads: 2, comments: 3, commentParticipants: 3, commentAttachments: 1, commentBytes: 512,
+      commentStatuses: {complete: 2, partial: 1},
       pageStatuses: {complete: 1, partial: 1, failed: 1},
       resourceStatuses: {complete: 1, failed: 1, planned: 1},
       warnings: 0, degradations: 1, errors: 1,
@@ -107,6 +112,9 @@ describe('transfer report', () => {
     expect(html).toContain('1 degradations');
     expect(html).toContain('Partial child');
     expect(html).toContain('manual.pdf');
+    expect(html).toContain('Page comment archives');
+    expect(html).toContain('comments.zip');
+    expect(html).toContain('Destination archive preview');
     expect(html).toContain('Repeat the same migration to retry this object.');
     expect(html).toContain('Traversal edges are collected only for');
     expect(html).toContain('download="report.json"');
@@ -117,6 +125,8 @@ describe('transfer report', () => {
       sourceStatus: 'current', returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
       resources: 3, resourcesComplete: 1, resourcesFailed: 1, resourcesPlanned: 1,
       inventoryComplete: false, warnings: 0, degradations: 1, errors: 1,
+      commentThreads: 2, comments: 3, commentParticipants: 3, commentAttachments: 1, commentBytes: 512,
+      commentStatuses: {complete: 2, partial: 1},
     });
   });
 

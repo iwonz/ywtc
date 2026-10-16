@@ -17,6 +17,7 @@ export type CliCommand =
     destinationProfile?: string;
     scope: TransferScope;
     sourceStatus: SourceStatus;
+    comments: boolean;
     format?: ExportFormat;
   }
   | {
@@ -27,6 +28,7 @@ export type CliCommand =
     destinationProfile?: string;
     scope: TransferScope;
     sourceStatus: SourceStatus;
+    comments: boolean;
     format?: ExportFormat;
     archive: boolean;
     workdir?: string;
@@ -79,6 +81,8 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('--destination-profile <name>', 'named destination connection')
     .addOption(new Option('--scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
     .addOption(new Option('--source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
+    .option('--comments', 'read and archive page comments (default)', true)
+    .option('--no-comments', 'skip all comment API calls and archive work')
     .addOption(new Option('--format <format>', 'filesystem format').choices(['markdown', 'html']))
     .action((options) => {
       const source = nonEmpty(options.source, '--source');
@@ -91,6 +95,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
         command: 'doctor',
         scope: options.scope as TransferScope,
         sourceStatus: options.sourceStatus as SourceStatus,
+        comments: options.comments,
         ...(workdir ? {workdir} : {}),
         ...(source && destination ? {source, destination} : {}),
         ...(sourceProfile ? {sourceProfile} : {}),
@@ -107,6 +112,8 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('--destination-profile <name>', 'named destination connection')
     .addOption(new Option('--scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
     .addOption(new Option('--source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
+    .option('--comments', 'read and archive page comments (default)', true)
+    .option('--no-comments', 'skip all comment API calls and archive work')
     .addOption(new Option('--format <format>', 'filesystem format').choices(['markdown', 'html']))
     .option('--archive', 'also create a ZIP for filesystem output', false)
     .option('--workdir <path>', 'workspace (configured CWD, then ~/.ywtc)')
@@ -130,6 +137,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
         destination,
         scope: options.scope as TransferScope,
         sourceStatus: options.sourceStatus as SourceStatus,
+        comments: options.comments,
         archive: options.archive,
         dryRun: options.dryRun,
         fresh: options.fresh,

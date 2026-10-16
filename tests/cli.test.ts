@@ -56,7 +56,10 @@ describe('CLI and named profiles', () => {
       scope: 'linked', sourceStatus: 'current', format: 'html', archive: true, dryRun: true, openReport: true, concurrency: 8,
     });
     expect(parseCliArguments(['migrate', '--source', 'root', '--destination', '100'])).toMatchObject({sourceStatus: 'all'});
-    expect(parseCliArguments(['doctor'])).toMatchObject({sourceStatus: 'all'});
+    expect(parseCliArguments(['migrate', '--source', 'root', '--destination', '100'])).toMatchObject({comments: true});
+    expect(parseCliArguments(['migrate', '--source', 'root', '--destination', '100', '--no-comments'])).toMatchObject({comments: false});
+    expect(parseCliArguments(['doctor'])).toMatchObject({sourceStatus: 'all', comments: true});
+    expect(parseCliArguments(['doctor', '--no-comments'])).toMatchObject({comments: false});
     expect(parseCliArguments(['reports', 'list', '--workdir', './workspace'])).toEqual({
       command: 'reports-list', workdir: './workspace',
     });
@@ -76,6 +79,8 @@ describe('CLI and named profiles', () => {
     expect(cliHelp('migrate')).toContain('--scope');
     expect(cliHelp('migrate')).toContain('--source-status');
     expect(cliHelp('doctor')).toContain('--source-status');
+    expect(cliHelp('migrate')).toContain('--no-comments');
+    expect(cliHelp('doctor')).toContain('--no-comments');
     expect(cliHelp('migrate')).toContain('--open-report');
     expect(cliHelp('reports')).toContain('list');
     expect(cliHelp('reports')).toContain('open');

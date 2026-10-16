@@ -1,7 +1,7 @@
 import {stripAnsi} from './content-model.js';
 
 export type IssueSeverity = 'normalization' | 'degradation' | 'warning' | 'error';
-type IssuePhase = 'discovery' | 'inventory' | 'page' | 'resource' | 'verification' | 'report';
+type IssuePhase = 'discovery' | 'inventory' | 'page' | 'resource' | 'comment' | 'verification' | 'report';
 
 export interface MigrationIssue {
   code: string;

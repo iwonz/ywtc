@@ -87,6 +87,63 @@ export interface UploadedResource {
   fingerprint?: string;
 }
 
+export interface CommentAuthor {
+  providerId: string;
+  displayName?: string;
+  username?: string;
+  publicName?: string;
+  email?: string;
+}
+
+export interface CommentAttachmentReference {
+  raw: string;
+  href: string;
+  label?: string;
+  resourceId?: string;
+}
+
+export interface CommentEntry {
+  id: string;
+  parentId?: string;
+  threadId: string;
+  author: CommentAuthor;
+  createdAt?: string;
+  body: string;
+  inlineContext?: string;
+  status?: 'open' | 'resolved' | 'deleted';
+  attachments: CommentAttachmentReference[];
+  links: PageReference[];
+  replies: CommentEntry[];
+}
+
+export interface CommentThread {
+  id: string;
+  root: CommentEntry;
+  participants: CommentAuthor[];
+}
+
+export interface CommentInventory {
+  status: 'complete' | 'empty' | 'failed' | 'skipped';
+  threads: CommentThread[];
+  fingerprint?: string;
+  comments: number;
+  participants: number;
+  attachments: number;
+  knownBytes: number;
+  unknownSizes: number;
+  warnings: string[];
+  error?: string;
+}
+
+export interface DestinationComment {
+  id: string;
+  pageId: string;
+  body: string;
+  version?: string;
+  fingerprint: string;
+  url?: string;
+}
+
 export type RenderResourceBinding =
   | {kind: 'uploaded'; resource: UploadedResource}
   | {kind: 'source'; resource: SourceResource; url?: string}
@@ -100,6 +157,9 @@ export interface AdapterCapabilities {
   writeResources: boolean;
   verifyWrites: boolean;
   reparentPages?: boolean;
+  readComments?: boolean;
+  writeComments?: boolean;
+  updateComments?: boolean;
 }
 
 export interface SourceStatusExclusion {
@@ -129,6 +189,7 @@ export interface SourceAdapter {
   getDescendants(page: SourcePage, options: {status: SourceStatus}): Promise<DescendantDiscovery>;
   resolveReference(from: SourcePage, reference: PageReference): Promise<SourcePage | undefined>;
   listResources(page: SourcePage): Promise<SourceResource[]>;
+  readComments?(page: SourcePage): Promise<CommentInventory>;
   downloadResource(resource: SourceResource, destination: string): Promise<{path: string; size: number; sha256: string; mimeType?: string}>;
 }
 
@@ -161,6 +222,10 @@ export interface DestinationAdapter {
   verifyPage(page: DestinationPage): Promise<DestinationPage>;
   renderPageReference(page: DestinationPage, label: string, anchor?: string): string;
   renderResourceReference(resource: UploadedResource, label: string, image: boolean): string;
+  findArchiveComment?(page: DestinationPage, fingerprint?: string): Promise<DestinationComment | undefined>;
+  createArchiveComment?(input: {page: DestinationPage; body: string}): Promise<DestinationComment>;
+  updateArchiveComment?(input: {comment: DestinationComment; body: string}): Promise<DestinationComment>;
+  readArchiveComment?(input: {page: DestinationPage; commentId: string}): Promise<DestinationComment>;
 }
 
 export type GraphEdgeStatus = 'resolved' | 'external' | 'inaccessible' | 'broken' | 'cycle' | 'unsupported';
@@ -261,6 +326,7 @@ export function assertTransferCapabilities(
   destination: DestinationAdapter | undefined,
   scope: TransferScope,
   sourceStatus: SourceStatus = 'all',
+  comments = true,
 ): void {
   const missing: string[] = [];
   if (!source.capabilities.readPages) missing.push(`${source.profile.name}: read pages`);
@@ -269,6 +335,7 @@ export function assertTransferCapabilities(
   if (destination && !destination.capabilities.writePages) missing.push(`${destination.profile.name}: write pages`);
   if (destination && !destination.capabilities.writeResources) missing.push(`${destination.profile.name}: write resources`);
   if (destination && !destination.capabilities.verifyWrites) missing.push(`${destination.profile.name}: verify writes`);
+  if (comments && source.capabilities.readComments !== true) missing.push(`${source.profile.name}: read comments (or use --no-comments)`);
   if (missing.length > 0) throw new Error(`Selected direction lacks required capabilities: ${missing.join(', ')}.`);
   const supportsSourceStatus = source.supportsSourceStatus?.(scope, sourceStatus) ?? sourceStatus === 'all';
   if (!supportsSourceStatus) {

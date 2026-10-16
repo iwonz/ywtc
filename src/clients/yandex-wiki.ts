@@ -13,6 +13,7 @@ import {RequestRateLimiter} from '../rate-limiter.js';
 import type {
   DownloadedFile,
   YandexAttachment,
+  YandexComment,
   YandexCurrentUser,
   YandexGrid,
   YandexGridSummary,
@@ -59,6 +60,27 @@ const attachmentSchema = z.object({
   id: z.number().int(), name: z.string().min(1), is_downloadable: z.boolean(), download_url: z.string(),
   size: z.union([z.string(), z.number()]), description: z.string().optional(), created_at: z.string().optional(),
   mimetype: z.string().optional(), has_preview: z.boolean().optional(), check_status: z.string().optional(),
+}).passthrough();
+const commentAuthorSchema = z.object({
+  id: z.union([z.string(), z.number()]).optional(),
+  uid: z.string().optional(),
+  cloud_uid: z.string().optional(),
+  display_name: z.string().optional(),
+  name: z.string().optional(),
+  username: z.string().optional(),
+  public_name: z.string().optional(),
+  email: z.string().optional(),
+}).passthrough();
+const commentSchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  body: z.string().optional(),
+  inline_text: z.string().nullable().optional(),
+  parent_id: z.union([z.string(), z.number()]).nullable().optional(),
+  thread_id: z.union([z.string(), z.number()]).nullable().optional(),
+  author: commentAuthorSchema.nullable().optional(),
+  created_at: z.string().optional(),
+  is_deleted: z.boolean().optional(),
+  resolve_status: z.string().nullable().optional(),
 }).passthrough();
 const gridSummarySchema = z.object({id: z.string(), title: z.string(), created_at: z.string().optional()}).passthrough();
 const gridSchema = z.object({
@@ -209,6 +231,18 @@ export class YandexWikiClient implements YandexWikiApi {
     return this.readQueue.add(() => this.paginate<YandexGridSummary>(`/pages/${pageId}/grids`, gridSummarySchema, {order_by: 'created_at'})) as Promise<YandexGridSummary[]>;
   }
 
+  getPageComments(pageId: number): Promise<YandexComment[]> {
+    return this.readQueue.add(() => this.paginate<YandexComment>(`/pages/${pageId}/comments`, commentSchema, {order_by: 'created_at'})) as Promise<YandexComment[]>;
+  }
+
+  getCommentThread(pageId: number, commentId: string): Promise<YandexComment[]> {
+    return this.readQueue.add(() => this.paginate<YandexComment>(
+      `/pages/${pageId}/comments/${encodeURIComponent(commentId)}/thread`,
+      commentSchema,
+      {order_by: 'created_at'},
+    )) as Promise<YandexComment[]>;
+  }
+
   async getGrid(id: string): Promise<YandexGrid> {
     return this.readQueue.add(async () => {
       const response = await this.authenticated.request<YandexGrid>({
@@ -313,5 +347,23 @@ export class YandexWikiClient implements YandexWikiApi {
       const attachment = attached.data.results?.[0];
       return parseResponse(attachmentSchema, attachment, `POST /pages/${input.pageId}/attachments`) as YandexAttachment;
     }) as Promise<YandexAttachment>;
+  }
+
+  async createComment(input: {pageId: number; body: string; inlineText?: string; parentId?: string; threadId?: string}): Promise<YandexComment> {
+    return this.writeQueue.add(async () => {
+      const response = await this.authenticated.request<YandexComment>({
+        method: 'POST',
+        url: `/pages/${input.pageId}/comments`,
+        headers: {'Content-Type': 'application/json'},
+        data: {
+          body: input.body,
+          ...(input.inlineText ? {inline_text: input.inlineText} : {}),
+          ...(input.parentId ? {parent_id: input.parentId} : {}),
+          ...(input.threadId ? {thread_id: input.threadId} : {}),
+        },
+        retryMode: 'never',
+      });
+      return parseResponse(commentSchema, response.data, `POST /pages/${input.pageId}/comments`) as YandexComment;
+    }) as Promise<YandexComment>;
   }
 }

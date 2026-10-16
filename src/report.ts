@@ -3,7 +3,7 @@ import {mkdir, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {DiscoveredPage, GraphEdgeStatus, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
 import {IssueCollector, type IssueInput, type MigrationIssue} from './issues.js';
-import type {PageTransferStatus, ResourceTransferState, RunStatus, StateLoadSource} from './state.js';
+import type {CommentTransferStatus, PageTransferStatus, ResourceTransferState, RunStatus, StateLoadSource} from './state.js';
 
 export type ReportInventoryStatus = 'pending' | 'complete' | 'failed';
 export type ReportResourceStatus = ResourceTransferState['status'];
@@ -47,6 +47,20 @@ export interface TransferReportPage {
   warnings: string[];
   normalizations?: string[];
   error?: string;
+  comments: {
+    status: CommentTransferStatus;
+    threads: number;
+    comments: number;
+    participants: number;
+    attachments: number;
+    bytes: number;
+    archiveName?: string;
+    destinationId?: string;
+    revision?: boolean;
+    stale?: boolean;
+    error?: string;
+    preview?: string;
+  };
 }
 
 export interface TransferReportEdge {
@@ -67,6 +81,7 @@ export interface TransferReportIssue extends MigrationIssue {
 type PageStatusCounts = Record<PageTransferStatus, number>;
 type ResourceStatusCounts = Record<ReportResourceStatus, number>;
 type EdgeStatusCounts = Record<GraphEdgeStatus, number>;
+type CommentStatusCounts = Record<CommentTransferStatus, number>;
 
 export interface TransferReportSummary {
   pages: number;
@@ -106,6 +121,12 @@ export interface TransferReportSummary {
   inventoryComplete: boolean;
   inventoriedPages: number;
   inventoryFailedPages: number;
+  commentThreads: number;
+  comments: number;
+  commentParticipants: number;
+  commentAttachments: number;
+  commentBytes: number;
+  commentStatuses: CommentStatusCounts;
   durationMs?: number;
   pageStatuses: PageStatusCounts;
   resourceStatuses: ResourceStatusCounts;
@@ -118,6 +139,7 @@ export interface TransferReportData {
   finishedAt?: string;
   status: RunStatus;
   dryRun: boolean;
+  commentsEnabled: boolean;
   scope: TransferScope;
   sourceStatus: SourceStatus;
   selection: SourceSelection;
@@ -164,6 +186,7 @@ const pageStatuses: PageTransferStatus[] = [
 ];
 const resourceStatuses: ReportResourceStatus[] = ['planned', 'complete', 'partial', 'failed'];
 const edgeStatuses: GraphEdgeStatus[] = ['resolved', 'external', 'inaccessible', 'broken', 'cycle', 'unsupported'];
+const commentStatuses: CommentTransferStatus[] = ['planned', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped'];
 
 function countRecord<T extends string>(values: readonly T[]): Record<T, number> {
   return Object.fromEntries(values.map((value) => [value, 0])) as Record<T, number>;
@@ -208,6 +231,12 @@ function emptySummary(): TransferReportSummary {
     inventoryComplete: false,
     inventoriedPages: 0,
     inventoryFailedPages: 0,
+    commentThreads: 0,
+    comments: 0,
+    commentParticipants: 0,
+    commentAttachments: 0,
+    commentBytes: 0,
+    commentStatuses: countRecord(commentStatuses),
     pageStatuses: countRecord(pageStatuses),
     resourceStatuses: countRecord(resourceStatuses),
     traversalStatuses: countRecord(edgeStatuses),
@@ -296,6 +325,8 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
     statCard('Transferred bytes', formatBytes(data.summary.bytes), 'confirmed complete files'),
     statCard('Links', data.summary.links, `${data.summary.images} embedded images`),
     statCard('Structured content', data.summary.tables + data.summary.codeBlocks, `${data.summary.tables} tables · ${data.summary.grids} grids · ${data.summary.codeBlocks} code blocks`),
+    statCard('Comments', data.summary.comments, `${data.summary.commentThreads} threads · ${data.summary.commentParticipants} participants`),
+    statCard('Comment files', data.summary.commentAttachments, formatBytes(data.summary.commentBytes)),
   ].join('');
   const excludedRows = data.selection.excluded.map((page) => `<tr><td>${escapeHtml(page.title ?? page.locator)}</td><td><code>${escapeHtml(page.id)}</code></td><td>${escapeHtml(page.status ?? 'non-current')}</td><td>${escapeHtml(page.reason)}</td></tr>`).join('');
   const gapRows = data.selection.hierarchyGaps.map((gap) => `<tr><td><code>${escapeHtml(gap.pageId)}</code></td><td><code>${escapeHtml(gap.missingParentId ?? 'unknown')}</code></td><td><code>${escapeHtml(gap.selectedParentId)}</code></td><td>${escapeHtml(gap.reason)}</td></tr>`).join('');
@@ -305,6 +336,7 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
     : '';
   const pageOutcomeStatuses: PageTransferStatus[] = ['complete', 'partial', 'failed', 'blocked', 'conflict', 'planned', 'discovered', 'skeleton-created'];
   const resourceOutcomeStatuses: ReportResourceStatus[] = ['complete', 'partial', 'failed', 'planned'];
+  const commentOutcomeStatuses: CommentTransferStatus[] = ['complete', 'partial', 'failed', 'conflict', 'stale', 'skipped', 'planned'];
   const attentionIssues = data.issues.filter((issue) => issue.severity !== 'normalization');
   const normalizationIssues = data.issues.filter((issue) => issue.severity === 'normalization');
   const attentionSummary = [
@@ -328,6 +360,7 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
     return `<details id="${escapeHtml(pageAnchor(page.sourceCanonicalId))}" class="page" style="--depth:${Math.min(page.depth, 8)}"${page.status === 'complete' ? '' : ' open'}><summary><span class="status ${statusClass(page.status)}">${escapeHtml(page.status)}</span><strong>${escapeHtml(page.sourceTitle)}</strong><span>${escapeHtml(metrics)}</span></summary>
       <div class="meta"><span>inventory: <strong>${escapeHtml(page.inventoryStatus)}</strong></span><span>depth ${page.depth}</span>${page.parentId ? `<span>parent ${escapeHtml(page.parentId)}</span>` : ''}${source ? `<a href="${escapeHtml(source)}" target="_blank" rel="noreferrer">source</a>` : ''}${destination ? `<a href="${escapeHtml(destination)}" target="_blank" rel="noreferrer">destination</a>` : ''}<span>${escapeHtml(page.sourceCanonicalId)}</span><span>source ${page.sourceBytes === undefined ? 'size unknown' : escapeHtml(formatBytes(page.sourceBytes))} · transferred ${escapeHtml(formatBytes(page.transferredBytes))}${page.bytesUnknown ? ` · ${page.bytesUnknown} unknown` : ''}</span></div>
       ${page.error ? `<div class="callout bad"><strong>Page error</strong><p>${escapeHtml(page.error)}</p></div>` : ''}
+      <div class="callout ${page.comments.status === 'complete' || page.comments.status === 'skipped' ? '' : 'warn'}"><h3>Comments · <span class="status ${statusClass(page.comments.status)}">${escapeHtml(page.comments.status)}</span></h3><p>${page.comments.threads} threads · ${page.comments.comments} entries · ${page.comments.participants} participants · ${page.comments.attachments} archived files · ${escapeHtml(formatBytes(page.comments.bytes))}${page.comments.archiveName ? ` · <strong>${escapeHtml(page.comments.archiveName)}</strong>` : ''}</p>${page.comments.error ? `<p class="bad">${escapeHtml(page.comments.error)}</p>` : ''}${page.comments.preview ? `<details><summary>Destination archive preview</summary><pre>${escapeHtml(page.comments.preview)}</pre></details>` : ''}</div>
       ${pageIssues.length ? `<div><h3>Page issues</h3><ul class="issue-list compact">${pageIssues.map(issueRow).join('')}</ul></div>` : ''}
       ${page.resourceItems.length ? `<div class="table-wrap"><h3>Resources</h3><table><thead><tr><th>Source resource</th><th>Outcome</th><th>Source size</th><th>Transferred</th><th>Destination name</th><th>Problem</th></tr></thead><tbody>${resourceRows}</tbody></table></div>` : '<p class="muted">No transferable resources on this page.</p>'}
       ${preview ? `<div class="compare"><section><h3>Source preview</h3><p class="muted">Normalized source content</p><iframe title="Source preview: ${escapeHtml(page.sourceTitle)}" sandbox srcdoc="${escapeHtml(preview.source)}"></iframe></section><section><h3>Destination preview</h3><p class="muted">Body read back from destination</p><iframe title="Destination preview: ${escapeHtml(page.sourceTitle)}" sandbox srcdoc="${escapeHtml(preview.destination)}"></iframe></section></div>` : '<p class="muted">Destination preview is unavailable because no body was read back.</p>'}
@@ -356,7 +389,7 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
   <div class="run-meta"><span>Started <strong>${escapeHtml(data.startedAt)}</strong></span>${data.finishedAt ? `<span>Finished <strong>${escapeHtml(data.finishedAt)}</strong></span>` : ''}<span>Duration <strong>${escapeHtml(formatDuration(data.summary.durationMs))}</strong></span><span>Inventory <strong class="${data.summary.inventoryComplete ? 'ok' : 'warn'}">${escapeHtml(inventoryState)}</strong></span></div>
   <section class="panel" aria-labelledby="source-title"><div class="section-head"><div><h2 id="source-title">Source scope inventory</h2><p>Root plus ${escapeHtml(data.summary.returnedDescendants)} accessible descendants; ${escapeHtml(data.summary.selectedDescendants)} selected and ${escapeHtml(data.summary.excludedPages)} excluded with source status <code>${escapeHtml(data.sourceStatus)}</code>.</p></div><span class="status ${data.summary.inventoryComplete ? 'ok' : 'warn'}">${data.summary.inventoryComplete ? 'complete' : 'incomplete'}</span></div><div class="stats">${sourceCards}</div></section>
   ${selectionDetails}
-  <section class="panel" aria-labelledby="outcome-title"><div class="section-head"><div><h2 id="outcome-title">Transfer outcomes</h2><p>Every selected page and discovered file is counted in exactly one status.</p></div><span class="count">${data.summary.pages}</span></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${pageOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Pages</th>${statusCells(data.summary.pageStatuses, pageOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${resourceOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Files</th>${statusCells(data.summary.resourceStatuses, resourceOutcomeStatuses)}<td><strong>${data.summary.resources}</strong></td></tr></tbody></table></div></section>
+  <section class="panel" aria-labelledby="outcome-title"><div class="section-head"><div><h2 id="outcome-title">Transfer outcomes</h2><p>Every selected page, discovered file, and page comment archive is counted in exactly one status.</p></div><span class="count">${data.summary.pages}</span></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${pageOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Pages</th>${statusCells(data.summary.pageStatuses, pageOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${resourceOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Files</th>${statusCells(data.summary.resourceStatuses, resourceOutcomeStatuses)}<td><strong>${data.summary.resources}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${commentOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Page comment archives</th>${statusCells(data.summary.commentStatuses, commentOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div></section>
   ${attention}
   <section aria-labelledby="pages-title"><div class="section-head"><div><h2 id="pages-title">Pages</h2><p>Projected hierarchy with exact outcomes, source metrics, resources, issues, and verified previews.</p></div></div>${pageRows || '<p class="empty">No source page was resolved before the run stopped.</p>'}</section>
   <section class="panel" aria-labelledby="links-title"><div class="section-head"><div><h2 id="links-title">Link traversal</h2><p>Traversal evidence used to select pages in linked scope; content link totals are shown in source inventory.</p></div><span class="count">${data.edges.length}</span></div>${traversalBody}</section>
@@ -370,7 +403,7 @@ export class TransferReport {
   private readonly previews = new Map<string, PreviewPair>();
   private readonly issueCollector = new IssueCollector();
 
-  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'sourceStatus' | 'selection' | 'pages' | 'edges' | 'hierarchyRepairs' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'> & {sourceStatus?: SourceStatus}) {
+  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'sourceStatus' | 'commentsEnabled' | 'selection' | 'pages' | 'edges' | 'hierarchyRepairs' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'> & {sourceStatus?: SourceStatus; commentsEnabled?: boolean}) {
     const sourceStatus = input.sourceStatus ?? 'all';
     this.data = {
       runId: randomUUID(),
@@ -396,6 +429,7 @@ export class TransferReport {
       outputs: [],
       summary: emptySummary(),
       ...input,
+      commentsEnabled: input.commentsEnabled ?? true,
     };
   }
 
@@ -424,6 +458,7 @@ export class TransferReport {
         resourceFallbacks: [],
         warnings: [],
         normalizations: [],
+        comments: {status: this.data.commentsEnabled ? 'planned' : 'skipped', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0},
       });
     }
   }
@@ -478,10 +513,12 @@ export class TransferReport {
     const pageStatusCounts = countRecord(pageStatuses);
     const resourceStatusCounts = countRecord(resourceStatuses);
     const traversalStatusCounts = countRecord(edgeStatuses);
+    const commentStatusCounts = countRecord(commentStatuses);
     for (const page of this.data.pages) pageStatusCounts[page.status] += 1;
     const resources = this.data.pages.flatMap((page) => page.resourceItems);
     for (const resource of resources) resourceStatusCounts[resource.status] += 1;
     for (const edge of this.data.edges) traversalStatusCounts[edge.status] += 1;
+    for (const page of this.data.pages) commentStatusCounts[page.comments.status] += 1;
     const started = Date.parse(this.data.startedAt);
     const finished = Date.parse(this.data.finishedAt);
     const sourceBytes = resources.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
@@ -526,6 +563,12 @@ export class TransferReport {
       inventoryComplete: this.data.pages.length > 0 && inventoriedPages === this.data.pages.length,
       inventoriedPages,
       inventoryFailedPages,
+      commentThreads: this.data.pages.reduce((total, page) => total + page.comments.threads, 0),
+      comments: this.data.pages.reduce((total, page) => total + page.comments.comments, 0),
+      commentParticipants: this.data.pages.reduce((total, page) => total + page.comments.participants, 0),
+      commentAttachments: this.data.pages.reduce((total, page) => total + page.comments.attachments, 0),
+      commentBytes: this.data.pages.reduce((total, page) => total + page.comments.bytes, 0),
+      commentStatuses: commentStatusCounts,
       ...(Number.isFinite(started) && Number.isFinite(finished) ? {durationMs: Math.max(0, finished - started)} : {}),
       pageStatuses: pageStatusCounts,
       resourceStatuses: resourceStatusCounts,

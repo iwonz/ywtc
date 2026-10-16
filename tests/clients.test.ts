@@ -207,4 +207,74 @@ describe('provider clients', () => {
     await expect(client.uploadAttachment({pageId: '10', filename: 'file.txt', file: Readable.from('hello'), contentLength: 5})).resolves.toMatchObject({id: 'a'});
     expect(api.isDone()).toBe(true);
   });
+
+  it('reads Yandex comment threads with cursor pagination and creates an archive comment', async () => {
+    const api = nock('https://api.wiki.yandex.net', {reqheaders: {authorization: 'OAuth wiki-token', 'x-org-id': '42'}})
+      .get('/v1/pages/2/comments').query({order_by: 'created_at', page_size: 100})
+      .reply(200, {results: [{id: 10, body: 'Root', author: {uid: 'u1'}}], next_cursor: 'next'})
+      .get('/v1/pages/2/comments').query({order_by: 'created_at', page_size: 100, cursor: 'next'})
+      .reply(200, {results: [{id: 20, body: 'Second', author: {uid: 'u2'}}]})
+      .get('/v1/pages/2/comments/10/thread').query({order_by: 'created_at', page_size: 100})
+      .reply(200, {results: [{id: 10, body: 'Root'}, {id: 11, parent_id: 10, body: 'Reply'}]})
+      .post('/v1/pages/2/comments', {body: 'Archive'})
+      .reply(200, {id: 30, body: 'Archive', author: {uid: 'operator'}});
+    const client = new YandexWikiClient(wiki, 5_000, limits);
+    await expect(client.getPageComments(2)).resolves.toHaveLength(2);
+    await expect(client.getCommentThread(2, '10')).resolves.toHaveLength(2);
+    await expect(client.createComment({pageId: 2, body: 'Archive'})).resolves.toMatchObject({id: 30});
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('reads, creates, updates, and verifies Data Center comments in storage format', async () => {
+    const api = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
+      .get('/confluence/rest/api/content/10/child/comment')
+      .query({start: 0, limit: 100, depth: 'all', expand: 'body.storage,version,history,ancestors,extensions'})
+      .reply(200, {results: [{id: 'c1', type: 'comment', body: {storage: {value: '<p>Root</p>', representation: 'storage'}}, version: {number: 1}, history: {createdBy: {userKey: 'u1', displayName: 'User'}}}], size: 1})
+      .post('/confluence/rest/api/content', (body) => body.type === 'comment' && body.container?.id === '10')
+      .reply(200, {id: 'c2', type: 'comment', body: {storage: {value: '<p>Archive</p>', representation: 'storage'}}, version: {number: 1}})
+      .put('/confluence/rest/api/content/c2', (body) => body.version?.number === 2 && body.type === 'comment')
+      .reply(200, {id: 'c2', type: 'comment', body: {storage: {value: '<p>Updated</p>', representation: 'storage'}}, version: {number: 2}})
+      .get('/confluence/rest/api/content/c2')
+      .query({expand: 'body.storage,version,history,ancestors,extensions'})
+      .reply(200, {id: 'c2', type: 'comment', body: {storage: {value: '<p>Updated</p>', representation: 'storage'}}, version: {number: 2}});
+    const client = new DataCenterConfluenceClient(dc, 5_000, limits);
+    await expect(client.getPageComments('10')).resolves.toMatchObject([{id: 'c1', author: {displayName: 'User'}}]);
+    await expect(client.createComment({pageId: '10', storage: '<p>Archive</p>'})).resolves.toMatchObject({id: 'c2'});
+    await expect(client.updateComment({commentId: 'c2', storage: '<p>Updated</p>', version: 1})).resolves.toMatchObject({version: {number: 2}});
+    await expect(client.getComment('c2')).resolves.toMatchObject({body: {storage: {value: '<p>Updated</p>'}}});
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('reads recursive Cloud footer and inline comments, resolves users, and writes footer archives', async () => {
+    const cloud: ConfluenceConnectionProfile = {
+      name: 'cloud-comments', type: 'confluence', deployment: 'cloud', authType: 'api-token', baseUrl: 'https://comments.atlassian.net',
+      token: 'token', email: 'person@example.com', limits,
+    };
+    const api = nock('https://comments.atlassian.net')
+      .get('/wiki/api/v2/pages/10/footer-comments').query({limit: 100, 'body-format': 'storage'})
+      .reply(200, {results: [{id: 'f1', authorId: 'u1', body: {storage: {value: '<p>Root</p>', representation: 'storage'}}}]})
+      .get('/wiki/api/v2/pages/10/inline-comments').query({limit: 100, 'body-format': 'storage'})
+      .reply(200, {results: []})
+      .get('/wiki/api/v2/footer-comments/f1/children').query({limit: 100, 'body-format': 'storage'})
+      .reply(200, {results: [{id: 'f2', authorId: 'u2', body: {storage: {value: '<p>Reply</p>', representation: 'storage'}}}]})
+      .get('/wiki/api/v2/footer-comments/f2/children').query({limit: 100, 'body-format': 'storage'})
+      .reply(200, {results: []})
+      .get('/wiki/api/v2/users-bulk').query({'account-ids': 'u1,u2', limit: 100})
+      .reply(200, {results: [{accountId: 'u1', displayName: 'One'}, {accountId: 'u2', publicName: 'Two'}]})
+      .post('/wiki/api/v2/footer-comments', {pageId: '10', body: {representation: 'storage', value: '<p>Archive</p>'}})
+      .reply(200, {id: 'a1', version: {number: 1}, body: {storage: {value: '<p>Archive</p>', representation: 'storage'}}})
+      .put('/wiki/api/v2/footer-comments/a1', (body) => body.version?.number === 2)
+      .reply(200, {id: 'a1', version: {number: 2}, body: {storage: {value: '<p>Updated</p>', representation: 'storage'}}})
+      .get('/wiki/api/v2/footer-comments/a1').query({'body-format': 'storage'})
+      .reply(200, {id: 'a1', version: {number: 2}, body: {storage: {value: '<p>Updated</p>', representation: 'storage'}}});
+    const client = new CloudConfluenceClient(cloud, 5_000, limits);
+    await expect(client.getPageComments('10')).resolves.toMatchObject([
+      {id: 'f1', author: {displayName: 'One'}},
+      {id: 'f2', parentCommentId: 'f1', author: {publicName: 'Two'}},
+    ]);
+    await expect(client.createComment({pageId: '10', storage: '<p>Archive</p>'})).resolves.toMatchObject({id: 'a1'});
+    await expect(client.updateComment({commentId: 'a1', storage: '<p>Updated</p>', version: 1})).resolves.toMatchObject({version: {number: 2}});
+    await expect(client.getComment('a1')).resolves.toMatchObject({body: {storage: {value: '<p>Updated</p>'}}});
+    expect(api.isDone()).toBe(true);
+  });
 });

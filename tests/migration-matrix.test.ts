@@ -82,7 +82,7 @@ describe('four remote transfer directions', () => {
         value: destinationProfile.type === 'yandex-wiki' ? `${destinationProfile.webUrl}/archive` : `${destinationProfile.baseUrl}/pages/viewpage.action?pageId=100`,
       };
       const result = await new Migrator(config, createLogger([])).run({
-        source, destination, scope: 'page', dryRun: true, archive: false, concurrency: 2,
+        source, destination, scope: 'page', dryRun: true, archive: false, comments: false, concurrency: 2,
         runtimeDirectory: path.join(directory, '.states'), cacheDirectory: path.join(directory, '.states/cache'),
         reportsDirectory: path.join(directory, '.states/reports'),
       });

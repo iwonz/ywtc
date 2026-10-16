@@ -75,6 +75,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   console.log(`  Destination  ${command.destination}${destination.type === 'remote' ? ` ${paint(90, `[${destination.profile.name}]`)}` : ` ${paint(90, `[${destination.format}]`)}`}`);
   console.log(`  Scope        ${command.scope}`);
   console.log(`  Source state ${command.sourceStatus}`);
+  console.log(`  Comments     ${command.comments ? 'enabled' : 'disabled'}`);
   console.log(`  Mode         ${command.dryRun ? paint(33, 'dry-run · read-only') : paint(35, 'live')}`);
   if (initialized.created.length > 0) console.log(`  Initialized  ${initialized.created.join(', ')}`);
 
@@ -88,6 +89,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
           destination,
           scope: command.scope,
           sourceStatus: command.sourceStatus,
+          comments: command.comments,
           dryRun: command.dryRun,
           archive: command.archive,
           fresh: command.fresh,
@@ -139,6 +141,7 @@ async function migrate(command: Extract<ReturnType<typeof parseCliArguments>, {c
   console.log(`  Pages   ${result.summary.complete} complete · ${result.summary.partial} partial · ${result.summary.failed} failed · ${result.summary.blocked} blocked · ${result.summary.conflicts} conflicts · ${result.summary.unprocessedPages} unprocessed`);
   console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesPlanned} planned · ${result.summary.bytes} transferred bytes`);
   console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
+  console.log(`  Comments ${result.summary.comments} entries · ${result.summary.commentThreads} threads · ${result.summary.commentParticipants} participants · ${result.summary.commentAttachments} files · ${result.summary.commentBytes} bytes`);
   console.log(`  Issues  ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.normalizations} safe normalizations`);
   if (result.output) console.log(`  Output  ${result.output}`);
   if (result.archive) console.log(`  Archive ${result.archive}`);
@@ -204,11 +207,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     });
     validateProfileSecrets(config, [source.profile, ...(destination.type === 'remote' ? [destination.profile] : [])]);
     const {runCapabilityDoctor} = await import('./doctor.js');
-    const result = await runCapabilityDoctor(config, source, destination, command.scope, command.sourceStatus);
+    const result = await runCapabilityDoctor(config, source, destination, command.scope, command.sourceStatus, command.comments);
     console.log(`  Source    ${paint(32, `${result.source.product}${result.source.version ? ` ${result.source.version}` : ''}`)} · ${result.source.title}`);
     console.log(`  Dest      ${paint(32, `${result.destination.product}${result.destination.version ? ` ${result.destination.version}` : ''}`)}`);
     console.log(`  Scope     ${result.pages} pages · ${result.links} links · status ${result.sourceStatus}`);
     console.log(`  Tree      ${result.returnedDescendants} descendants returned · ${result.selectedDescendants} selected · ${result.excludedPages} excluded · depth ${result.maximumDepth}`);
+    console.log(`  Comments  ${result.comments.enabled ? `${result.comments.entries} entries · ${result.comments.threads} threads · destination write ${result.comments.destinationWrite}` : 'disabled'}`);
     for (const warning of result.warnings) console.log(`  ${paint(33, 'Warning')}   ${warning}`);
     return 0;
   }
@@ -241,6 +245,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         console.log(`    source ${report.pages} pages · ${report.hierarchyGaps} hierarchy gaps · ${report.hierarchyRepairs} repaired · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);
         console.log(`    pages ${report.complete} complete · ${report.partial} partial · ${report.failed} failed · ${report.blocked} blocked · ${report.conflicts} conflicts · ${report.unprocessedPages} unprocessed`);
         console.log(`    files ${report.resourcesComplete}/${report.resources} complete · ${report.resourcesPartial} partial · ${report.resourcesFailed} failed · ${report.resourcesPlanned} planned · ${issues}`);
+        console.log(`    comments ${report.comments} entries · ${report.commentThreads} threads · ${report.commentAttachments} files · ${Object.entries(report.commentStatuses).map(([status, count]) => `${count} ${status}`).join(' · ')}`);
         console.log(`    ${report.url}`);
       }
       return 0;

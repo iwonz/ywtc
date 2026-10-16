@@ -100,7 +100,7 @@ describe('migration resource name collisions', () => {
     const options = {
       source: {type: 'remote', profile: sourceProfile, value: 'root'} as RemoteLocator,
       destination: {type: 'remote', profile: destinationProfile, value: '100'} as RemoteLocator,
-      scope: 'page' as const, dryRun: false, archive: false, concurrency: 2,
+      scope: 'page' as const, dryRun: false, archive: false, comments: false, concurrency: 2,
       runtimeDirectory: path.join(directory, '.states'), cacheDirectory: path.join(directory, '.states/cache'),
       reportsDirectory: path.join(directory, '.states/reports'),
     };

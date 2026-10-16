@@ -6,6 +6,7 @@ import type {ExportFormat, GraphEdgeStatus, ProviderKind, SourceSelection, Sourc
 
 export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
 export type RunStatus = 'running' | 'completed' | 'completed-with-warnings' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
+export type CommentTransferStatus = 'planned' | 'complete' | 'partial' | 'failed' | 'conflict' | 'stale' | 'skipped';
 
 export interface EndpointIdentity {
   profile: string;
@@ -40,6 +41,30 @@ export interface ResourceTransferState {
   updatedAt: string;
 }
 
+export interface CommentTransferState {
+  fingerprint?: string;
+  destinationId?: string;
+  destinationFingerprint?: string;
+  previousDestinationIds?: string[];
+  archiveResourceId?: string;
+  archiveName?: string;
+  archivePath?: string;
+  archiveSha256?: string;
+  fullArchiveResourceId?: string;
+  fullArchiveName?: string;
+  fullArchivePath?: string;
+  fullArchiveSha256?: string;
+  status: CommentTransferStatus;
+  threads: number;
+  comments: number;
+  participants: number;
+  attachments: number;
+  bytes: number;
+  preview?: string;
+  lastError?: string;
+  updatedAt: string;
+}
+
 export interface PageTransferState {
   sourceId: string;
   sourceCanonicalId: string;
@@ -55,6 +80,7 @@ export interface PageTransferState {
   destinationFingerprint?: string;
   status: PageTransferStatus;
   resources: Record<string, ResourceTransferState>;
+  comments?: CommentTransferState;
   degradations: string[];
   lastError?: string;
   updatedAt: string;
@@ -83,6 +109,10 @@ export interface StateRun {
   maximumDepth: number;
   warnings: number;
   errors: number;
+  commentsEnabled?: boolean;
+  commentThreads?: number;
+  comments?: number;
+  commentAttachments?: number;
 }
 
 export interface TransferState {
@@ -195,6 +225,30 @@ const resourceStateSchema = z.object({
   updatedAt: z.string(),
 }).strict();
 
+const commentStateSchema = z.object({
+  fingerprint: z.string().optional(),
+  destinationId: z.string().optional(),
+  destinationFingerprint: z.string().optional(),
+  previousDestinationIds: z.array(z.string()).optional(),
+  archiveResourceId: z.string().optional(),
+  archiveName: z.string().optional(),
+  archivePath: z.string().optional(),
+  archiveSha256: z.string().optional(),
+  fullArchiveResourceId: z.string().optional(),
+  fullArchiveName: z.string().optional(),
+  fullArchivePath: z.string().optional(),
+  fullArchiveSha256: z.string().optional(),
+  status: z.enum(['planned', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped']),
+  threads: z.number().int().nonnegative(),
+  comments: z.number().int().nonnegative(),
+  participants: z.number().int().nonnegative(),
+  attachments: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  preview: z.string().optional(),
+  lastError: z.string().optional(),
+  updatedAt: z.string(),
+}).strict();
+
 const pageStateSchema = z.object({
   sourceId: z.string(),
   sourceCanonicalId: z.string(),
@@ -210,6 +264,7 @@ const pageStateSchema = z.object({
   destinationFingerprint: z.string().optional(),
   status: z.enum(['discovered', 'planned', 'skeleton-created', 'complete', 'partial', 'conflict', 'failed', 'blocked']),
   resources: z.record(z.string(), resourceStateSchema),
+  comments: commentStateSchema.optional(),
   degradations: z.array(z.string()),
   lastError: z.string().optional(),
   updatedAt: z.string(),
@@ -238,6 +293,10 @@ const runSchema = z.object({
   maximumDepth: z.number().int().nonnegative().optional().default(0),
   warnings: z.number().int().nonnegative(),
   errors: z.number().int().nonnegative(),
+  commentsEnabled: z.boolean().optional(),
+  commentThreads: z.number().int().nonnegative().optional(),
+  comments: z.number().int().nonnegative().optional(),
+  commentAttachments: z.number().int().nonnegative().optional(),
 }).strict();
 
 const transferStateSchema = z.object({
@@ -337,7 +396,7 @@ export class StateStore {
     return this.info;
   }
 
-  async beginRun(scope: StateRun['scope'], dryRun: boolean, sourceStatus: SourceStatus = 'all'): Promise<StateRun> {
+  async beginRun(scope: StateRun['scope'], dryRun: boolean, sourceStatus: SourceStatus = 'all', commentsEnabled = true): Promise<StateRun> {
     const run: StateRun = {
       id: randomUUID(),
       startedAt: new Date().toISOString(),
@@ -352,10 +411,23 @@ export class StateStore {
       maximumDepth: 0,
       warnings: 0,
       errors: 0,
+      commentsEnabled,
+      commentThreads: 0,
+      comments: 0,
+      commentAttachments: 0,
     };
     this.value.runs.push(run);
     if (!dryRun) await this.save();
     return run;
+  }
+
+  async setRunComments(runId: string, counts: {threads: number; comments: number; attachments: number}): Promise<void> {
+    const run = this.value.runs.find((candidate) => candidate.id === runId);
+    if (!run) throw new Error(`State run ${runId} was not initialized`);
+    run.commentThreads = counts.threads;
+    run.comments = counts.comments;
+    run.commentAttachments = counts.attachments;
+    if (!this.readOnly) await this.save();
   }
 
   async setRunSelection(runId: string, selection: SourceSelection): Promise<void> {

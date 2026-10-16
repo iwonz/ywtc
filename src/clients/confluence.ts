@@ -10,7 +10,7 @@ import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {HttpRequestError, RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
 
 interface ConfluenceList<T> {
   results: T[];
@@ -27,6 +27,46 @@ function firstResult<T>(payload: T | ConfluenceList<T>): T {
     return first;
   }
   return payload as T;
+}
+
+interface DataCenterCommentPayload {
+  id: string;
+  type?: string;
+  status?: string;
+  title?: string;
+  ancestors?: Array<{id: string; type?: string}>;
+  version?: {number: number; when?: string; by?: Record<string, unknown>};
+  history?: {createdDate?: string; createdBy?: Record<string, unknown>};
+  body?: {storage?: {value: string; representation: string}};
+  extensions?: {location?: string; resolutionStatus?: string; inlineProperties?: {originalSelection?: string}; parentCommentId?: string};
+  _links?: {webui?: string; self?: string};
+}
+
+function normalizeComment(comment: DataCenterCommentPayload): ConfluenceComment {
+  const author = comment.history?.createdBy ?? comment.version?.by ?? {};
+  const ancestors = comment.ancestors ?? [];
+  const createdAt = comment.history?.createdDate ?? comment.version?.when;
+  const parent = comment.extensions?.parentCommentId
+    ?? [...ancestors].reverse().find((item) => item.type === 'comment')?.id;
+  return {
+    id: comment.id,
+    ...(comment.type ? {type: comment.type} : {}),
+    ...(comment.status ? {status: comment.status} : {}),
+    ...(comment.title ? {title: comment.title} : {}),
+    ...(parent ? {parentCommentId: parent} : {}),
+    ...(createdAt ? {createdAt} : {}),
+    ...(comment.extensions?.resolutionStatus ? {resolutionStatus: comment.extensions.resolutionStatus} : {}),
+    ...(comment.extensions?.inlineProperties?.originalSelection ? {inlineContext: comment.extensions.inlineProperties.originalSelection} : {}),
+    author: {
+      ...(typeof author.userKey === 'string' ? {userKey: author.userKey} : {}),
+      ...(typeof author.username === 'string' ? {username: author.username} : {}),
+      ...(typeof author.displayName === 'string' ? {displayName: author.displayName} : {}),
+      ...(typeof author.email === 'string' ? {email: author.email} : {}),
+    },
+    ...(comment.version ? {version: {number: comment.version.number}} : {}),
+    ...(comment.body ? {body: comment.body} : {}),
+    ...(comment._links ? {_links: comment._links} : {}),
+  };
 }
 
 type DataCenterConfig = Pick<ConfluenceConnectionProfile, 'baseUrl' | 'token'> & Partial<Pick<ConfluenceConnectionProfile, 'deployment' | 'authType' | 'name'>>;
@@ -310,6 +350,70 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         start += size;
       }
       return results;
+    });
+  }
+
+  async getPageComments(pageId: string): Promise<ConfluenceComment[]> {
+    return this.readLimit(async () => {
+      const results: ConfluenceComment[] = [];
+      let start = 0;
+      while (true) {
+        const response = await this.http.request<ConfluenceList<DataCenterCommentPayload>>({
+          method: 'GET',
+          url: `/rest/api/content/${encodeURIComponent(pageId)}/child/comment`,
+          params: {start, limit: 100, depth: 'all', expand: 'body.storage,version,history,ancestors,extensions'},
+        });
+        results.push(...response.data.results.map(normalizeComment));
+        const size = response.data.size ?? response.data.results.length;
+        if (!response.data._links?.next || size === 0) break;
+        start += size;
+      }
+      return results;
+    });
+  }
+
+  async getComment(commentId: string): Promise<ConfluenceComment> {
+    return this.readLimit(async () => {
+      const response = await this.http.request<DataCenterCommentPayload>({
+        method: 'GET', url: `/rest/api/content/${encodeURIComponent(commentId)}`,
+        params: {expand: 'body.storage,version,history,ancestors,extensions'},
+      });
+      return normalizeComment(response.data);
+    });
+  }
+
+  async createComment(input: {pageId: string; storage: string}): Promise<ConfluenceComment> {
+    return this.writeLimit(async () => {
+      const response = await this.http.request<DataCenterCommentPayload>({
+        method: 'POST', url: '/rest/api/content', headers: {'Content-Type': 'application/json'},
+        data: {
+          type: 'comment',
+          container: {id: input.pageId, type: 'page'},
+          body: {storage: {value: input.storage, representation: 'storage'}},
+        },
+        retryMode: 'never',
+      });
+      return normalizeComment(response.data);
+    });
+  }
+
+  async updateComment(input: {commentId: string; storage: string; version?: number}): Promise<ConfluenceComment> {
+    return this.writeLimit(async () => {
+      const current = input.version ? undefined : await this.getComment(input.commentId);
+      const version = input.version ?? current?.version?.number;
+      if (!version) throw new Error(`Confluence comment ${input.commentId} has no version information`);
+      const response = await this.http.request<DataCenterCommentPayload>({
+        method: 'PUT', url: `/rest/api/content/${encodeURIComponent(input.commentId)}`,
+        headers: {'Content-Type': 'application/json'},
+        data: {
+          id: input.commentId,
+          type: 'comment',
+          version: {number: version + 1, minorEdit: true, message: 'Comment archive updated by ywtc'},
+          body: {storage: {value: input.storage, representation: 'storage'}},
+        },
+        retryMode: 'never',
+      });
+      return normalizeComment(response.data);
     });
   }
 

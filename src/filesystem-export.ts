@@ -7,7 +7,9 @@ import {ZipArchive} from '@archiver/archiver';
 import PQueue from 'p-queue';
 import {z} from 'zod';
 import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml, setSourceResourceBinding, sourceResourceBindings} from './content-model.js';
-import type {ExportFormat, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
+import {commentAttachmentUses, createCommentArchiveZip, renderCommentArchive} from './comments.js';
+import type {CommentInventory, ExportFormat, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
+import type {CommentTransferStatus} from './state.js';
 import {DestinationNameAllocator} from './resource-reconciliation.js';
 
 export interface ExportManifestPage {
@@ -19,6 +21,18 @@ export interface ExportManifestPage {
   resources: Array<{name: string; path: string; size?: number; sha256?: string}>;
   degraded: boolean;
   warnings: string[];
+  comments: {
+    status: CommentTransferStatus;
+    threads: number;
+    comments: number;
+    participants: number;
+    attachments: number;
+    bytes: number;
+    fingerprint?: string;
+    archiveName?: string;
+    archivePath?: string;
+    error?: string;
+  };
 }
 
 export interface ExportManifest {
@@ -44,6 +58,18 @@ const manifestPageSchema = z.object({
   }).strict()),
   degraded: z.boolean(),
   warnings: z.array(z.string()),
+  comments: z.object({
+    status: z.enum(['planned', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped']),
+    threads: z.number().int().nonnegative(),
+    comments: z.number().int().nonnegative(),
+    participants: z.number().int().nonnegative(),
+    attachments: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+    fingerprint: z.string().optional(),
+    archiveName: z.string().optional(),
+    archivePath: z.string().optional(),
+    error: z.string().optional(),
+  }).strict(),
 }).strict();
 
 const exportManifestSchema = z.object({
@@ -123,6 +149,7 @@ async function verifyGeneratedTree(directory: string, manifest: ExportManifest):
     '.ywtc-export.json',
     ...(manifest.format === 'html' ? ['assets/site.css'] : []),
     ...manifest.pages.flatMap((page) => [page.path, ...page.resources.map((resource) => resource.path)]),
+    ...manifest.pages.flatMap((page) => page.comments.archivePath ? [page.comments.archivePath] : []),
   ];
   await Promise.all(expected.map((relative) => access(path.join(directory, relative))));
   for (const page of manifest.pages) {
@@ -159,6 +186,8 @@ export class FilesystemExporter {
     signal?: AbortSignal;
     onItem?: (message: string) => void;
     resourcesByPage?: Map<string, SourceResource[]>;
+    commentsByPage?: Map<string, CommentInventory>;
+    commentsEnabled?: boolean;
     loadPage?: (page: SourcePage) => Promise<SourcePage>;
     loadDocument?: (page: SourcePage) => Promise<ReturnType<typeof normalizePageContent>>;
   }): Promise<FilesystemExportResult> {
@@ -183,6 +212,15 @@ export class FilesystemExporter {
         resources: [],
         degraded: false,
         warnings: [],
+        comments: {
+          status: input.commentsEnabled === false ? 'skipped' : 'planned',
+          threads: input.commentsByPage?.get(page.canonicalId)?.threads.length ?? 0,
+          comments: input.commentsByPage?.get(page.canonicalId)?.comments ?? 0,
+          participants: input.commentsByPage?.get(page.canonicalId)?.participants ?? 0,
+          attachments: input.commentsByPage?.get(page.canonicalId)?.attachments ?? 0,
+          bytes: input.commentsByPage?.get(page.canonicalId)?.knownBytes ?? 0,
+          ...(input.commentsByPage?.get(page.canonicalId)?.fingerprint ? {fingerprint: input.commentsByPage.get(page.canonicalId)!.fingerprint} : {}),
+        },
       }));
       return {directory: input.directory, manifest, warnings, errors};
     }
@@ -197,6 +235,7 @@ export class FilesystemExporter {
       const queue = new PQueue({concurrency: this.concurrency});
       const resourceMapByPage = new Map<string, Map<string, RenderResourceBinding>>();
       const resourcesByPage = new Map<string, SourceResource[]>();
+      const commentBodies = new Map<string, string>();
 
       await Promise.all(input.graph.pages.map((page) => queue.add(async () => {
         if (input.signal?.aborted) throw input.signal.reason ?? new Error('Export cancelled');
@@ -205,17 +244,76 @@ export class FilesystemExporter {
         const pageResources = sourceResourceBindings(page, resources);
         const nameAllocator = new DestinationNameAllocator();
         const manifestResources: ExportManifestPage['resources'] = [];
+        const downloadedByResource = new Map<string, {path: string; size: number; sha256: string}>();
         for (const resource of resources.filter((item) => item.kind !== 'grid')) {
           const name = nameAllocator.allocate(resource);
           const relative = `attachments/${stableSegment(page)}/${name}`;
           const destination = path.join(staging, relative);
           await mkdir(path.dirname(destination), {recursive: true});
           const downloaded = await this.source.downloadResource(resource, destination);
+          downloadedByResource.set(resource.id, downloaded);
           setSourceResourceBinding(pageResources, page, resources, resource, {kind: 'file', path: relative, name});
           manifestResources.push({name, path: relative, size: downloaded.size, sha256: downloaded.sha256});
           input.onItem?.(`attachment ${name}`);
         }
         resourceMapByPage.set(page.canonicalId, pageResources);
+        const inventory = input.commentsByPage?.get(page.canonicalId);
+        let comments: ExportManifestPage['comments'] = {
+          status: input.commentsEnabled === false ? 'skipped' : inventory?.status === 'failed' ? 'failed' : 'complete',
+          threads: inventory?.threads.length ?? 0,
+          comments: inventory?.comments ?? 0,
+          participants: inventory?.participants ?? 0,
+          attachments: inventory?.attachments ?? 0,
+          bytes: inventory?.knownBytes ?? 0,
+          ...(inventory?.fingerprint ? {fingerprint: inventory.fingerprint} : {}),
+          ...(inventory?.error ? {error: inventory.error} : {}),
+        };
+        if (input.commentsEnabled !== false && inventory?.status === 'complete' && inventory.fingerprint) {
+          try {
+            const resourceById = new Map(resources.map((resource) => [resource.id, resource]));
+            const files = commentAttachmentUses(inventory).flatMap((use) => {
+              const id = use.reference.resourceId;
+              const resource = id ? resourceById.get(id) : undefined;
+              const downloaded = id ? downloadedByResource.get(id) : undefined;
+              return resource && downloaded ? [{
+                commentId: use.commentId,
+                reference: use.reference.href,
+                originalName: resource.preferredName ?? resource.name,
+                ...downloaded,
+              }] : [];
+            });
+            const zip = await createCommentArchiveZip({
+              pageKey: page.id,
+              fingerprint: inventory.fingerprint,
+              files,
+              destinationDirectory: path.join(staging, 'attachments', stableSegment(page)),
+            });
+            const archivePath = zip ? path.relative(staging, zip.path).split(path.sep).join('/') : undefined;
+            const names = new Map<string, string>();
+            if (zip) {
+              const byHash = new Map(zip.files.map((entry) => [entry.sha256, entry.archiveName]));
+              for (const [resourceId, downloaded] of downloadedByResource) {
+                const name = byHash.get(downloaded.sha256);
+                if (name) names.set(resourceId, name);
+              }
+            }
+            const pageFile = pagePaths.get(page.canonicalId)!;
+            commentBodies.set(page.canonicalId, renderCommentArchive(inventory, input.format, {
+              sourceUrl: page.url,
+              ...(zip && archivePath ? {archiveName: zip.name, archiveHref: relativeHref(pageFile, archivePath)} : {}),
+              attachmentNames: names,
+            }));
+            comments = {
+              ...comments,
+              status: inventory.warnings.length ? 'partial' : 'complete',
+              ...(zip && archivePath ? {archiveName: zip.name, archivePath, bytes: zip.size} : {}),
+              ...(inventory.warnings.length ? {error: inventory.warnings.join('; ')} : {}),
+            };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            comments = {...comments, status: 'failed', error: message};
+          }
+        }
         manifest.pages.push({
           sourceCanonicalId: page.canonicalId,
           sourceUrl: page.url,
@@ -225,6 +323,7 @@ export class FilesystemExporter {
           resources: manifestResources,
           degraded: false,
           warnings: [],
+          comments,
         });
       })));
 
@@ -261,8 +360,8 @@ export class FilesystemExporter {
         };
         const rendered = input.format === 'html' ? await renderStaticHtml(document, context) : await renderMarkdown(document, context);
         const output = input.format === 'html'
-          ? htmlPage(page.title, navigationFor(relative), rendered.body, relativeHref(relative, 'assets/site.css'))
-          : `# ${page.title}\n\n${rendered.body}`;
+          ? htmlPage(page.title, navigationFor(relative), `${rendered.body}${commentBodies.get(page.canonicalId) ?? ''}`, relativeHref(relative, 'assets/site.css'))
+          : `# ${page.title}\n\n${rendered.body}${commentBodies.has(page.canonicalId) ? `\n\n## Комментарии\n\n${commentBodies.get(page.canonicalId)}` : ''}`;
         await mkdir(path.dirname(path.join(staging, relative)), {recursive: true});
         await writeFile(path.join(staging, relative), output, {mode: 0o600});
         const manifestPage = manifest.pages.find((item) => item.sourceCanonicalId === page.canonicalId)!;

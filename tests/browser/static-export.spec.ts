@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {expect, test} from '@playwright/test';
+import {normalizeCommentForest} from '../../src/comments.js';
 import type {PageGraph, SourceAdapter, SourcePage, SourceResource} from '../../src/domain.js';
 import {FilesystemExporter} from '../../src/filesystem-export.js';
 
@@ -38,9 +39,14 @@ test.beforeAll(async () => {
       return {path: destination, size: content.length, sha256: 'fixture', mimeType: 'image/png'};
     },
   } as unknown as SourceAdapter;
+  const comments = normalizeCommentForest([
+    {id: 'comment-1', author: {providerId: 'u1', displayName: 'Иван'}, body: 'Основное обсуждение'},
+    {id: 'comment-2', parentId: 'comment-1', author: {providerId: 'u2', username: 'anna'}, body: 'Ответ'},
+  ], 'yfm');
   await new FilesystemExporter(source, 2).export({
     graph, directory: output, format: 'html', identity: 'browser-test', archive: false, dryRun: false,
     cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources,
+    commentsByPage: new Map([[root.canonicalId, comments]]),
   });
 });
 
@@ -49,6 +55,8 @@ for (const viewport of [{name: 'desktop', width: 1440, height: 900}, {name: 'mob
     await page.setViewportSize({width: viewport.width, height: viewport.height});
     await page.goto(pathToFileURL(path.join(output, 'index.html')).toString());
     await expect(page.getByRole('heading', {name: 'Root', level: 1, exact: true})).toBeVisible();
+    await expect(page.getByRole('heading', {name: 'Комментарии'})).toBeVisible();
+    await expect(page.getByText('Ветка 1')).toBeVisible();
     await expect(page.locator('.nav a[aria-current="page"]')).toHaveText('Root');
     const references = await page.locator('[href], [src]').evaluateAll((elements) => elements.map((element) => (
       element.getAttribute('href') ?? element.getAttribute('src') ?? ''

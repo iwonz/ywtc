@@ -2,9 +2,13 @@ import {createHash} from 'node:crypto';
 import {createReadStream} from 'node:fs';
 import type {ConfluenceConnectionProfile} from '../config.js';
 import {extractPageReferences} from '../content-model.js';
+import {normalizeCommentForest} from '../comments.js';
 import type {
   AdapterCapabilities,
+  CommentAuthor,
+  CommentInventory,
   DestinationAdapter,
+  DestinationComment,
   DestinationContainer,
   DestinationPage,
   PageReference,
@@ -14,7 +18,7 @@ import type {
   SourceResource,
   UploadedResource,
 } from '../domain.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluencePage} from '../types.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage} from '../types.js';
 
 const capabilities: AdapterCapabilities = {
   readPages: true,
@@ -24,6 +28,9 @@ const capabilities: AdapterCapabilities = {
   writeResources: true,
   verifyWrites: true,
   reparentPages: true,
+  readComments: true,
+  writeComments: true,
+  updateComments: true,
 };
 
 function canonical(profile: ConfluenceConnectionProfile, id: string): string {
@@ -77,6 +84,27 @@ function destinationPage(profile: ConfluenceConnectionProfile, client: Confluenc
     content,
     contentFingerprint: contentFingerprint(content),
     contentLength: Buffer.byteLength(content),
+  };
+}
+
+function commentAuthor(value: ConfluenceComment['author']): CommentAuthor {
+  return {
+    providerId: value?.accountId ?? value?.userKey ?? value?.username ?? value?.email ?? 'unknown',
+    ...(value?.displayName ? {displayName: value.displayName} : {}),
+    ...(value?.username ? {username: value.username} : {}),
+    ...(value?.publicName ? {publicName: value.publicName} : {}),
+    ...(value?.email ? {email: value.email} : {}),
+  };
+}
+
+function destinationComment(pageId: string, comment: ConfluenceComment): DestinationComment {
+  const body = comment.body?.storage?.value ?? '';
+  return {
+    id: comment.id,
+    pageId,
+    body,
+    ...(comment.version?.number ? {version: String(comment.version.number)} : {}),
+    fingerprint: contentFingerprint(body),
   };
 }
 
@@ -175,6 +203,22 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
       kind: attachment.metadata?.mediaType?.startsWith('image/') ? 'image' as const : 'attachment' as const,
       metadata: {attachment},
     }));
+  }
+
+  async readComments(page: SourcePage): Promise<CommentInventory> {
+    const comments = await this.client.getPageComments(page.id);
+    return normalizeCommentForest(comments.map((comment) => ({
+      id: comment.id,
+      ...(comment.parentCommentId ? {parentId: comment.parentCommentId} : {}),
+      ...(comment.threadId ? {threadId: comment.threadId} : {}),
+      author: commentAuthor(comment.author),
+      ...(comment.createdAt ? {createdAt: comment.createdAt} : {}),
+      body: comment.body?.storage?.value ?? (/deleted/i.test(comment.status ?? '') ? '[Комментарий удалён]' : ''),
+      ...(comment.inlineContext ? {inlineContext: comment.inlineContext} : {}),
+      status: /deleted/i.test(comment.status ?? '')
+        ? 'deleted'
+        : /resolved/i.test(comment.resolutionStatus ?? '') ? 'resolved' : 'open',
+    })), 'confluence-storage');
   }
 
   downloadResource(resource: SourceResource, destination: string) {
@@ -298,5 +342,30 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     return image
       ? `<ac:image ac:alt="${label}"><ri:attachment ri:filename="${resource.name}"/></ac:image>`
       : `<ac:link><ri:attachment ri:filename="${resource.name}"/><ac:plain-text-link-body><![CDATA[${label}]]></ac:plain-text-link-body></ac:link>`;
+  }
+
+  async findArchiveComment(page: DestinationPage, fingerprint?: string): Promise<DestinationComment | undefined> {
+    const comments = await this.client.getPageComments(page.id);
+    const matches = comments.filter((comment) => (comment.body?.storage?.value ?? '').includes('Архив комментариев из'));
+    const match = fingerprint
+      ? matches.find((comment) => (comment.body?.storage?.value ?? '').includes(fingerprint))
+      : matches.at(-1);
+    return match ? destinationComment(page.id, match) : undefined;
+  }
+
+  async createArchiveComment(input: {page: DestinationPage; body: string}): Promise<DestinationComment> {
+    return destinationComment(input.page.id, await this.client.createComment({pageId: input.page.id, storage: input.body}));
+  }
+
+  async updateArchiveComment(input: {comment: DestinationComment; body: string}): Promise<DestinationComment> {
+    return destinationComment(input.comment.pageId, await this.client.updateComment({
+      commentId: input.comment.id,
+      storage: input.body,
+      ...(input.comment.version ? {version: Number(input.comment.version)} : {}),
+    }));
+  }
+
+  async readArchiveComment(input: {page: DestinationPage; commentId: string}): Promise<DestinationComment> {
+    return destinationComment(input.page.id, await this.client.getComment(input.commentId));
   }
 }

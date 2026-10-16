@@ -42,6 +42,12 @@ const reportListSchema = z.object({
     degradations: z.number().nonnegative(),
     warnings: z.number().nonnegative(),
     errors: z.number().nonnegative(),
+    commentThreads: z.number().nonnegative().optional().default(0),
+    comments: z.number().nonnegative().optional().default(0),
+    commentParticipants: z.number().nonnegative().optional().default(0),
+    commentAttachments: z.number().nonnegative().optional().default(0),
+    commentBytes: z.number().nonnegative().optional().default(0),
+    commentStatuses: z.record(z.string(), z.number().nonnegative()).optional().default({}),
   }),
 });
 
@@ -76,6 +82,12 @@ export interface ReportCatalogEntry {
   degradations: number;
   warnings: number;
   errors: number;
+  commentThreads: number;
+  comments: number;
+  commentParticipants: number;
+  commentAttachments: number;
+  commentBytes: number;
+  commentStatuses: Record<string, number>;
   directory: string;
   html: string;
   json: string;
@@ -173,6 +185,12 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     degradations: parsed.summary.degradations,
     warnings: parsed.summary.warnings,
     errors: parsed.summary.errors,
+    commentThreads: parsed.summary.commentThreads,
+    comments: parsed.summary.comments,
+    commentParticipants: parsed.summary.commentParticipants,
+    commentAttachments: parsed.summary.commentAttachments,
+    commentBytes: parsed.summary.commentBytes,
+    commentStatuses: parsed.summary.commentStatuses,
     directory,
     html,
     json,
