@@ -83,13 +83,13 @@ describe('transfer report', () => {
     expect(json.summary).toMatchObject({
       pages: 3, complete: 1, partial: 1, failed: 1, blocked: 0, conflicts: 0, unprocessedPages: 0,
       returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, maximumDepth: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
-      resources: 3, attachments: 2, resourceImages: 1, resourcesComplete: 1, resourcesFailed: 1, resourcesPlanned: 1,
+      resources: 3, attachments: 2, resourceImages: 1, resourcesComplete: 1, resourcesFailed: 1, resourcesNotStarted: 1, resourcesPlanned: 0,
       sourceBytes: 16, bytes: 7, bytesUnknown: 1, links: 3, images: 1, tables: 1,
       inventoryComplete: false, inventoriedPages: 2, inventoryFailedPages: 1,
       commentThreads: 2, comments: 3, commentParticipants: 3, commentAttachments: 1, commentBytes: 512,
       commentStatuses: {complete: 2, partial: 1},
       pageStatuses: {complete: 1, partial: 1, failed: 1},
-      resourceStatuses: {complete: 1, failed: 1, planned: 1},
+      resourceStatuses: {complete: 1, failed: 1, 'not-started': 1, planned: 0},
       warnings: 0, degradations: 1, errors: 1,
     });
     expect(Object.values(json.summary.pageStatuses).reduce((total, value) => total + value, 0)).toBe(json.summary.pages);
@@ -123,7 +123,7 @@ describe('transfer report', () => {
     expect(catalog.reports[0]).toMatchObject({
       pages: 3, complete: 1, partial: 1, failed: 1, blocked: 0, conflicts: 0,
       sourceStatus: 'current', returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
-      resources: 3, resourcesComplete: 1, resourcesFailed: 1, resourcesPlanned: 1,
+      resources: 3, resourcesComplete: 1, resourcesFailed: 1, resourcesNotStarted: 1, resourcesPlanned: 0,
       inventoryComplete: false, warnings: 0, degradations: 1, errors: 1,
       commentThreads: 2, comments: 3, commentParticipants: 3, commentAttachments: 1, commentBytes: 512,
       commentStatuses: {complete: 2, partial: 1},
@@ -149,6 +149,82 @@ describe('transfer report', () => {
     expect(report.data.summary).toMatchObject({
       links: 9, cycles: 1,
       traversalStatuses: {resolved: 1, cycle: 1, broken: 1},
+    });
+  });
+
+  it('reserves planned for dry-run and converts untouched live work to not-started', () => {
+    const make = (dryRun: boolean) => new TransferReport({
+      dryRun,
+      scope: 'page',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
+    });
+    const dryRun = make(true);
+    dryRun.addPage(page({
+      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'planned',
+      resources: 1, resourceItems: [{sourceId: 'a', sourceName: 'a.pdf', kind: 'attachment', status: 'planned'}],
+      comments: {status: 'planned', threads: 1, comments: 1, participants: 1, attachments: 0, bytes: 0},
+    }));
+    dryRun.finish('completed');
+    expect(dryRun.data.summary).toMatchObject({resourcesPlanned: 1, resourcesNotStarted: 0, commentStatuses: {planned: 1}});
+
+    const live = make(false);
+    live.addPage(page({
+      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'planned',
+      resources: 1, resourceItems: [{sourceId: 'a', sourceName: 'a.pdf', kind: 'attachment', status: 'planned'}],
+      comments: {status: 'planned', threads: 1, comments: 1, participants: 1, attachments: 0, bytes: 0},
+    }));
+    live.finish('cancelled');
+    expect(live.data.pages[0]).toMatchObject({status: 'not-started', resourceItems: [{status: 'not-started'}], comments: {status: 'not-started'}});
+    expect(live.data.summary).toMatchObject({notStartedPages: 1, resourcesNotStarted: 1, resourcesPlanned: 0});
+  });
+
+  it('keeps root errors separate from causal dependency blocks across JSON, HTML, and catalog', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-causal-report-'));
+    const report = new TransferReport({
+      dryRun: false,
+      scope: 'subtree',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'existing'},
+    });
+    report.addPage(page({
+      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'failed', error: 'all titles occupied',
+      resources: 1,
+      resourceItems: [{
+        sourceId: 'a', sourceName: 'a.pdf', kind: 'attachment', status: 'blocked',
+        blockedByPageId: 'wiki:1', blockedByCode: 'destination-page-staging-failed',
+      }],
+      comments: {
+        status: 'blocked', threads: 1, comments: 2, participants: 2, attachments: 0, bytes: 0,
+        blockedByPageId: 'wiki:1', blockedByCode: 'destination-page-staging-failed',
+      },
+    }));
+    report.addPage(page({
+      sourceCanonicalId: 'wiki:2', sourceId: '2', sourceTitle: 'Child', status: 'blocked', depth: 1,
+      blockedByPageId: 'wiki:1', blockedByCode: 'destination-page-staging-failed', blockedReason: 'parent unavailable',
+    }));
+    report.issue({code: 'destination-page-staging-failed', severity: 'error', phase: 'page', pageId: 'wiki:1', retryable: true, message: 'all titles occupied'});
+    report.issue({
+      code: 'destination-parent-unavailable', severity: 'blocked', phase: 'page', pageId: 'wiki:2', retryable: false,
+      blockedByPageId: 'wiki:1', blockedByCode: 'destination-page-staging-failed', message: 'parent unavailable',
+    });
+    report.finish('partial');
+    const paths = await report.write(directory);
+    const html = await readFile(paths.html, 'utf8');
+    const catalog = await listReports(directory);
+    expect(report.data.summary).toMatchObject({
+      errors: 1, rootErrors: 1, dependentPages: 1, dependentFiles: 1, dependentComments: 1,
+      failed: 1, blocked: 1, resourcesBlocked: 1, resourcesPlanned: 0,
+    });
+    expect(html).toContain('Blocked dependencies');
+    expect(html).toContain('1 pages · 1 files · 1 comment archives');
+    expect(catalog.reports[0]).toMatchObject({
+      errors: 1, rootErrors: 1, dependentPages: 1, dependentFiles: 1, dependentComments: 1,
+      resourcesBlocked: 1, resourcesPlanned: 0,
     });
   });
 });

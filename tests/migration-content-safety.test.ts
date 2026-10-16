@@ -5,6 +5,7 @@ import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import type {AppConfig, ConfluenceConnectionProfile, ConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
 import {legacyTransferPlaceholder} from '../src/content-model.js';
+import {DestinationTitleConflictError} from '../src/domain.js';
 import type {DestinationAdapter, DestinationContainer, DestinationPage, SourceAdapter, SourcePage, SourceResource, UploadedResource} from '../src/domain.js';
 import type {Logger} from '../src/logger.js';
 import {HttpRequestError} from '../src/http.js';
@@ -40,7 +41,10 @@ const container: DestinationContainer = {
   provider: 'confluence', profile: destinationProfile.name, id: '100', canonicalId: 'destination:confluence:100',
   title: 'Archive', url: 'https://conf.example/confluence/pages/100', space: 'DOC', locator: '100',
 };
-const capabilities = {readPages: true, readHierarchy: true, readResources: true, writePages: true, writeResources: true, verifyWrites: true, reparentPages: true};
+const capabilities = {
+  readPages: true, readHierarchy: true, readResources: true, writePages: true, writeResources: true,
+  verifyWrites: true, reparentPages: true, readComments: true, writeComments: true, updateComments: true,
+};
 const logger: Logger = {info: () => undefined, warn: () => undefined, error: () => undefined};
 
 function sha(value: string): string {
@@ -58,6 +62,8 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let normalizeBootstrapBody = false;
   let globalTitleConflict = false;
   let failAttachmentListing = false;
+  let createTitleConflicts = 0;
+  let ambiguousCreate = false;
   let downloads = 0;
   let version = 0;
   const verificationReads = new Map<string, number>();
@@ -78,6 +84,10 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     getDescendants: async () => descendants,
     resolveReference: async () => undefined,
     listResources: async (page: SourcePage) => page.id === fixtureRoot.id && includeRootResource ? [resource] : [],
+    readComments: async () => ({
+      status: 'empty' as const, threads: [], comments: 0, participants: 0, attachments: 0,
+      knownBytes: 0, unknownSizes: 0, warnings: [],
+    }),
     downloadResource: async (_resource: SourceResource, destination: string) => {
       downloads += 1;
       await mkdir(path.dirname(destination), {recursive: true});
@@ -93,14 +103,22 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     findTitleConflict: async (_parent: DestinationContainer | DestinationPage, title: string) => globalTitleConflict && title === root.title
       ? page(title, '<p>Unrelated page</p>', 'unrelated', 'other-parent')
       : undefined,
-    findRecoverablePage: async () => {
+    findRecoverablePage: async (selectedContainer: DestinationContainer | DestinationPage, title: string) => {
       if (failRecoveryLookup) throw new HttpRequestError('No space with key', 404);
-      return undefined;
+      return [...pages.values()].find((candidate) => candidate.parentId === selectedContainer.id && candidate.title === title);
     },
     createPage: async ({container: selectedContainer, title, body}: {container: DestinationContainer | DestinationPage; title: string; body: string}) => {
+      if (createTitleConflicts > 0) {
+        createTitleConflicts -= 1;
+        throw new DestinationTitleConflictError(title, 400);
+      }
       created += 1;
       current = page(title, body, String(199 + created), selectedContainer.id);
       pages.set(current.id, current);
+      if (ambiguousCreate) {
+        ambiguousCreate = false;
+        throw new HttpRequestError('HTTP request failed: status=503: response was lost after create', 503, 'POST');
+      }
       if (failCreatedVerification) missingIds.add(current.id);
       return current;
     },
@@ -160,6 +178,8 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setNormalizeBootstrapBody: (value: boolean) => { normalizeBootstrapBody = value; },
     setGlobalTitleConflict: (value: boolean) => { globalTitleConflict = value; },
     setFailAttachmentListing: (value: boolean) => { failAttachmentListing = value; },
+    setCreateTitleConflicts: (value: number) => { createTitleConflicts = value; },
+    setAmbiguousCreate: () => { ambiguousCreate = true; },
     setLegacyPlaceholder: () => {
       current = page(current!.title, legacyTransferPlaceholder('confluence', fixtureRoot), current!.id);
       pages.set(current.id, current);
@@ -253,6 +273,71 @@ describe('source-derived remote page safety', () => {
 
     await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
     expect(adapters.snapshot().current?.title).toBe('Root [root]');
+  });
+
+  it('recovers when authoritative page creation finds a title collision missed by lookup', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture([child]);
+    adapters.setCreateTitleConflicts(2);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const transferOptions = {...options, scope: 'subtree' as const, comments: true};
+    const result = await new Migrator(config, logger, factory).run(transferOptions);
+    expect(result).toMatchObject({
+      status: 'completed', hasErrors: false,
+      summary: {pages: 2, complete: 2, failed: 0, blocked: 0, resourcesComplete: 1},
+    });
+    expect(adapters.snapshot().pages.find((page) => page.title.includes('Root'))?.title).toMatch(/^Root \[root-[0-9a-f]{8}\]$/);
+    expect(adapters.snapshot()).toMatchObject({created: 2, uploaded: 1});
+  });
+
+  it('reconciles an ambiguous create only with source-derived content under the expected parent', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setAmbiguousCreate();
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    await expect(new Migrator(config, logger, factory).run(options)).resolves.toMatchObject({
+      status: 'completed', hasErrors: false, summary: {complete: 1},
+    });
+    expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 1});
+  });
+
+  it('reports one root error and causal blocked descendants and files when all titles are occupied', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture([child]);
+    adapters.setCreateTitleConflicts(10);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const transferOptions = {...options, scope: 'subtree' as const, comments: true};
+
+    const result = await new Migrator(config, logger, factory).run(transferOptions);
+    expect(result).toMatchObject({
+      status: 'partial', hasErrors: true,
+      summary: {
+        pages: 2, failed: 1, blocked: 1, resources: 1, resourcesFailed: 0, resourcesBlocked: 1,
+        resourcesPlanned: 0, errors: 1, rootErrors: 1, dependentPages: 1, dependentFiles: 1, dependentComments: 2,
+      },
+    });
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.issues.filter((issue) => issue.severity === 'error')).toHaveLength(1);
+    expect(report.issues.filter((issue) => issue.severity === 'blocked')).toHaveLength(1);
+    expect(report.pages.find((page) => page.sourceCanonicalId === child.canonicalId)).toMatchObject({
+      status: 'blocked', blockedByPageId: root.canonicalId, blockedByCode: 'destination-page-staging-failed',
+    });
+    expect(report.pages.find((page) => page.sourceCanonicalId === root.canonicalId)?.resourceItems[0]).toMatchObject({
+      status: 'blocked', blockedByPageId: root.canonicalId, blockedByCode: 'destination-page-staging-failed',
+    });
+    const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
+    const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
+    expect(state.pages[child.canonicalId]).toMatchObject({status: 'blocked', blockedByPageId: root.canonicalId});
+    expect(state.runs.at(-1)).toMatchObject({rootErrors: 1, dependentPages: 1, dependentFiles: 1, dependentComments: 2});
+
+    const resumed = await new Migrator(config, logger, factory).run(transferOptions);
+    expect(resumed).toMatchObject({
+      status: 'completed', hasErrors: false,
+      summary: {complete: 2, failed: 0, blocked: 0, resourcesComplete: 1, resourcesBlocked: 0},
+    });
+    expect(adapters.snapshot()).toMatchObject({created: 2, uploaded: 1});
   });
 
   it('does not require attachment-list permission for a page without transferable resources or a snapshot', async () => {

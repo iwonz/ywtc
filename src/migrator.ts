@@ -7,6 +7,7 @@ import type {AppConfig} from './config.js';
 import {
   appendGridSnapshots,
   assertDestinationContent,
+  emptyRendererFallbackReason,
   isLegacyTransferPlaceholder,
   normalizePageContent,
   normalizedPreviewHtml,
@@ -27,6 +28,7 @@ import {
   verifyCommentArchive,
 } from './comments.js';
 import {ConfirmedDestinationMissingError, type ConsistencyRetryOptions, verifyConfirmedDestinationPage} from './consistency.js';
+import {DestinationTitleConflictError} from './domain.js';
 import type {
   CommentInventory,
   DestinationAdapter,
@@ -45,6 +47,7 @@ import type {
 import {assertTransferCapabilities} from './domain.js';
 import {FilesystemExporter, type FilesystemExportResult} from './filesystem-export.js';
 import {discoverPageGraph} from './graph.js';
+import {HttpRequestError} from './http.js';
 import {safeFilename} from './input.js';
 import type {Logger} from './logger.js';
 import type {DirectoryLocator, RemoteLocator, ResolvedLocator} from './locators.js';
@@ -57,9 +60,11 @@ import {
   type TransferReportSummary,
 } from './report.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
+import {destinationTitleCandidates} from './title-allocation.js';
 import {
   resolveStateLocation,
   StateStore,
+  type BlockingCause,
   type CommentTransferState,
   type EndpointIdentity,
   type PageTransferState,
@@ -160,11 +165,6 @@ async function loadCachedDocument(cacheDirectory: string, canonicalId: string): 
   return JSON.parse(await readFile(cachedDocumentPath(cacheDirectory, canonicalId), 'utf8')) as NormalizedDocument;
 }
 
-function collisionTitle(page: SourcePage): string {
-  const suffix = page.locator.split('/').filter(Boolean).at(-1) ?? page.id;
-  return `${page.title} [${suffix}]`;
-}
-
 function cachePath(cacheDirectory: string, page: SourcePage, resource: SourceResource): string {
   const pageKey = sha256(page.canonicalId).slice(0, 12);
   const resourceKey = sha256(`${resource.id}:${resource.name}`).slice(0, 12);
@@ -201,6 +201,79 @@ function sourceDerivedTextMatches(expectedBody: string, actualBody: string | und
   return text(expectedBody) === text(actualBody);
 }
 
+function ambiguousCreateOutcome(error: unknown): boolean {
+  return error instanceof HttpRequestError
+    && (error.status === undefined || error.status >= 500);
+}
+
+async function createPageWithAllocatedTitle(input: {
+  destination: DestinationAdapter;
+  parent: DestinationContainer | DestinationPage;
+  sourcePage: SourcePage;
+  bootstrap: RenderedDocument;
+  preferredTitle?: string;
+  consistencyOptions: ConsistencyRetryOptions;
+  report: TransferReport;
+}): Promise<{page: DestinationPage; reused: boolean}> {
+  const candidates = destinationTitleCandidates(input.sourcePage, input.preferredTitle);
+  for (const [index, title] of candidates.entries()) {
+    let child: DestinationPage | undefined;
+    try {
+      child = input.destination.findRecoverablePage
+        ? await input.destination.findRecoverablePage(input.parent, title)
+        : await input.destination.findChild(input.parent, title);
+    } catch (error) {
+      input.report.issue({
+        code: 'destination-recovery-lookup-failed',
+        severity: 'warning',
+        phase: 'page',
+        pageId: input.sourcePage.canonicalId,
+        retryable: true,
+        message: `${input.sourcePage.title}: parent-scoped recovery lookup failed for "${title}"; authoritative creation will be attempted: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    if (child && sourceDerivedTextMatches(input.bootstrap.body, child.content, input.destination.kind, input.sourcePage)) {
+      return {page: child, reused: true};
+    }
+    const occupied = child ?? (input.destination.findTitleConflict
+      ? await input.destination.findTitleConflict(input.parent, title)
+      : undefined);
+    if (occupied) continue;
+    let created: DestinationPage;
+    try {
+      created = await input.destination.createPage({container: input.parent, title, body: input.bootstrap.body});
+    } catch (error) {
+      if (error instanceof DestinationTitleConflictError) continue;
+      if (ambiguousCreateOutcome(error)) {
+        const recovered = input.destination.findRecoverablePage
+          ? await input.destination.findRecoverablePage(input.parent, title)
+          : await input.destination.findChild(input.parent, title);
+        if (recovered && sourceDerivedTextMatches(input.bootstrap.body, recovered.content, input.destination.kind, input.sourcePage)) {
+          return {page: recovered, reused: true};
+        }
+      }
+      throw error;
+    }
+    created = await verifyConfirmedDestinationPage(input.destination, created, input.consistencyOptions);
+    assertDestinationContent(input.bootstrap.body, created.content, input.destination.kind, input.sourcePage);
+    if (created.parentId !== input.parent.id) {
+      throw new Error(`Destination hierarchy verification failed for ${input.sourcePage.title}: expected parent ${input.parent.id}, received ${created.parentId ?? 'none'}`);
+    }
+    if (index > 0) {
+      input.report.issue({
+        code: 'destination-title-renamed',
+        severity: 'normalization',
+        phase: 'page',
+        pageId: input.sourcePage.canonicalId,
+        retryable: false,
+        message: `${input.sourcePage.title}: destination title was allocated as "${created.title}" because an earlier candidate was occupied`,
+      });
+    }
+    return {page: created, reused: false};
+  }
+  throw new Error(`Confluence rejected all ${candidates.length} deterministic destination titles for ${input.sourcePage.title} because they are occupied`);
+}
+
 function destinationFromState(state: PageTransferState, adapter: DestinationAdapter): DestinationPage {
   if (!state.destinationId || !state.destinationCanonicalId || !state.destinationLocator) {
     throw new Error(`Incomplete mapped destination for ${state.sourceTitle}`);
@@ -233,6 +306,7 @@ function reportPage(input: {
   commentsEnabled?: boolean;
   commentInventory?: CommentInventory | undefined;
   commentState?: CommentTransferState | undefined;
+  blockedBy?: Required<Pick<BlockingCause, 'blockedByPageId' | 'blockedByCode'>> & {blockedReason?: string};
 }): TransferReportPage {
   const transferable = input.resources.filter(
     (resource): resource is SourceResource & {kind: 'attachment' | 'image'} => resource.kind !== 'grid',
@@ -251,6 +325,7 @@ function reportPage(input: {
       ...(state?.destinationId ? {destinationId: state.destinationId} : {}),
       ...(state?.destinationName ? {destinationName: state.destinationName} : {}),
       ...(state?.lastError ? {error: state.lastError} : {}),
+      ...(status === 'blocked' && input.blockedBy ? input.blockedBy : {}),
     };
   });
   const knownBytes = resourceItems.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
@@ -292,6 +367,7 @@ function reportPage(input: {
     warnings: [...new Set([...input.document.warnings, ...(input.warnings ?? [])])],
     normalizations: [...new Set([...(input.document.normalizations ?? []), ...(input.normalizations ?? [])])],
     ...(input.error ? {error: input.error} : {}),
+    ...(input.status === 'blocked' && input.blockedBy ? input.blockedBy : {}),
     comments: {
       status: commentStatus,
       threads: commentState?.threads ?? inventory?.threads.length ?? 0,
@@ -305,7 +381,51 @@ function reportPage(input: {
       ...(commentState?.status === 'stale' ? {stale: true} : {}),
       ...(commentError ? {error: commentError} : {}),
       ...(commentState?.preview ? {preview: commentState.preview} : {}),
+      ...(commentStatus === 'blocked' && input.blockedBy ? input.blockedBy : {}),
     },
+  };
+}
+
+function blockedResourceStates(
+  resources: SourceResource[],
+  previous: Record<string, ResourceTransferState>,
+  cause: Required<Pick<BlockingCause, 'blockedByPageId' | 'blockedByCode'>> & {blockedReason: string},
+): Record<string, ResourceTransferState> {
+  return {
+    ...previous,
+    ...Object.fromEntries(resources.filter((resource) => resource.kind !== 'grid').map((resource) => {
+      const existing = previous[resource.id];
+      return [resource.id, {
+        ...(existing ?? {}),
+        sourceId: resource.id,
+        sourceName: resource.name,
+        destinationName: existing?.destinationName ?? preferredDestinationName(resource),
+        ...(existing?.size !== undefined ? {size: existing.size} : resource.size !== undefined ? {size: resource.size} : {}),
+        status: 'blocked' as const,
+        ...cause,
+        lastError: cause.blockedReason,
+        updatedAt: new Date().toISOString(),
+      }];
+    })),
+  };
+}
+
+function blockedCommentState(
+  inventory: CommentInventory | undefined,
+  previous: CommentTransferState | undefined,
+  cause: Required<Pick<BlockingCause, 'blockedByPageId' | 'blockedByCode'>> & {blockedReason: string},
+): CommentTransferState {
+  return {
+    ...(previous ?? {}),
+    status: 'blocked',
+    threads: previous?.threads ?? inventory?.threads.length ?? 0,
+    comments: previous?.comments ?? inventory?.comments ?? 0,
+    participants: previous?.participants ?? inventory?.participants ?? 0,
+    attachments: previous?.attachments ?? inventory?.attachments ?? 0,
+    bytes: previous?.bytes ?? inventory?.knownBytes ?? 0,
+    ...cause,
+    lastError: cause.blockedReason,
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -316,6 +436,18 @@ function runStatus(errors: number, warnings: number, degradations: number): RunS
 
 function attentionCount(summary: TransferReportSummary): number {
   return summary.warnings + summary.degradations;
+}
+
+function runOutcomeCounts(summary: TransferReportSummary, pages: number) {
+  return {
+    pages,
+    warnings: attentionCount(summary),
+    errors: summary.errors,
+    rootErrors: summary.rootErrors,
+    dependentPages: summary.dependentPages,
+    dependentFiles: summary.dependentFiles,
+    dependentComments: summary.dependentComments,
+  };
 }
 
 export class MigrationRunError extends Error {
@@ -341,7 +473,7 @@ async function renderRemoteDocument(input: {
     const rendered = input.destination.kind === 'confluence'
       ? await renderConfluenceStorage(input.document, input.page, input.context, input.container.space ?? '')
       : await renderYfm(input.document, input.context);
-    if (!rendered.body.trim()) return rawContentFallback(input.page, input.destination.kind, 'renderer returned an empty body');
+    if (!rendered.body.trim()) return rawContentFallback(input.page, input.destination.kind, emptyRendererFallbackReason(input.document));
     return rendered;
   } catch (error) {
     return rawContentFallback(input.page, input.destination.kind, error instanceof Error ? error.message : String(error));
@@ -451,11 +583,7 @@ export class Migrator {
       });
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
-        pages: 0,
-        warnings: attentionCount(report.data.summary),
-        errors: report.data.summary.errors,
-      });
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, 0));
       throw new MigrationRunError(message, reportPaths, stateLocation.filename, {cause: error});
     }
 
@@ -540,12 +668,56 @@ export class Migrator {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
-        pages: graph.pages.length,
-        warnings: attentionCount(report.data.summary),
-        errors: report.data.summary.errors,
-      });
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, graph.pages.length));
       throw new MigrationRunError('Resource preflight failed before destination mutation', reportPaths, stateLocation.filename);
+    }
+    if (!options.dryRun) {
+      for (const page of graph.pages) {
+        if (store.value.pages[page.canonicalId]) continue;
+        const commentInventory = commentsByPage.get(page.canonicalId);
+        const commentState: CommentTransferState | undefined = !commentsEnabled
+          ? {status: 'skipped', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0, updatedAt: new Date().toISOString()}
+          : commentInventory?.status === 'empty'
+            ? {status: 'complete', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0, updatedAt: new Date().toISOString()}
+            : commentInventory?.status === 'failed'
+              ? {
+                status: 'failed', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0,
+                ...(commentInventory.error ? {lastError: commentInventory.error} : {}), updatedAt: new Date().toISOString(),
+              }
+              : commentInventory
+                ? {
+                  status: 'planned', ...(commentInventory.fingerprint ? {fingerprint: commentInventory.fingerprint} : {}),
+                  threads: commentInventory.threads.length, comments: commentInventory.comments,
+                  participants: commentInventory.participants, attachments: commentInventory.attachments,
+                  bytes: commentInventory.knownBytes, updatedAt: new Date().toISOString(),
+                }
+                : undefined;
+        const resourceStates = Object.fromEntries((resourcesByPage.get(page.canonicalId) ?? [])
+          .filter((resource) => resource.kind !== 'grid')
+          .map((resource) => [resource.id, {
+            sourceId: resource.id,
+            sourceName: resource.name,
+            destinationName: preferredDestinationName(resource),
+            ...(resource.size !== undefined ? {size: resource.size} : {}),
+            ...(resource.mimeType ? {mimeType: resource.mimeType} : {}),
+            status: 'planned' as const,
+            updatedAt: new Date().toISOString(),
+          }]));
+        await store.setPage({
+          sourceId: page.id,
+          sourceCanonicalId: page.canonicalId,
+          sourceLocator: page.locator,
+          sourceTitle: page.title,
+          ...(page.projectedParentId ? {projectedParentId: page.projectedParentId} : {}),
+          destinationTitle: page.title,
+          sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
+          status: 'discovered',
+          resources: resourceStates,
+          ...(commentState ? {comments: commentState} : {}),
+          degradations: [],
+          updatedAt: new Date().toISOString(),
+        });
+      }
     }
     const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
     status(planSummary);
@@ -579,13 +751,10 @@ export class Migrator {
       }
       report.finish('completed');
       const finalStatus = runStatus(report.data.summary.errors, report.data.summary.warnings, report.data.summary.degradations);
+      await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
-        pages: graph.pages.length,
-        warnings: attentionCount(report.data.summary),
-        errors: report.data.summary.errors,
-      });
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, graph.pages.length));
       status(`${finalStatus}: source ${report.data.summary.pages} pages · ${report.data.summary.complete} complete · ${report.data.summary.partial} partial · ${report.data.summary.failed + report.data.summary.blocked} failed/blocked · files ${report.data.summary.resourcesComplete}/${report.data.summary.resources} complete · ${report.data.summary.errors} errors · ${report.data.summary.warnings} warnings · ${report.data.summary.degradations} degradations`);
       return {
         status: finalStatus,
@@ -603,13 +772,10 @@ export class Migrator {
       const finalStatus: RunStatus = cancelled ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
       report.error(message);
+      await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, {
-        pages: graph.pages.length,
-        warnings: attentionCount(report.data.summary),
-        errors: report.data.summary.errors,
-      });
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, graph.pages.length));
       this.logger.error(`${message}. Report: ${reportPaths.html}`);
       throw new MigrationRunError(message, reportPaths, stateLocation.filename, {cause: error});
     }
@@ -1070,7 +1236,12 @@ export class Migrator {
   }): Promise<void> {
     const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage} = input;
     const destinationPages = new Map<string, DestinationPage>();
-    const stagingFailures = new Map<string, {status: PageTransferStatus; message: string}>();
+    const stagingFailures = new Map<string, {
+      status: PageTransferStatus;
+      message: string;
+      blockedByPageId: string;
+      blockedByCode: string;
+    }>();
     const sourcePages = new Map(graph.pages.map((page) => [page.canonicalId, page]));
     const bootstrapBodies = new Map<string, RenderedDocument>();
     const totalResources = [...resourcesByPage.values()].reduce(
@@ -1110,15 +1281,47 @@ export class Migrator {
       const saved = store.value.pages[page.canonicalId];
       const parent = page.projectedParentId ? destinationPages.get(page.projectedParentId) : container;
       if (!parent) {
-        const message = `Destination parent is unavailable for ${page.title}`;
-        stagingFailures.set(page.canonicalId, {status: 'blocked', message});
-        report.updatePage(page.canonicalId, {status: 'blocked', error: message});
+        const upstream = page.projectedParentId ? stagingFailures.get(page.projectedParentId) : undefined;
+        const blockedByPageId = upstream?.blockedByPageId ?? page.projectedParentId ?? page.canonicalId;
+        const blockedByCode = upstream?.blockedByCode ?? 'destination-parent-unavailable';
+        const message = `Destination parent is unavailable for ${page.title}; blocked by ${blockedByPageId} (${blockedByCode})`;
+        const cause = {blockedByPageId, blockedByCode, blockedReason: message};
+        stagingFailures.set(page.canonicalId, {status: 'blocked', message, blockedByPageId, blockedByCode});
+        const previous = store.value.pages[page.canonicalId];
+        const resources = resourcesByPage.get(page.canonicalId) ?? [];
+        const comments = (options.comments ?? true)
+          ? blockedCommentState(commentsByPage.get(page.canonicalId), previous?.comments, cause)
+          : undefined;
+        await store.setPage({
+          sourceId: page.id,
+          sourceCanonicalId: page.canonicalId,
+          sourceLocator: page.locator,
+          sourceTitle: page.title,
+          ...(page.projectedParentId ? {projectedParentId: page.projectedParentId} : {}),
+          destinationTitle: previous?.destinationTitle ?? page.title,
+          ...(previous?.destinationId ? {destinationId: previous.destinationId} : {}),
+          ...(previous?.destinationCanonicalId ? {destinationCanonicalId: previous.destinationCanonicalId} : {}),
+          ...(previous?.destinationLocator ? {destinationLocator: previous.destinationLocator} : {}),
+          ...(previous?.previousDestinationIds ? {previousDestinationIds: previous.previousDestinationIds} : {}),
+          sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
+          ...(previous?.destinationFingerprint ? {destinationFingerprint: previous.destinationFingerprint} : {}),
+          status: 'blocked',
+          resources: blockedResourceStates(resources, previous?.resources ?? {}, cause),
+          ...(comments ? {comments} : {}),
+          degradations: previous?.degradations ?? [],
+          ...cause,
+          lastError: message,
+          updatedAt: new Date().toISOString(),
+        });
+        report.updatePage(page.canonicalId, {status: 'blocked', error: message, ...cause});
         report.issue({
           code: 'destination-parent-unavailable',
-          severity: 'error',
+          severity: 'blocked',
           phase: 'page',
           pageId: page.canonicalId,
-          retryable: true,
+          retryable: false,
+          blockedByPageId,
+          blockedByCode,
           message,
         });
         progress.staged += 1;
@@ -1129,14 +1332,20 @@ export class Migrator {
         const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
         const bootstrap = bootstrapBodies.get(page.canonicalId)!;
         let created: DestinationPage;
-        let title = saved?.destinationTitle ?? page.title;
+        const title = saved?.destinationTitle ?? page.title;
         let resourcesForState = saved?.resources ?? {};
         let commentsForState = saved?.comments;
         let previousDestinationIds = saved?.previousDestinationIds ?? [];
         let mappingRecovered = false;
-        const findTitleConflict = (candidateTitle: string) => destination.findTitleConflict
-          ? destination.findTitleConflict(parent, candidateTitle)
-          : destination.findChild(parent, candidateTitle);
+        const allocatePage = (preferredTitle?: string) => createPageWithAllocatedTitle({
+          destination,
+          parent,
+          sourcePage: cachedPage,
+          bootstrap,
+          ...(preferredTitle ? {preferredTitle} : {}),
+          consistencyOptions: this.consistencyOptions,
+          report,
+        });
         if (saved?.destinationId) {
           const mapped = destinationFromState(saved, destination);
           try {
@@ -1156,72 +1365,8 @@ export class Migrator {
             if (page.projectedParentId) {
               await verifyConfirmedDestinationPage(destination, parent as DestinationPage, this.consistencyOptions);
             }
-            const findRecoveryChild = (candidateTitle: string) => destination.findRecoverablePage
-              ? destination.findRecoverablePage(parent, candidateTitle)
-              : destination.findChild(parent, candidateTitle);
-            let candidate: DestinationPage | undefined;
-            let recoveryLookupFailed = false;
-            try {
-              candidate = await findRecoveryChild(title);
-            } catch (lookupError) {
-              recoveryLookupFailed = true;
-              report.issue({
-                code: 'destination-recovery-lookup-failed',
-                severity: 'warning',
-                phase: 'page',
-                pageId: page.canonicalId,
-                retryable: true,
-                message: `${page.title}: recovery lookup failed; bootstrap recreation will be attempted: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
-              });
-            }
-            if (candidate && sourceDerivedTextMatches(bootstrap.body, candidate.content, destination.kind, cachedPage)) {
-              created = candidate;
-            } else {
-              let recoveryTitle = title;
-              let titleConflict = candidate;
-              if (!titleConflict && !recoveryLookupFailed) {
-                try {
-                  titleConflict = await findTitleConflict(recoveryTitle);
-                } catch (lookupError) {
-                  recoveryLookupFailed = true;
-                  report.issue({
-                    code: 'destination-title-lookup-failed',
-                    severity: 'warning',
-                    phase: 'page',
-                    pageId: page.canonicalId,
-                    retryable: true,
-                    message: `${page.title}: destination title lookup failed; bootstrap recreation will be attempted with a stable suffix: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
-                  });
-                }
-              }
-              if (titleConflict || recoveryLookupFailed) {
-                const base = collisionTitle(page);
-                const hash = sha256(page.canonicalId).slice(0, 8);
-                recoveryTitle = base;
-                let sequence = 0;
-                while (!recoveryLookupFailed) {
-                  try {
-                    if (!await findTitleConflict(recoveryTitle)) break;
-                    sequence += 1;
-                    recoveryTitle = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
-                  } catch (lookupError) {
-                    recoveryLookupFailed = true;
-                    recoveryTitle = `${base} [${hash}]`;
-                    report.issue({
-                      code: 'destination-recovery-lookup-failed',
-                      severity: 'warning',
-                      phase: 'page',
-                      pageId: page.canonicalId,
-                      retryable: true,
-                      message: `${page.title}: suffixed-title lookup failed; bootstrap recreation will be attempted: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`,
-                    });
-                  }
-                }
-              }
-              created = await destination.createPage({container: parent, title: recoveryTitle, body: bootstrap.body});
-              created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
-              assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
-            }
+            const allocation = await allocatePage(title);
+            created = allocation.page;
             previousDestinationIds = [...new Set([...previousDestinationIds, mapped.id])];
             resourcesForState = resetResourceDestinations(saved.resources);
             commentsForState = undefined;
@@ -1290,27 +1435,7 @@ export class Migrator {
                 message: `${page.title}: moved destination page ${created.id} from parent ${oldPage.parentId ?? 'none'} to ${parent.id} and verified the hierarchy`,
               });
             } else {
-              let replacement = await destination.findChild(parent, title);
-              const replacementMatches = replacement
-                && sourceDerivedTextMatches(bootstrap.body, replacement.content, destination.kind, cachedPage);
-              const titleConflict = replacementMatches ? undefined : replacement ?? await findTitleConflict(title);
-              if (titleConflict) {
-                const base = collisionTitle(page);
-                const hash = sha256(page.canonicalId).slice(0, 8);
-                title = base;
-                let sequence = 0;
-                while (await findTitleConflict(title)) {
-                  sequence += 1;
-                  title = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
-                }
-                replacement = undefined;
-              }
-              created = replacement ?? await destination.createPage({container: parent, title, body: bootstrap.body});
-              created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
-              assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
-              if (created.parentId !== parent.id) {
-                throw new Error(`Destination hierarchy verification failed for recreated page ${page.title}: expected parent ${parent.id}, received ${created.parentId ?? 'none'}`);
-              }
+              created = (await allocatePage(title)).page;
               previousDestinationIds = [...new Set([...previousDestinationIds, oldPage.id])];
               resourcesForState = resetResourceDestinations(saved.resources);
               commentsForState = undefined;
@@ -1349,9 +1474,9 @@ export class Migrator {
             ...(container.space ? {space: container.space} : {}),
           };
         } else {
-          const existingChild = await destination.findChild(parent, title);
-          if (existingChild && sourceDerivedTextMatches(bootstrap.body, existingChild.content, destination.kind, cachedPage)) {
-            created = existingChild;
+          const allocation = await allocatePage(title);
+          created = allocation.page;
+          if (allocation.reused) {
             mappingRecovered = true;
             report.issue({
               code: 'destination-unmapped-page-recovered',
@@ -1361,21 +1486,6 @@ export class Migrator {
               retryable: false,
               message: `${page.title}: adopted an existing source-derived page below the expected parent`,
             });
-          } else {
-            const titleConflict = existingChild ?? await findTitleConflict(title);
-            if (titleConflict) {
-              const base = collisionTitle(page);
-              const hash = sha256(page.canonicalId).slice(0, 8);
-              title = base;
-              let sequence = 0;
-              while (await findTitleConflict(title)) {
-                sequence += 1;
-                title = `${base} [${hash}${sequence > 1 ? `-${sequence}` : ''}]`;
-              }
-            }
-            created = await destination.createPage({container: parent, title, body: bootstrap.body});
-            created = await verifyConfirmedDestinationPage(destination, created, this.consistencyOptions);
-            assertDestinationContent(bootstrap.body, created.content, destination.kind, cachedPage);
           }
         }
         if (!options.dryRun && created.parentId !== parent.id) {
@@ -1407,10 +1517,16 @@ export class Migrator {
         if (options.signal?.aborted) throw options.signal.reason ?? error;
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         const failureStatus: PageTransferStatus = /conflict/i.test(message) ? 'conflict' : 'failed';
-        stagingFailures.set(page.canonicalId, {status: failureStatus, message});
+        const failureCode = failureStatus === 'conflict' ? 'destination-conflict' : 'destination-page-staging-failed';
+        stagingFailures.set(page.canonicalId, {
+          status: failureStatus,
+          message,
+          blockedByPageId: page.canonicalId,
+          blockedByCode: failureCode,
+        });
         report.updatePage(page.canonicalId, {status: failureStatus, error: message});
         report.issue({
-          code: failureStatus === 'conflict' ? 'destination-conflict' : 'destination-page-staging-failed',
+          code: failureCode,
           severity: 'error',
           phase: 'page',
           pageId: page.canonicalId,
@@ -1418,7 +1534,29 @@ export class Migrator {
           message,
         });
         const savedState = store.value.pages[page.canonicalId];
-        if (savedState) await store.setPage({...savedState, status: failureStatus, lastError: message, updatedAt: new Date().toISOString()});
+        if (!options.dryRun) {
+          const cause = {blockedByPageId: page.canonicalId, blockedByCode: failureCode, blockedReason: message};
+          const resources = resourcesByPage.get(page.canonicalId) ?? [];
+          const comments = (options.comments ?? true)
+            ? blockedCommentState(commentsByPage.get(page.canonicalId), savedState?.comments, cause)
+            : undefined;
+          await store.setPage({
+            ...(savedState ?? {}),
+            sourceId: page.id,
+            sourceCanonicalId: page.canonicalId,
+            sourceLocator: page.locator,
+            sourceTitle: page.title,
+            ...(page.projectedParentId ? {projectedParentId: page.projectedParentId} : {}),
+            destinationTitle: savedState?.destinationTitle ?? page.title,
+            sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
+            status: failureStatus,
+            resources: blockedResourceStates(resources, savedState?.resources ?? {}, cause),
+            ...(comments ? {comments} : {}),
+            degradations: savedState?.degradations ?? [],
+            lastError: message,
+            updatedAt: new Date().toISOString(),
+          });
+        }
       } finally {
         progress.staged += 1;
         updateProgress(`content staged ${page.title}`);
@@ -1435,16 +1573,25 @@ export class Migrator {
       if (!destinationPage) {
         const currentFailure = stagingFailures.get(page.canonicalId);
         const failedState = store.value.pages[page.canonicalId];
+        const blockedBy = {
+          blockedByPageId: currentFailure?.blockedByPageId ?? page.canonicalId,
+          blockedByCode: currentFailure?.blockedByCode ?? 'destination-page-unavailable',
+          blockedReason: currentFailure?.message ?? failedState?.lastError ?? 'Destination page with source-derived content was not created',
+        };
+        const commentState = failedState?.comments ?? ((options.comments ?? true)
+          ? blockedCommentState(commentsByPage.get(page.canonicalId), undefined, blockedBy)
+          : undefined);
         report.addPage(reportPage({
           page,
           status: currentFailure?.status ?? 'blocked',
           resources,
           document,
           ...(failedState?.resources ? {resourceStates: failedState.resources} : {}),
-          ...(options.dryRun ? {resourceStatusOverride: 'planned'} : {}),
+          resourceStatusOverride: options.dryRun ? 'planned' : 'blocked',
           commentsEnabled: options.comments ?? true,
           ...(commentsByPage.get(page.canonicalId) ? {commentInventory: commentsByPage.get(page.canonicalId)} : {}),
-          ...(failedState?.comments ? {commentState: failedState.comments} : {}),
+          ...(commentState ? {commentState} : {}),
+          blockedBy,
           error: currentFailure?.message ?? failedState?.lastError ?? 'Destination page with source-derived content was not created',
         }));
         progress.pages += 1;

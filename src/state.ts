@@ -4,9 +4,16 @@ import path from 'node:path';
 import {z} from 'zod';
 import type {ExportFormat, GraphEdgeStatus, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
 
-export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
+export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'not-started' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
 export type RunStatus = 'running' | 'completed' | 'completed-with-warnings' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
-export type CommentTransferStatus = 'planned' | 'complete' | 'partial' | 'failed' | 'conflict' | 'stale' | 'skipped';
+export type ResourceTransferStatus = 'planned' | 'not-started' | 'blocked' | 'complete' | 'partial' | 'failed';
+export type CommentTransferStatus = 'planned' | 'not-started' | 'blocked' | 'complete' | 'partial' | 'failed' | 'conflict' | 'stale' | 'skipped';
+
+export interface BlockingCause {
+  blockedByPageId?: string;
+  blockedByCode?: string;
+  blockedReason?: string;
+}
 
 export interface EndpointIdentity {
   profile: string;
@@ -27,7 +34,7 @@ export interface TransferIdentity {
   destination: EndpointIdentity | DirectoryIdentity;
 }
 
-export interface ResourceTransferState {
+export interface ResourceTransferState extends BlockingCause {
   sourceId: string;
   sourceName: string;
   destinationId?: string;
@@ -36,12 +43,12 @@ export interface ResourceTransferState {
   size?: number;
   cachePath?: string;
   mimeType?: string;
-  status: 'planned' | 'complete' | 'partial' | 'failed';
+  status: ResourceTransferStatus;
   lastError?: string;
   updatedAt: string;
 }
 
-export interface CommentTransferState {
+export interface CommentTransferState extends BlockingCause {
   fingerprint?: string;
   destinationId?: string;
   destinationFingerprint?: string;
@@ -65,7 +72,7 @@ export interface CommentTransferState {
   updatedAt: string;
 }
 
-export interface PageTransferState {
+export interface PageTransferState extends BlockingCause {
   sourceId: string;
   sourceCanonicalId: string;
   sourceLocator: string;
@@ -109,6 +116,10 @@ export interface StateRun {
   maximumDepth: number;
   warnings: number;
   errors: number;
+  rootErrors?: number;
+  dependentPages?: number;
+  dependentFiles?: number;
+  dependentComments?: number;
   commentsEnabled?: boolean;
   commentThreads?: number;
   comments?: number;
@@ -220,7 +231,10 @@ const resourceStateSchema = z.object({
   size: z.number().nonnegative().optional(),
   cachePath: z.string().optional(),
   mimeType: z.string().optional(),
-  status: z.enum(['planned', 'complete', 'partial', 'failed']),
+  status: z.enum(['planned', 'not-started', 'blocked', 'complete', 'partial', 'failed']),
+  blockedByPageId: z.string().optional(),
+  blockedByCode: z.string().optional(),
+  blockedReason: z.string().optional(),
   lastError: z.string().optional(),
   updatedAt: z.string(),
 }).strict();
@@ -238,7 +252,10 @@ const commentStateSchema = z.object({
   fullArchiveName: z.string().optional(),
   fullArchivePath: z.string().optional(),
   fullArchiveSha256: z.string().optional(),
-  status: z.enum(['planned', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped']),
+  status: z.enum(['planned', 'not-started', 'blocked', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped']),
+  blockedByPageId: z.string().optional(),
+  blockedByCode: z.string().optional(),
+  blockedReason: z.string().optional(),
   threads: z.number().int().nonnegative(),
   comments: z.number().int().nonnegative(),
   participants: z.number().int().nonnegative(),
@@ -262,7 +279,10 @@ const pageStateSchema = z.object({
   previousDestinationIds: z.array(z.string()).optional(),
   sourceFingerprint: z.string().optional(),
   destinationFingerprint: z.string().optional(),
-  status: z.enum(['discovered', 'planned', 'skeleton-created', 'complete', 'partial', 'conflict', 'failed', 'blocked']),
+  status: z.enum(['discovered', 'planned', 'skeleton-created', 'not-started', 'complete', 'partial', 'conflict', 'failed', 'blocked']),
+  blockedByPageId: z.string().optional(),
+  blockedByCode: z.string().optional(),
+  blockedReason: z.string().optional(),
   resources: z.record(z.string(), resourceStateSchema),
   comments: commentStateSchema.optional(),
   degradations: z.array(z.string()),
@@ -293,6 +313,10 @@ const runSchema = z.object({
   maximumDepth: z.number().int().nonnegative().optional().default(0),
   warnings: z.number().int().nonnegative(),
   errors: z.number().int().nonnegative(),
+  rootErrors: z.number().int().nonnegative().optional(),
+  dependentPages: z.number().int().nonnegative().optional(),
+  dependentFiles: z.number().int().nonnegative().optional(),
+  dependentComments: z.number().int().nonnegative().optional(),
   commentsEnabled: z.boolean().optional(),
   commentThreads: z.number().int().nonnegative().optional(),
   comments: z.number().int().nonnegative().optional(),
@@ -443,7 +467,15 @@ export class StateStore {
     if (!this.readOnly) await this.save();
   }
 
-  async finishRun(runId: string, status: RunStatus, counts: {pages: number; warnings: number; errors: number}): Promise<void> {
+  async finishRun(runId: string, status: RunStatus, counts: {
+    pages: number;
+    warnings: number;
+    errors: number;
+    rootErrors?: number;
+    dependentPages?: number;
+    dependentFiles?: number;
+    dependentComments?: number;
+  }): Promise<void> {
     const run = this.value.runs.find((candidate) => candidate.id === runId);
     if (!run) throw new Error(`State run ${runId} was not initialized`);
     Object.assign(run, counts, {status, finishedAt: new Date().toISOString()});
@@ -458,6 +490,34 @@ export class StateStore {
   async setPage(page: PageTransferState): Promise<void> {
     this.value.pages[page.sourceCanonicalId] = page;
     if (!this.readOnly) await this.save();
+  }
+
+  async finalizeOutcomes(pageIds: string[], status: RunStatus, dryRun: boolean): Promise<void> {
+    if (dryRun || this.readOnly) return;
+    const interrupted = status === 'cancelled' || status === 'interrupted';
+    const updatedAt = new Date().toISOString();
+    for (const pageId of pageIds) {
+      const page = this.value.pages[pageId];
+      if (!page) continue;
+      if (['discovered', 'planned', 'skeleton-created'].includes(page.status)) page.status = 'not-started';
+      const dependencyBlocked = page.status === 'blocked' || page.status === 'failed' || page.status === 'conflict';
+      const blockedByPageId = page.blockedByPageId ?? page.sourceCanonicalId;
+      const blockedByCode = page.blockedByCode ?? (page.status === 'conflict' ? 'destination-conflict' : 'destination-page-unavailable');
+      const blockedReason = page.blockedReason ?? page.lastError ?? `Destination page ${blockedByPageId} is unavailable`;
+      for (const resource of Object.values(page.resources)) {
+        if (resource.status !== 'planned') continue;
+        if (dependencyBlocked) Object.assign(resource, {status: 'blocked', blockedByPageId, blockedByCode, blockedReason, lastError: blockedReason});
+        else Object.assign(resource, {status: 'not-started', lastError: interrupted ? 'Transfer was interrupted before this file operation started' : 'Transfer ended before this file operation started'});
+        resource.updatedAt = updatedAt;
+      }
+      if (page.comments?.status === 'planned') {
+        if (dependencyBlocked) Object.assign(page.comments, {status: 'blocked', blockedByPageId, blockedByCode, blockedReason, lastError: blockedReason});
+        else Object.assign(page.comments, {status: 'not-started', lastError: interrupted ? 'Transfer was interrupted before comment archival started' : 'Transfer ended before comment archival started'});
+        page.comments.updatedAt = updatedAt;
+      }
+      page.updatedAt = updatedAt;
+    }
+    await this.save();
   }
 
   async save(): Promise<void> {

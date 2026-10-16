@@ -518,6 +518,18 @@ export function rawContentFallback(page: SourcePage, provider: SourcePage['provi
   };
 }
 
+export function emptyRendererFallbackReason(document: NormalizedDocument): string {
+  const types = new Set<string>();
+  const visit = (node: NormalizedNode): void => {
+    if (!['document', 'html'].includes(node.type)) types.add(node.type);
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(document.root);
+  return types.size > 0
+    ? `renderer returned an empty body for normalized ${[...types].sort().join(', ')} content`
+    : `renderer returned an empty body for non-empty ${document.rawFormat} content`;
+}
+
 function semanticText(value: string): string {
   return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }

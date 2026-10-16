@@ -18,6 +18,9 @@ export interface TransferReportResource {
   destinationId?: string;
   destinationName?: string;
   error?: string;
+  blockedByPageId?: string;
+  blockedByCode?: string;
+  blockedReason?: string;
 }
 
 export interface TransferReportPage {
@@ -47,6 +50,9 @@ export interface TransferReportPage {
   warnings: string[];
   normalizations?: string[];
   error?: string;
+  blockedByPageId?: string;
+  blockedByCode?: string;
+  blockedReason?: string;
   comments: {
     status: CommentTransferStatus;
     threads: number;
@@ -60,6 +66,9 @@ export interface TransferReportPage {
     stale?: boolean;
     error?: string;
     preview?: string;
+    blockedByPageId?: string;
+    blockedByCode?: string;
+    blockedReason?: string;
   };
 }
 
@@ -96,6 +105,7 @@ export interface TransferReportSummary {
   failed: number;
   blocked: number;
   conflicts: number;
+  notStartedPages: number;
   unprocessedPages: number;
   resources: number;
   attachments: number;
@@ -103,6 +113,8 @@ export interface TransferReportSummary {
   resourcesComplete: number;
   resourcesPartial: number;
   resourcesFailed: number;
+  resourcesBlocked: number;
+  resourcesNotStarted: number;
   resourcesPlanned: number;
   bytes: number;
   sourceBytes: number;
@@ -117,6 +129,10 @@ export interface TransferReportSummary {
   degradations: number;
   warnings: number;
   errors: number;
+  rootErrors: number;
+  dependentPages: number;
+  dependentFiles: number;
+  dependentComments: number;
   retryableFailures: number;
   inventoryComplete: boolean;
   inventoriedPages: number;
@@ -178,15 +194,16 @@ const pageStatuses: PageTransferStatus[] = [
   'discovered',
   'planned',
   'skeleton-created',
+  'not-started',
   'complete',
   'partial',
   'conflict',
   'failed',
   'blocked',
 ];
-const resourceStatuses: ReportResourceStatus[] = ['planned', 'complete', 'partial', 'failed'];
+const resourceStatuses: ReportResourceStatus[] = ['planned', 'not-started', 'blocked', 'complete', 'partial', 'failed'];
 const edgeStatuses: GraphEdgeStatus[] = ['resolved', 'external', 'inaccessible', 'broken', 'cycle', 'unsupported'];
-const commentStatuses: CommentTransferStatus[] = ['planned', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped'];
+const commentStatuses: CommentTransferStatus[] = ['planned', 'not-started', 'blocked', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped'];
 
 function countRecord<T extends string>(values: readonly T[]): Record<T, number> {
   return Object.fromEntries(values.map((value) => [value, 0])) as Record<T, number>;
@@ -206,6 +223,7 @@ function emptySummary(): TransferReportSummary {
     failed: 0,
     blocked: 0,
     conflicts: 0,
+    notStartedPages: 0,
     unprocessedPages: 0,
     resources: 0,
     attachments: 0,
@@ -213,6 +231,8 @@ function emptySummary(): TransferReportSummary {
     resourcesComplete: 0,
     resourcesPartial: 0,
     resourcesFailed: 0,
+    resourcesBlocked: 0,
+    resourcesNotStarted: 0,
     resourcesPlanned: 0,
     bytes: 0,
     sourceBytes: 0,
@@ -227,6 +247,10 @@ function emptySummary(): TransferReportSummary {
     degradations: 0,
     warnings: 0,
     errors: 0,
+    rootErrors: 0,
+    dependentPages: 0,
+    dependentFiles: 0,
+    dependentComments: 0,
     retryableFailures: 0,
     inventoryComplete: false,
     inventoriedPages: 0,
@@ -264,7 +288,7 @@ function safeHttpUrl(value: string | undefined): string | undefined {
 
 function statusClass(value: string): string {
   return value === 'complete' || value === 'completed' ? 'ok'
-    : /partial|warning|conflict|planned|discovered|skeleton|interrupted|cancelled/.test(value) ? 'warn'
+    : /partial|warning|conflict|planned|not-started|discovered|skeleton|interrupted|cancelled/.test(value) ? 'warn'
       : /failed|blocked|error/.test(value) ? 'bad'
         : 'muted';
 }
@@ -295,6 +319,7 @@ function formatDuration(durationMs: number | undefined): string {
 }
 
 function issueAction(issue: MigrationIssue): string {
+  if (issue.severity === 'blocked') return 'Resolve the upstream page error, then repeat the same migration; this object will resume automatically.';
   if (issue.retryable) return 'Repeat the same migration to retry this object.';
   if (issue.severity === 'degradation') return 'Data remains represented; compare the source and destination previews.';
   if (issue.severity === 'error') return 'Review the reason and affected object before resuming the migration.';
@@ -334,22 +359,40 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
   const selectionDetails = excludedRows || gapRows || repairRows || data.selection.notes.length
     ? `<section class="panel" aria-labelledby="selection-title"><div class="section-head"><div><h2 id="selection-title">Selection and hierarchy</h2><p>Every source-status exclusion, projected hierarchy gap, and destination repair recorded for this run.</p></div></div>${excludedRows ? `<div class="table-wrap"><h3>Excluded pages</h3><table><thead><tr><th>Page</th><th>Source ID</th><th>Status</th><th>Reason</th></tr></thead><tbody>${excludedRows}</tbody></table></div>` : ''}${gapRows ? `<div class="table-wrap"><h3>Hierarchy gaps</h3><table><thead><tr><th>Page</th><th>Missing parent</th><th>Projected parent</th><th>Reason</th></tr></thead><tbody>${gapRows}</tbody></table></div>` : ''}${repairRows ? `<div class="table-wrap"><h3>Destination repairs</h3><table><thead><tr><th>Source page</th><th>Mode</th><th>Old parent</th><th>New parent</th><th>Destination mapping</th><th>Outcome</th></tr></thead><tbody>${repairRows}</tbody></table></div>` : ''}${data.selection.notes.length ? `<div class="callout"><h3>Provider notes</h3><ul>${data.selection.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul></div>` : ''}</section>`
     : '';
-  const pageOutcomeStatuses: PageTransferStatus[] = ['complete', 'partial', 'failed', 'blocked', 'conflict', 'planned', 'discovered', 'skeleton-created'];
-  const resourceOutcomeStatuses: ReportResourceStatus[] = ['complete', 'partial', 'failed', 'planned'];
-  const commentOutcomeStatuses: CommentTransferStatus[] = ['complete', 'partial', 'failed', 'conflict', 'stale', 'skipped', 'planned'];
+  const pageOutcomeStatuses: PageTransferStatus[] = ['complete', 'partial', 'failed', 'blocked', 'conflict', 'not-started', 'planned', 'discovered', 'skeleton-created'];
+  const resourceOutcomeStatuses: ReportResourceStatus[] = ['complete', 'partial', 'failed', 'blocked', 'not-started', 'planned'];
+  const commentOutcomeStatuses: CommentTransferStatus[] = ['complete', 'partial', 'failed', 'blocked', 'not-started', 'conflict', 'stale', 'skipped', 'planned'];
   const attentionIssues = data.issues.filter((issue) => issue.severity !== 'normalization');
   const normalizationIssues = data.issues.filter((issue) => issue.severity === 'normalization');
   const attentionSummary = [
     `${data.summary.errors} errors`,
+    `${data.summary.dependentPages + data.summary.dependentFiles + data.summary.dependentComments} dependent blocks`,
     `${data.summary.warnings} warnings`,
     `${data.summary.degradations} degradations`,
     `${data.summary.retryableFailures} retryable`,
   ].map((item) => `<span>${escapeHtml(item)}</span>`).join('');
   const issueRow = (issue: TransferReportIssue): string => {
     const target = issue.pageAnchor ? `<a href="#${escapeHtml(issue.pageAnchor)}">${escapeHtml(issue.pageTitle ?? issue.pageId)}</a>` : '<span>run-level</span>';
-    return `<li class="issue ${escapeHtml(issue.severity)}"><div><span class="status ${statusClass(issue.severity)}">${escapeHtml(issue.severity)}</span><strong>${escapeHtml(issue.code)}</strong><span>${escapeHtml(issue.phase)}</span>${issue.retryable ? '<span class="retry">retryable</span>' : ''}${issue.occurrences > 1 ? `<span>${issue.occurrences} occurrences</span>` : ''}</div><p>${escapeHtml(issue.message)}</p><p class="issue-context">Affected: ${target}${issue.resourceName ? ` · resource <strong>${escapeHtml(issue.resourceName)}</strong>` : ''}</p><p class="action">${escapeHtml(issue.action)}</p></li>`;
+    const upstream = issue.blockedByPageId ? ` · blocked by <a href="#${escapeHtml(pageAnchor(issue.blockedByPageId))}">${escapeHtml(issue.blockedByPageId)}</a>${issue.blockedByCode ? ` (${escapeHtml(issue.blockedByCode)})` : ''}` : '';
+    return `<li class="issue ${escapeHtml(issue.severity)}"><div><span class="status ${statusClass(issue.severity)}">${escapeHtml(issue.severity)}</span><strong>${escapeHtml(issue.code)}</strong><span>${escapeHtml(issue.phase)}</span>${issue.retryable ? '<span class="retry">retryable</span>' : ''}${issue.occurrences > 1 ? `<span>${issue.occurrences} occurrences</span>` : ''}</div><p>${escapeHtml(issue.message)}</p><p class="issue-context">Affected: ${target}${issue.resourceName ? ` · resource <strong>${escapeHtml(issue.resourceName)}</strong>` : ''}${upstream}</p><p class="action">${escapeHtml(issue.action)}</p></li>`;
   };
   const attention = `<section class="panel attention" aria-labelledby="attention-title"><div class="section-head"><div><h2 id="attention-title">Needs attention</h2><p>Problems and fidelity changes that may require review or a rerun.</p></div><span class="count ${attentionIssues.length ? 'warn' : 'ok'}">${attentionIssues.length}</span></div><div class="mini-stats">${attentionSummary}</div>${attentionIssues.length ? `<ul class="issue-list">${attentionIssues.map(issueRow).join('')}</ul>` : '<p class="empty ok">No errors, warnings, conflicts, or degradations were recorded.</p>'}</section>`;
+  const dependencyGroups = new Map<string, {pages: string[]; files: string[]; comments: string[]; code?: string}>();
+  const dependencyGroup = (rootId: string, code?: string) => {
+    const group = dependencyGroups.get(rootId) ?? {pages: [], files: [], comments: [], ...(code ? {code} : {})};
+    dependencyGroups.set(rootId, group);
+    return group;
+  };
+  for (const page of data.pages) {
+    if (page.status === 'blocked' && page.blockedByPageId) dependencyGroup(page.blockedByPageId, page.blockedByCode).pages.push(page.sourceTitle);
+    for (const resource of page.resourceItems) {
+      if (resource.status === 'blocked' && resource.blockedByPageId) dependencyGroup(resource.blockedByPageId, resource.blockedByCode).files.push(`${page.sourceTitle}: ${resource.sourceName}`);
+    }
+    if (page.comments.status === 'blocked' && page.comments.blockedByPageId) dependencyGroup(page.comments.blockedByPageId, page.comments.blockedByCode).comments.push(page.sourceTitle);
+  }
+  const dependencySection = dependencyGroups.size > 0
+    ? `<section class="panel" aria-labelledby="dependencies-title"><div class="section-head"><div><h2 id="dependencies-title">Blocked dependencies</h2><p>Dependent work was not attempted. Resolve the root error and repeat the same migration.</p></div><span class="count">${dependencyGroups.size}</span></div>${[...dependencyGroups.entries()].map(([rootId, group]) => `<div class="callout warn"><h3><a href="#${escapeHtml(pageAnchor(rootId))}">${escapeHtml(data.pages.find((page) => page.sourceCanonicalId === rootId)?.sourceTitle ?? rootId)}</a>${group.code ? ` · <code>${escapeHtml(group.code)}</code>` : ''}</h3><p>${group.pages.length} pages · ${group.files.length} files · ${group.comments.length} comment archives</p>${group.pages.length ? `<p><strong>Pages:</strong> ${group.pages.map(escapeHtml).join(', ')}</p>` : ''}${group.files.length ? `<p><strong>Files:</strong> ${group.files.map(escapeHtml).join(', ')}</p>` : ''}</div>`).join('')}</section>`
+    : '';
   const pageRows = data.pages.map((page) => {
     const source = safeHttpUrl(page.sourceUrl);
     const destination = safeHttpUrl(page.destinationUrl);
@@ -389,8 +432,9 @@ function renderReport(data: TransferReportData, previews: Map<string, PreviewPai
   <div class="run-meta"><span>Started <strong>${escapeHtml(data.startedAt)}</strong></span>${data.finishedAt ? `<span>Finished <strong>${escapeHtml(data.finishedAt)}</strong></span>` : ''}<span>Duration <strong>${escapeHtml(formatDuration(data.summary.durationMs))}</strong></span><span>Inventory <strong class="${data.summary.inventoryComplete ? 'ok' : 'warn'}">${escapeHtml(inventoryState)}</strong></span></div>
   <section class="panel" aria-labelledby="source-title"><div class="section-head"><div><h2 id="source-title">Source scope inventory</h2><p>Root plus ${escapeHtml(data.summary.returnedDescendants)} accessible descendants; ${escapeHtml(data.summary.selectedDescendants)} selected and ${escapeHtml(data.summary.excludedPages)} excluded with source status <code>${escapeHtml(data.sourceStatus)}</code>.</p></div><span class="status ${data.summary.inventoryComplete ? 'ok' : 'warn'}">${data.summary.inventoryComplete ? 'complete' : 'incomplete'}</span></div><div class="stats">${sourceCards}</div></section>
   ${selectionDetails}
-  <section class="panel" aria-labelledby="outcome-title"><div class="section-head"><div><h2 id="outcome-title">Transfer outcomes</h2><p>Every selected page, discovered file, and page comment archive is counted in exactly one status.</p></div><span class="count">${data.summary.pages}</span></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${pageOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Pages</th>${statusCells(data.summary.pageStatuses, pageOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${resourceOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Files</th>${statusCells(data.summary.resourceStatuses, resourceOutcomeStatuses)}<td><strong>${data.summary.resources}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${commentOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Page comment archives</th>${statusCells(data.summary.commentStatuses, commentOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div></section>
+  <section class="panel" aria-labelledby="outcome-title"><div class="section-head"><div><h2 id="outcome-title">Transfer outcomes</h2><p>Every selected page, discovered file, and page comment archive is counted in exactly one status.</p></div><span class="count">${data.summary.pages}</span></div><div class="callout"><strong>Causes</strong><p>${data.summary.rootErrors} root errors · ${data.summary.dependentPages} dependent pages · ${data.summary.dependentFiles} dependent files · ${data.summary.dependentComments} dependent comment archives</p></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${pageOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Pages</th>${statusCells(data.summary.pageStatuses, pageOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${resourceOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Files</th>${statusCells(data.summary.resourceStatuses, resourceOutcomeStatuses)}<td><strong>${data.summary.resources}</strong></td></tr></tbody></table></div><div class="table-wrap"><table class="outcomes"><thead><tr><th>Object</th>${commentOutcomeStatuses.map((status) => `<th>${escapeHtml(status)}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr><th>Page comment archives</th>${statusCells(data.summary.commentStatuses, commentOutcomeStatuses)}<td><strong>${data.summary.pages}</strong></td></tr></tbody></table></div></section>
   ${attention}
+  ${dependencySection}
   <section aria-labelledby="pages-title"><div class="section-head"><div><h2 id="pages-title">Pages</h2><p>Projected hierarchy with exact outcomes, source metrics, resources, issues, and verified previews.</p></div></div>${pageRows || '<p class="empty">No source page was resolved before the run stopped.</p>'}</section>
   <section class="panel" aria-labelledby="links-title"><div class="section-head"><div><h2 id="links-title">Link traversal</h2><p>Traversal evidence used to select pages in linked scope; content link totals are shown in source inventory.</p></div><span class="count">${data.edges.length}</span></div>${traversalBody}</section>
   ${normalizations}
@@ -494,9 +538,43 @@ export class TransferReport {
   error(message: string): void { this.issue({code: `error:${message}`, severity: 'error', phase: 'report', retryable: false, message}); }
   output(label: string, value: string): void { this.data.outputs.push({label, value}); }
 
+  private finalizeOutcomes(status: RunStatus): void {
+    if (this.data.dryRun) return;
+    const interrupted = status === 'cancelled' || status === 'interrupted';
+    for (const page of this.data.pages) {
+      if (['discovered', 'planned', 'skeleton-created'].includes(page.status)) page.status = 'not-started';
+      const dependencyBlocked = page.status === 'blocked' || page.status === 'failed' || page.status === 'conflict';
+      const blockedByPageId = page.blockedByPageId ?? page.sourceCanonicalId;
+      const blockedByCode = page.blockedByCode ?? (page.status === 'conflict' ? 'destination-conflict' : 'destination-page-unavailable');
+      for (const resource of page.resourceItems) {
+        if (resource.status !== 'planned') continue;
+        if (dependencyBlocked) {
+          resource.status = 'blocked';
+          resource.blockedByPageId = blockedByPageId;
+          resource.blockedByCode = blockedByCode;
+          resource.error ??= `Not attempted because destination page ${blockedByPageId} is unavailable`;
+        } else {
+          resource.status = 'not-started';
+          if (!interrupted) resource.error ??= 'Live transfer ended before this file operation started';
+        }
+      }
+      if (page.comments.status !== 'planned') continue;
+      if (dependencyBlocked) {
+        page.comments.status = 'blocked';
+        page.comments.blockedByPageId = blockedByPageId;
+        page.comments.blockedByCode = blockedByCode;
+        page.comments.error ??= `Not attempted because destination page ${blockedByPageId} is unavailable`;
+      } else {
+        page.comments.status = 'not-started';
+        if (!interrupted) page.comments.error ??= 'Live transfer ended before comment archival started';
+      }
+    }
+  }
+
   finish(status: RunStatus): void {
     this.data.status = status;
     this.data.finishedAt = new Date().toISOString();
+    this.finalizeOutcomes(status);
     const pageById = new Map(this.data.pages.map((page) => [page.sourceCanonicalId, page]));
     this.data.issues = this.issueCollector.list().map((issue): TransferReportIssue => {
       const page = issue.pageId ? pageById.get(issue.pageId) : undefined;
@@ -538,13 +616,16 @@ export class TransferReport {
       failed: pageStatusCounts.failed,
       blocked: pageStatusCounts.blocked,
       conflicts: pageStatusCounts.conflict,
-      unprocessedPages: pageStatusCounts.discovered + pageStatusCounts.planned + pageStatusCounts['skeleton-created'],
+      notStartedPages: pageStatusCounts['not-started'],
+      unprocessedPages: pageStatusCounts.discovered + pageStatusCounts.planned + pageStatusCounts['skeleton-created'] + pageStatusCounts['not-started'],
       resources: resources.length,
       attachments: resources.filter((resource) => resource.kind === 'attachment').length,
       resourceImages: resources.filter((resource) => resource.kind === 'image').length,
       resourcesComplete: resourceStatusCounts.complete,
       resourcesPartial: resourceStatusCounts.partial,
       resourcesFailed: resourceStatusCounts.failed,
+      resourcesBlocked: resourceStatusCounts.blocked,
+      resourcesNotStarted: resourceStatusCounts['not-started'],
       resourcesPlanned: resourceStatusCounts.planned,
       bytes: transferredBytes,
       sourceBytes,
@@ -559,6 +640,10 @@ export class TransferReport {
       degradations: this.issueCollector.count('degradation'),
       warnings: this.issueCollector.count('warning'),
       errors: this.issueCollector.count('error'),
+      rootErrors: this.issueCollector.count('error'),
+      dependentPages: pageStatusCounts.blocked,
+      dependentFiles: resourceStatusCounts.blocked,
+      dependentComments: commentStatusCounts.blocked,
       retryableFailures: this.issueCollector.countRetryableFailures(),
       inventoryComplete: this.data.pages.length > 0 && inventoriedPages === this.data.pages.length,
       inventoriedPages,

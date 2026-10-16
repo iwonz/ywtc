@@ -3,6 +3,7 @@ import {createReadStream} from 'node:fs';
 import type {ConfluenceConnectionProfile} from '../config.js';
 import {extractPageReferences} from '../content-model.js';
 import {normalizeCommentForest} from '../comments.js';
+import {DestinationTitleConflictError} from '../domain.js';
 import type {
   AdapterCapabilities,
   CommentAuthor,
@@ -18,6 +19,7 @@ import type {
   SourceResource,
   UploadedResource,
 } from '../domain.js';
+import {HttpRequestError} from '../http.js';
 import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage} from '../types.js';
 
 const capabilities: AdapterCapabilities = {
@@ -43,6 +45,13 @@ function fingerprint(page: ConfluencePage): string {
 
 function contentFingerprint(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+const duplicateTitlePattern = /(?:duplicate\s+(?:page\s+)?title|page\s+with\s+(?:the\s+)?(?:same|this)\s+title|title[^.]{0,80}(?:already\s+exists|must\s+be\s+unique)|cannot\s+(?:add|create)[^.]{0,80}(?:same|existing)[^.]{0,40}(?:title|name))/i;
+
+function possibleTitleConflict(error: unknown): error is HttpRequestError {
+  return error instanceof HttpRequestError
+    && (error.status === 400 || error.status === 409);
 }
 
 function sourcePage(profile: ConfluenceConnectionProfile, client: ConfluenceApi, page: ConfluencePage): SourcePage {
@@ -257,9 +266,23 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   async createPage(input: {container: DestinationContainer | DestinationPage; title: string; body: string}): Promise<DestinationPage> {
     const space = input.container.space;
     if (!space) throw new Error(`Confluence destination ${input.container.id} is missing a space key`);
-    return destinationPage(this.profile, this.client, await this.client.createPage({
-      spaceKey: space, parentId: input.container.id, title: input.title, storage: input.body,
-    }));
+    try {
+      return destinationPage(this.profile, this.client, await this.client.createPage({
+        spaceKey: space, parentId: input.container.id, title: input.title, storage: input.body,
+      }));
+    } catch (error) {
+      if (!possibleTitleConflict(error)) throw error;
+      let confirmed = duplicateTitlePattern.test(error.message);
+      if (!confirmed) {
+        try {
+          confirmed = Boolean(await this.findTitleConflict(input.container, input.title));
+        } catch {
+          // Preserve the original bad request when lookup cannot confirm a collision.
+        }
+      }
+      if (!confirmed) throw error;
+      throw new DestinationTitleConflictError(input.title, error.status!, {cause: error});
+    }
   }
 
   async updatePage(input: {page: DestinationPage; title: string; body: string; expectedFingerprint?: string}): Promise<DestinationPage> {

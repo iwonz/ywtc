@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {
   appendGridSnapshots,
   assertDestinationContent,
+  emptyRendererFallbackReason,
   extractPageReferences,
   legacyTransferPlaceholder,
   normalizePageContent,
@@ -209,5 +210,11 @@ describe('normalized content pipeline', () => {
       'confluence',
       page,
     )).toThrow(/transfer placeholder/);
+  });
+
+  it('describes recognized normalized constructs when an empty renderer needs a raw fallback', () => {
+    const document = normalizePageContent(source('{% tree depth="2" %}'));
+    expect(emptyRendererFallbackReason(document)).toContain('tree-directive');
+    expect(rawContentFallback(source('{% tree depth="2" %}'), 'confluence', emptyRendererFallbackReason(document)).warnings[0]).toContain('tree-directive');
   });
 });

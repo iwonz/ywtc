@@ -50,6 +50,23 @@ describe('transfer state', () => {
       },
       updatedAt: new Date().toISOString(),
     });
+    await store.setPage({
+      sourceId: '11', sourceCanonicalId: 'wiki:11', sourceLocator: 'root/child', sourceTitle: 'Child',
+      projectedParentId: 'wiki:10', destinationTitle: 'Child', status: 'blocked',
+      blockedByPageId: 'wiki:10', blockedByCode: 'destination-page-staging-failed', blockedReason: 'parent unavailable',
+      resources: {
+        attachment: {
+          sourceId: 'attachment', sourceName: 'file.pdf', destinationName: 'file.pdf', status: 'blocked',
+          blockedByPageId: 'wiki:10', blockedByCode: 'destination-page-staging-failed', blockedReason: 'parent unavailable',
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      comments: {
+        status: 'not-started', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0,
+        updatedAt: new Date().toISOString(),
+      },
+      degradations: [], updatedAt: new Date().toISOString(),
+    });
     const persisted = JSON.parse(await readFile(filename, 'utf8')) as Record<string, unknown>;
     expect(persisted).not.toHaveProperty('version');
     const resumed = new StateStore(filename);
@@ -58,6 +75,11 @@ describe('transfer state', () => {
     expect(state.runs.find((item) => item.id === run.id)).toMatchObject({sourceStatus: 'current', returnedDescendants: 9, selectedDescendants: 2, excludedPages: 1, maximumDepth: 2, commentsEnabled: true, commentThreads: 1, comments: 2, commentAttachments: 1});
     expect(state.pages['wiki:10']?.status).toBe('discovered');
     expect(state.pages['wiki:10']?.comments).toMatchObject({status: 'complete', destinationId: 'comment-1', comments: 2});
+    expect(state.pages['wiki:11']).toMatchObject({
+      status: 'blocked', blockedByPageId: 'wiki:10',
+      resources: {attachment: {status: 'blocked', blockedByCode: 'destination-page-staging-failed'}},
+      comments: {status: 'not-started'},
+    });
   });
 
   it('strictly rejects an unknown field with a generic error and preserves the file', async () => {
@@ -90,5 +112,24 @@ describe('transfer state', () => {
     await store.load(identity, {fresh: true, dryRun: true});
     await expect(readFile(filename, 'utf8')).resolves.toBe('keep\n');
     expect(store.loadInfo.backupFilename).toBeUndefined();
+  });
+
+  it('removes planned outcomes from a terminal live run while preserving dry-run plans', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-state-outcomes-'));
+    const store = new StateStore(path.join(directory, 'state.json'));
+    await store.load(identity);
+    await store.setPage({
+      sourceId: '10', sourceCanonicalId: 'wiki:10', sourceLocator: 'root', sourceTitle: 'Root',
+      destinationTitle: 'Root', status: 'failed', lastError: 'create failed', resources: {
+        file: {sourceId: 'file', sourceName: 'file.pdf', destinationName: 'file.pdf', status: 'planned', updatedAt: new Date().toISOString()},
+      },
+      comments: {status: 'planned', threads: 1, comments: 1, participants: 1, attachments: 0, bytes: 0, updatedAt: new Date().toISOString()},
+      degradations: [], updatedAt: new Date().toISOString(),
+    });
+    await store.finalizeOutcomes(['wiki:10'], 'partial', false);
+    expect(store.value.pages['wiki:10']).toMatchObject({
+      resources: {file: {status: 'blocked', blockedByPageId: 'wiki:10'}},
+      comments: {status: 'blocked', blockedByPageId: 'wiki:10'},
+    });
   });
 });

@@ -1,6 +1,6 @@
 import {stripAnsi} from './content-model.js';
 
-export type IssueSeverity = 'normalization' | 'degradation' | 'warning' | 'error';
+export type IssueSeverity = 'normalization' | 'degradation' | 'warning' | 'blocked' | 'error';
 type IssuePhase = 'discovery' | 'inventory' | 'page' | 'resource' | 'comment' | 'verification' | 'report';
 
 export interface MigrationIssue {
@@ -10,6 +10,8 @@ export interface MigrationIssue {
   message: string;
   pageId?: string;
   resourceId?: string;
+  blockedByPageId?: string;
+  blockedByCode?: string;
   retryable: boolean;
   occurrences: number;
 }

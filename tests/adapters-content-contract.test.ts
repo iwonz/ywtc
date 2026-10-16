@@ -3,6 +3,8 @@ import {ConfluenceAdapter} from '../src/adapters/confluence.js';
 import {YandexAdapter} from '../src/adapters/yandex.js';
 import type {YandexWikiClient} from '../src/clients/yandex-wiki.js';
 import type {ConfluenceConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
+import {DestinationTitleConflictError} from '../src/domain.js';
+import {HttpRequestError} from '../src/http.js';
 import type {ConfluenceApi, ConfluencePage, YandexPageDetails} from '../src/types.js';
 
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 8, burst: 8};
@@ -135,6 +137,31 @@ describe('source page content contracts', () => {
       title: 'Parent', url: 'https://conf.example/confluence/pages/100', space: 'DOC',
     };
     await expect(adapter.findRecoverablePage(expectedParent, 'Child')).resolves.toMatchObject({id: '2', parentId: '100'});
+  });
+
+  it.each(['data-center', 'cloud'] as const)('classifies authoritative %s duplicate-title creates without masking ordinary bad requests', async (deployment) => {
+    let duplicate = true;
+    const duplicateStatus = deployment === 'cloud' ? 409 : 400;
+    const client = {
+      createPage: async () => {
+        throw duplicate
+          ? new HttpRequestError(`HTTP request failed: status=${duplicateStatus}: Cannot create a page with this title because another page with the same title already exists`, duplicateStatus, 'POST')
+          : new HttpRequestError('HTTP request failed: status=400: malformed storage body', 400, 'POST');
+      },
+      findPageByTitle: async () => undefined,
+      pageWebUrl: () => 'https://conf.example/confluence/pages/2',
+    } as unknown as ConfluenceApi;
+    const profile: ConfluenceConnectionProfile = deployment === 'data-center'
+      ? confluenceProfile
+      : {...confluenceProfile, deployment: 'cloud', baseUrl: 'https://example.atlassian.net/wiki', authType: 'api-token', email: 'user@example.com'};
+    const adapter = new ConfluenceAdapter(profile, client);
+    const expectedParent = {
+      provider: 'confluence' as const, profile: profile.name, id: '100', canonicalId: 'conf:100',
+      title: 'Parent', url: `${profile.baseUrl}/pages/100`, space: 'DOC',
+    };
+    await expect(adapter.createPage({container: expectedParent, title: 'Child', body: '<p>Body</p>'})).rejects.toBeInstanceOf(DestinationTitleConflictError);
+    duplicate = false;
+    await expect(adapter.createPage({container: expectedParent, title: 'Child', body: '<p>Body</p>'})).rejects.toBeInstanceOf(HttpRequestError);
   });
 
   it('filters Confluence current descendants and reparents through the shared adapter', async () => {

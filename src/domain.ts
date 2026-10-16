@@ -79,6 +79,17 @@ export interface DestinationPage {
   contentLength?: number;
 }
 
+export class DestinationTitleConflictError extends Error {
+  constructor(
+    readonly title: string,
+    readonly status: number,
+    options?: ErrorOptions,
+  ) {
+    super(`Destination already contains a page titled "${title}"`, options);
+    this.name = 'DestinationTitleConflictError';
+  }
+}
+
 export interface UploadedResource {
   id: string;
   name: string;

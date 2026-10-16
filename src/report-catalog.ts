@@ -32,16 +32,23 @@ const reportListSchema = z.object({
     failed: z.number().nonnegative(),
     blocked: z.number().nonnegative(),
     conflicts: z.number().nonnegative(),
+    notStartedPages: z.number().nonnegative().optional().default(0),
     unprocessedPages: z.number().nonnegative(),
     resources: z.number().nonnegative(),
     resourcesComplete: z.number().nonnegative(),
     resourcesPartial: z.number().nonnegative(),
     resourcesFailed: z.number().nonnegative(),
+    resourcesBlocked: z.number().nonnegative().optional().default(0),
+    resourcesNotStarted: z.number().nonnegative().optional().default(0),
     resourcesPlanned: z.number().nonnegative(),
     inventoryComplete: z.boolean(),
     degradations: z.number().nonnegative(),
     warnings: z.number().nonnegative(),
     errors: z.number().nonnegative(),
+    rootErrors: z.number().nonnegative().optional(),
+    dependentPages: z.number().nonnegative().optional().default(0),
+    dependentFiles: z.number().nonnegative().optional().default(0),
+    dependentComments: z.number().nonnegative().optional().default(0),
     commentThreads: z.number().nonnegative().optional().default(0),
     comments: z.number().nonnegative().optional().default(0),
     commentParticipants: z.number().nonnegative().optional().default(0),
@@ -72,16 +79,23 @@ export interface ReportCatalogEntry {
   failed: number;
   blocked: number;
   conflicts: number;
+  notStartedPages: number;
   unprocessedPages: number;
   resources: number;
   resourcesComplete: number;
   resourcesPartial: number;
   resourcesFailed: number;
+  resourcesBlocked: number;
+  resourcesNotStarted: number;
   resourcesPlanned: number;
   inventoryComplete: boolean;
   degradations: number;
   warnings: number;
   errors: number;
+  rootErrors: number;
+  dependentPages: number;
+  dependentFiles: number;
+  dependentComments: number;
   commentThreads: number;
   comments: number;
   commentParticipants: number;
@@ -175,16 +189,23 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     failed: parsed.summary.failed,
     blocked: parsed.summary.blocked,
     conflicts: parsed.summary.conflicts,
+    notStartedPages: parsed.summary.notStartedPages,
     unprocessedPages: parsed.summary.unprocessedPages,
     resources: parsed.summary.resources,
     resourcesComplete: parsed.summary.resourcesComplete,
     resourcesPartial: parsed.summary.resourcesPartial,
     resourcesFailed: parsed.summary.resourcesFailed,
+    resourcesBlocked: parsed.summary.resourcesBlocked,
+    resourcesNotStarted: parsed.summary.resourcesNotStarted,
     resourcesPlanned: parsed.summary.resourcesPlanned,
     inventoryComplete: parsed.summary.inventoryComplete,
     degradations: parsed.summary.degradations,
     warnings: parsed.summary.warnings,
     errors: parsed.summary.errors,
+    rootErrors: parsed.summary.rootErrors ?? parsed.summary.errors,
+    dependentPages: parsed.summary.dependentPages,
+    dependentFiles: parsed.summary.dependentFiles,
+    dependentComments: parsed.summary.dependentComments,
     commentThreads: parsed.summary.commentThreads,
     comments: parsed.summary.comments,
     commentParticipants: parsed.summary.commentParticipants,

@@ -53,7 +53,21 @@ test.beforeAll(async () => {
     resourceItems: [{sourceId: 'manual', sourceName: 'manual.pdf', kind: 'attachment', status: 'failed', sourceBytes: 12, destinationName: 'manual.pdf', error: 'upload rejected'}],
     resourceFallbacks: [{name: 'manual.pdf', error: 'upload rejected'}],
   }), {source: '<p>Manual source</p>', destination: '<p>Manual source with fallback</p>'});
+  report.addPage(reportPage({
+    sourceCanonicalId: 'wiki:3', sourceId: '3', sourceTitle: 'Occupied parent', status: 'failed', depth: 1,
+    error: 'All deterministic destination titles are occupied',
+  }));
+  report.addPage(reportPage({
+    sourceCanonicalId: 'wiki:4', sourceId: '4', sourceTitle: 'Blocked child', status: 'blocked', depth: 2,
+    parentId: 'wiki:3', blockedByPageId: 'wiki:3', blockedByCode: 'destination-page-staging-failed',
+    blockedReason: 'Destination parent is unavailable',
+  }));
   report.issue({code: 'resource-transfer-failed', severity: 'error', phase: 'resource', pageId: 'wiki:2', resourceId: 'manual', retryable: true, message: 'Attachment upload was rejected'});
+  report.issue({code: 'destination-page-staging-failed', severity: 'error', phase: 'page', pageId: 'wiki:3', retryable: true, message: 'All deterministic destination titles are occupied'});
+  report.issue({
+    code: 'destination-parent-unavailable', severity: 'blocked', phase: 'page', pageId: 'wiki:4', retryable: false,
+    blockedByPageId: 'wiki:3', blockedByCode: 'destination-page-staging-failed', message: 'Destination parent is unavailable',
+  });
   report.finish('partial');
   reportUrl = pathToFileURL((await report.write(temporary)).html).toString();
 });
@@ -66,6 +80,8 @@ for (const viewport of [{name: 'desktop', width: 1440, height: 900}, {name: 'mob
     await expect(page.getByRole('heading', {name: 'Source scope inventory'})).toBeVisible();
     await expect(page.getByRole('heading', {name: 'Transfer outcomes'})).toBeVisible();
     await expect(page.getByRole('heading', {name: 'Needs attention'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: 'Blocked dependencies'})).toBeVisible();
+    await expect(page.getByText('1 pages · 0 files · 0 comment archives')).toBeVisible();
     await expect(page.getByText('accessible in selected scope')).toBeVisible();
     await expect(page.getByText('1 threads').first()).toBeVisible();
     const rootDetails = page.locator('details.page').filter({hasText: 'Knowledge base'});
