@@ -147,14 +147,17 @@ test('language, theme, filters, comment details, and responsive layout are avail
 });
 
 for (const snapshot of [
-  {name: 'desktop-light', width: 1440, height: 900, theme: 'Light'},
-  {name: 'desktop-dark', width: 1440, height: 900, theme: 'Dark'},
-  {name: 'mobile-light', width: 390, height: 844, theme: 'Light'},
-  {name: 'mobile-dark', width: 390, height: 844, theme: 'Dark'},
+  {name: 'desktop-light', width: 1440, height: 900, canvasHeight: 2400, theme: 'Light'},
+  {name: 'desktop-dark', width: 1440, height: 900, canvasHeight: 2400, theme: 'Dark'},
+  {name: 'mobile-light', width: 390, height: 844, canvasHeight: 2960, theme: 'Light'},
+  {name: 'mobile-dark', width: 390, height: 844, canvasHeight: 2960, theme: 'Dark'},
 ]) {
   test(`visual snapshot ${snapshot.name}`, async ({page}) => {
     await page.setViewportSize({width: snapshot.width, height: snapshot.height});
     await page.goto(reportUrl);
+    await page.addStyleTag({
+      content: `html, body, #root, .report-background { min-height: ${snapshot.canvasHeight}px !important; }`,
+    });
     await page.getByRole('combobox', {name: 'Theme'}).click();
     await page.getByRole('option', {name: snapshot.theme}).click();
     await expect(page).toHaveScreenshot(`${snapshot.name}.png`, {animations: 'disabled', fullPage: true, maxDiffPixelRatio: 0.04});
