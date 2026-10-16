@@ -32,7 +32,7 @@ The project SHALL keep a high/critical production dependency audit, TypeScript t
 - **THEN** release hygiene, production dependency audit, typechecking, Biome, Knip, tests, browser checks, build, package verification, and strict OpenSpec validation SHALL all run and fail the command on violations
 
 ### Requirement: Public repository documentation and metadata
-The README SHALL be concise, provider-neutral, and organized by the fixed information architecture covering only current installation, operation, config-only workspaces, compatibility, credentials, parameters, examples, export, state, reports, and development without historical migration guidance.
+The README SHALL be concise, provider-neutral, task-oriented, and complete enough to install, configure, validate, operate, and troubleshoot the current product without historical migration guidance or duplicated rules.
 
 #### Scenario: First-time setup
 - **WHEN** a new operator reads README and the generated template
@@ -44,34 +44,32 @@ The README SHALL be concise, provider-neutral, and organized by the fixed inform
 
 #### Scenario: A new operator reads the README
 - **WHEN** the repository README is opened
-- **THEN** it SHALL present the verified full-width header and a concise path to install, initialize, configure, diagnose, dry-run, inspect, and transfer content
+- **THEN** it SHALL present the verified full-width header, a one-paragraph product definition, and a copyable shortest path to install, initialize, and start an interactive dry-run
 
 #### Scenario: Stable README information architecture
 - **WHEN** the README's second-level headings are inspected
-- **THEN** their exact order SHALL be `Описание`, `Возможности`, `Установка`, `Минимальный сценарий`, `Конфигурация`, `Направления и совместимость`, `Как получить токены`, `Параметры`, `Частые примеры`, `Файловый экспорт`, `State`, `Отчёты`, and `Разработка`
-- **AND** no additional second-level section SHALL be introduced without an explicit specification change
+- **THEN** their exact order SHALL be `Быстрый старт`, `Возможности`, `Совместимость`, `Конфигурация`, `CLI`, `Файловый экспорт`, `State и повторные запуски`, `Отчёты и статусы`, and `Разработка`
+- **AND** installation SHALL live with the guided start, credentials with configuration, common examples with CLI, limitations with capabilities, and outcome definitions with reports
 
 #### Scenario: Minimum migration flow is followed
 - **WHEN** an operator wants the shortest safe path from installation to migration
-- **THEN** the README SHALL provide exactly three checklist steps: install ywtc, run `ywtc init --interactive`, and run `ywtc migrate --interactive`
-- **AND** the two wizards SHALL own connection setup plus the explicit dry-run-to-live handoff without requiring copied commands in the checklist
+- **THEN** the README SHALL provide copyable commands to install ywtc, run `ywtc init --interactive`, and run `ywtc migrate --interactive`
+- **AND** the migration wizard's default dry-run and explicit live handoff SHALL be explained once without a separate duplicate checklist
 
 #### Scenario: Common command variants are needed
 - **WHEN** an operator needs a frequent workflow beyond the minimum
-- **THEN** the README SHALL show exactly four concise examples covering a remote transfer, scope selection, static export, and report opening
+- **THEN** the CLI section SHALL show four concise examples covering a remote subtree transfer, linked scope, static export, and report opening
 - **AND** each example SHALL omit options supplied by defaults or automatic profile resolution
-- **AND** exhaustive direction, profile, workdir, state, and recovery combinations SHALL remain canonical in the compatibility and parameter references rather than being repeated as examples
 
 #### Scenario: Migration coverage is reviewed
 - **WHEN** an operator evaluates content fidelity
-- **THEN** the README SHALL separately present a detailed supported-content table and a concise not-transferred table
-- **AND** the supported-content table SHALL describe hierarchy, text styling, tables, code, links, anchors, downloadable attachments and common file types, images, provider-specific constructs, native equivalents, and loss-aware fallback behavior
-- **AND** the not-transferred table SHALL distinguish excluded data from content that is retained as a safe static representation, source link, or raw snapshot
+- **THEN** the capabilities section SHALL contain a detailed supported-content table followed by a concise limitations table
+- **AND** the tables SHALL distinguish preserved content, native normalization, complete adaptation, explicit fallback, and excluded data
 
 #### Scenario: README readability is reviewed
-- **WHEN** documentation repeats a rule, caveat, or operational instruction across sections
-- **THEN** the README SHALL keep one canonical explanation and use concise cross-references elsewhere without losing required information
-- **AND** it SHALL omit obsolete migration instructions, compatibility guidance, and completed one-time setup procedures
+- **WHEN** documentation repeats a rule, caveat, status, or operational instruction across sections
+- **THEN** the README SHALL retain one canonical explanation and remove the duplicate rather than relying on cross-section repetition
+- **AND** it SHALL omit obsolete compatibility guidance, completed one-time setup procedures, filler headings, and prose that only restates a table
 
 #### Scenario: CLI help is opened
 - **WHEN** an operator runs `ywtc --help`, `ywtc <command> --help`, or `ywtc --version`
@@ -79,15 +77,15 @@ The README SHALL be concise, provider-neutral, and organized by the fixed inform
 
 #### Scenario: Platform compatibility is inspected
 - **WHEN** an operator evaluates a Yandex Wiki or Confluence connection
-- **THEN** the README SHALL identify Public API v1, Data Center 7.9+ without an upper bound subject to capability preflight, Cloud API support, unsupported profiles, and the boundary between contract tests and live certification
+- **THEN** the compatibility section SHALL identify Public API v1, Data Center 7.9+ without an upper bound subject to capability preflight, Cloud API support, unsupported profiles, and the boundary between contract tests and live certification
 
 #### Scenario: Parameters are inspected
 - **WHEN** an operator constructs any supported command or configuration
-- **THEN** the README SHALL provide compact complete tables for commands, long and short CLI options, direct connection/profile fields, defaults, accepted formats, examples, and descriptions
+- **THEN** the configuration and CLI sections SHALL provide compact complete tables for direct connection fields, commands, long and short options, defaults, accepted formats, examples, and descriptions
 
 #### Scenario: Token setup is inspected
 - **WHEN** an operator follows authentication instructions
-- **THEN** the README SHALL give short vendor-linked checklists for obtaining Yandex OAuth/IAM, Data Center PAT, and Cloud email/API token and placing them directly in ignored `ywtc.config.yaml` without real credentials in tracked examples
+- **THEN** the configuration section SHALL give short vendor-linked checklists for obtaining Yandex OAuth/IAM, Data Center PAT, and Cloud email/API token and placing them directly in ignored `ywtc.config.yaml` without real credentials in tracked examples
 
 #### Scenario: Package metadata is inspected
 - **WHEN** npm or release tooling consumes package metadata
@@ -137,16 +135,16 @@ The README header SHALL accurately depict Yandex Wiki and Confluence as sources 
 - **THEN** its alternative text SHALL identify the two source providers, the `ywtc` pipeline, and all four destination types
 
 ### Requirement: Guided setup documentation and packaging
-The public package and README SHALL expose interactive initialization and interactive migration as the shortest guided setup while retaining ordinary commands for automation and preserving the fixed README section order.
+The public package and README SHALL expose interactive initialization and interactive migration as the shortest guided setup while retaining ordinary commands for automation.
 
 #### Scenario: Minimum guided setup
-- **WHEN** a first-time operator follows the README checklist
-- **THEN** it SHALL contain installation, `ywtc init --interactive`, and `ywtc migrate --interactive` as its three steps
+- **WHEN** a first-time operator follows the quick start
+- **THEN** it SHALL contain installation, `ywtc init --interactive`, and `ywtc migrate --interactive` as one copyable sequence
 - **AND** interactive migration SHALL default to dry-run and require an explicit live choice
 
 #### Scenario: Automation setup
 - **WHEN** an operator does not have an interactive terminal or manages configuration separately
-- **THEN** the README SHALL retain concise ordinary `ywtc init`, direct `ywtc.config.yaml`, and non-interactive `ywtc migrate` guidance without duplicating the parameter reference
+- **THEN** the README SHALL retain concise ordinary `ywtc init`, direct `ywtc.config.yaml`, and non-interactive `ywtc migrate` guidance in their canonical configuration and CLI sections
 
 #### Scenario: Public CLI help
 - **WHEN** an operator opens `ywtc init --help`
@@ -161,37 +159,37 @@ The public package and README SHALL expose interactive initialization and intera
 - **THEN** it SHALL fail before workspace, destination, or network mutation with the documented actionable message
 
 ### Requirement: Content safety and report access documentation
-The packaged CLI and README SHALL describe current content-preservation and report-access behavior within the existing fixed information architecture.
+The packaged CLI and README SHALL describe current content-preservation and report-access behavior in the canonical capabilities, state, and reports sections.
 
 #### Scenario: Operator reviews migration safety
 - **WHEN** an operator reads the current README
-- **THEN** the existing Features, State, and Reports sections SHALL explain source-derived bootstrap bodies, resource fallbacks, partial retries, actual-content verification, report URLs, and report commands without adding a new second-level section
+- **THEN** the capabilities and state sections SHALL explain source-derived bodies, resource fallbacks, partial retries, actual-content verification, and the no-deletion boundary without repeating those guarantees in other sections
 
 #### Scenario: Packaged report commands are inspected
 - **WHEN** an installed package runs `ywtc --help`, `ywtc reports --help`, or `ywtc migrate --help`
 - **THEN** the output SHALL expose report listing, report opening, and opt-in post-run opening without loading connection configuration
 
 ### Requirement: Source selection documentation
-The README SHALL document complete subtree selection and the provider-neutral source-status filter inside the existing Parameters, Frequent examples, State, and Reports sections without adding a new top-level section.
+The README SHALL document complete subtree selection and the provider-neutral source-status filter in the canonical CLI and state sections.
 
 #### Scenario: Operator reviews subtree behavior
-- **WHEN** an operator reads the parameter table and subtree examples
-- **THEN** the documentation SHALL state that `all` is the default, explain Yandex `actual` and `obsolete` coverage, describe Confluence hierarchy limitations, and show a current-only command
+- **WHEN** the operator reads the CLI scope reference
+- **THEN** it SHALL state that `subtree` and source status `all` are defaults, explain Yandex `actual` and `obsolete` coverage, describe Confluence hierarchy limitations, and show how to select `current`
 
 #### Scenario: Operator changes source status on rerun
-- **WHEN** an operator reads the State and Reports sections
-- **THEN** the documentation SHALL explain stable state identity, non-deletion of mappings outside the current selection, selected/excluded counts, and hierarchy repair reporting
+- **WHEN** the operator reads the state section
+- **THEN** the documentation SHALL explain stable state identity, non-deletion of mappings outside the current selection, and how selected or excluded pages appear in reports
 
 ### Requirement: Comment archive documentation
-The README SHALL describe page comment archival, authorship, nesting, statuses, comment attachment ZIPs, default enablement, disable flag, resumable outcomes, and limitations within the existing fixed information architecture.
+The README SHALL document page comment archival once across capabilities, configuration-free CLI controls, state, reports, and limitations.
 
 #### Scenario: Transfer coverage is reviewed
-- **WHEN** an operator reads the Features and Parameters sections
-- **THEN** comments and explicitly linked page attachments SHALL appear as supported content, `--no-comments` SHALL be documented, and reactions plus attachment/blog/custom-content comments SHALL remain listed as not transferred
+- **WHEN** an operator reads the capabilities and CLI sections
+- **THEN** comments and explicitly linked page attachments SHALL appear as supported content, `--no-comments` SHALL be documented, and reactions plus attachment/blog/custom-content comments SHALL remain listed as limitations
 
 #### Scenario: Failure behavior is reviewed
-- **WHEN** an operator reads the State and Reports sections
-- **THEN** the documentation SHALL explain partial comment outcomes, conflict/stale preservation, exact counts, archive previews, and non-deletion without adding a new second-level section
+- **WHEN** an operator reads the state and reports sections
+- **THEN** the documentation SHALL explain resumable partial comment outcomes, stale archive preservation, counts, previews, and non-deletion without restating comment rendering details
 
 ### Requirement: Packaged comment CLI verification
 Package and project checks SHALL exercise the public comment flags, provider contracts, normalized rendering, deterministic archives, resume behavior, report reconciliation, and filesystem output without including runtime comments or identity data in the published package.
@@ -205,29 +203,29 @@ Package and project checks SHALL exercise the public comment flags, provider con
 - **THEN** source fixtures, cached comment bodies, generated ZIPs, reports, tokens, email addresses, and runtime state SHALL be excluded
 
 ### Requirement: Transfer outcome documentation
-The README SHALL define page/file outcomes and the separate normalization, adaptation, degradation, warning, and error quality dimensions inside the existing Reports section.
+The README SHALL define provider-neutral page and file outcomes in one compact applicability-aware table and SHALL separately define normalization, adaptation, degradation, warning, and error quality dimensions.
 
 #### Scenario: Page status is inspected
-- **WHEN** an operator reads `### Статусы переноса` under `## Отчёты`
-- **THEN** a page-status table SHALL define `complete`, `partial`, `failed`, `blocked`, `conflict`, `planned`, and `not-started`
-- **AND** it SHALL state whether destination data was written and the appropriate user action for each status
+- **WHEN** an operator reads `Отчёты и статусы`
+- **THEN** one applicability-aware status table SHALL define `complete`, `partial`, `failed`, `blocked`, `conflict`, `planned`, and `not-started` and state the next action
+- **AND** it SHALL define `conflict` as proven ambiguous ownership or identity rather than an ordinary destination revision, manual content change, title collision, or generic provider error
 
 #### Scenario: File status is inspected
-- **WHEN** the operator reads the same subsection
-- **THEN** a separate file-status table SHALL define `complete`, `partial`, `failed`, `blocked`, `planned`, and `not-started`
+- **WHEN** the operator reads the same status table
+- **THEN** it SHALL identify which outcomes apply to files and comment archives without duplicating their shared definitions
 - **AND** it SHALL explain that `planned` is exclusive to dry-run while `blocked` identifies an unmet page dependency
 
 #### Scenario: Quality classification is inspected
 - **WHEN** an operator compares complete pages containing normalizations or adaptations with partial pages
-- **THEN** documentation SHALL explain that adaptations preserve information in another presentation while degradations identify absent or unverified information
+- **THEN** documentation SHALL explain that normalizations and adaptations preserve information while degradations identify absent or unverified information and affect completeness
 
 #### Scenario: Failure and dependency are compared
-- **WHEN** an operator compares `failed` with `blocked`
-- **THEN** the documentation SHALL explain that `failed` means an operation was attempted unsuccessfully while `blocked` means it was intentionally not attempted because an upstream dependency failed or conflicted
+- **WHEN** an operator compares `failed`, `blocked`, `planned`, and `not-started`
+- **THEN** documentation SHALL state that `failed` is an unsuccessful attempted operation, `blocked` is an operation not attempted because an upstream dependency is unavailable, `planned` belongs to dry-run, and `not-started` follows interruption
 
 #### Scenario: README structure is checked
 - **WHEN** the status documentation is updated
-- **THEN** the README SHALL retain its exact thirteen second-level headings and SHALL NOT duplicate status definitions in another section
+- **THEN** the README SHALL keep status definitions only in `Отчёты и статусы` and SHALL retain the specified nine second-level headings
 
 ### Requirement: Packaged report application
 The project SHALL compile and package the report dashboard as a self-contained generated asset that the installed CLI can inject with per-run data without depending on repository source files.
@@ -268,11 +266,11 @@ Project checks SHALL validate reconciled adaptation and degradation accounting i
 - **THEN** checks SHALL prove active content is isolated and downloadable JSON plus package contents do not expose protected values
 
 ### Requirement: Interactive report documentation
-The README SHALL describe the compact dashboard and its distinct information-impact categories within `## Отчёты` without changing the fixed second-level section order.
+The README SHALL describe the compact offline dashboard and its distinct information-impact categories within `Отчёты и статусы`.
 
 #### Scenario: Operator reads report guidance
-- **WHEN** an operator reads the Reports section
-- **THEN** it SHALL concisely explain the unified overview, quality totals for adaptations/degradations/normalizations, hierarchy filters, details, comparison, preference controls, JSON download, and report-opening commands
+- **WHEN** an operator reads the reports section
+- **THEN** it SHALL concisely explain report creation and opening, the flat overview, hierarchy search and filters, per-page details and comparison, preference controls, sanitized JSON download, and quality totals without narrating decorative UI details
 
 ### Requirement: Deterministic offline report typography
 The packaged report application SHALL render its interface with self-hosted font resources embedded in the autonomous HTML shell and SHALL NOT depend on fonts installed by the host operating system.
@@ -309,19 +307,19 @@ The README supported-content table SHALL distinguish exact preservation, safe no
 - **THEN** the documentation SHALL state that it transfers as a valid empty page rather than a fallback or degradation
 
 ### Requirement: Source-authoritative state and report documentation
-The README SHALL explain current mapped-object authority and compact report behavior only inside its existing `State` and `Отчёты` sections.
+The README SHALL explain mapped-object authority in `State и повторные запуски` and compact outcome interpretation in `Отчёты и статусы`.
 
 #### Scenario: Mapped destination policy is reviewed
-- **WHEN** an operator reads `State`
+- **WHEN** an operator reads the state section
 - **THEN** it SHALL state that current source content and hierarchy replace differing proven mappings through destination version history while unmapped or ambiguously owned objects remain protected
 
 #### Scenario: Conflict status is reviewed
-- **WHEN** an operator reads the transfer status tables
+- **WHEN** an operator reads the transfer status table
 - **THEN** `conflict` SHALL mean ambiguous ownership or identity rather than an ordinary destination revision or manual content change
 
 #### Scenario: Report interface is reviewed
-- **WHEN** an operator reads `Отчёты`
-- **THEN** it SHALL describe the single compact overview, hierarchy diagnostics, per-page problem details, icon-only language/theme controls, JSON download, and existing report-opening commands without a new second-level section
+- **WHEN** an operator reads the reports section
+- **THEN** it SHALL describe the compact overview, hierarchy diagnostics, per-page problem details and comparison, icon-only language/theme controls, sanitized JSON download, and report-opening commands without duplicating report behavior elsewhere
 
 ### Requirement: Compact report presentation
 The interactive report SHALL prioritize non-zero outcomes, actionable diagnostics, and transfer completeness in a flat document layout while omitting empty metrics and redundant controls.

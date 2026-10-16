@@ -3,6 +3,7 @@ import {readdir, readFile, stat} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {promisify} from 'node:util';
+import {validateReadmeContract} from './readme-contract.mjs';
 
 const root = process.cwd();
 const execFileAsync = promisify(execFile);
@@ -13,21 +14,6 @@ const forbiddenExtensions = new Set(['.key', '.p12', '.pem', '.pfx']);
 const textExtensions = new Set([
   '', '.cjs', '.css', '.env', '.example', '.html', '.js', '.json', '.jsonc', '.md', '.mjs', '.ts', '.yaml', '.yml',
 ]);
-const expectedReadmeHeadings = [
-  'Описание',
-  'Возможности',
-  'Установка',
-  'Минимальный сценарий',
-  'Конфигурация',
-  'Направления и совместимость',
-  'Как получить токены',
-  'Параметры',
-  'Частые примеры',
-  'Файловый экспорт',
-  'State',
-  'Отчёты',
-  'Разработка',
-];
 const findings = [];
 
 function relative(filename) {
@@ -100,22 +86,11 @@ for (const required of ['.env', '.env.*', 'ywtc.config.yaml', '.states/', 'dist/
 
 const readmeFilename = path.join(root, 'README.md');
 const readme = await readFile(readmeFilename, 'utf8');
-const readmeHeadings = [...readme.matchAll(/^##[ \t]+(.+?)[ \t]*$/gm)].map((match) => match[1]);
-if (JSON.stringify(readmeHeadings) !== JSON.stringify(expectedReadmeHeadings)) {
-  add(readmeFilename, `second-level headings must be exactly: ${expectedReadmeHeadings.join(' → ')}`);
-}
-const minimumScenario = readme.match(/^## Минимальный сценарий\s*$([\s\S]*?)(?=^## )/m)?.[1] ?? '';
-if ((minimumScenario.match(/^- \[ \] /gm) ?? []).length !== 3) {
-  add(readmeFilename, 'minimum scenario must contain exactly three checklist steps');
-}
-const commonExamples = readme.match(/^## Частые примеры\s*$([\s\S]*?)(?=^## )/m)?.[1] ?? '';
-if ((commonExamples.match(/^# (?:Перенести|Создать|Открыть)/gm) ?? []).length !== 4) {
-  add(readmeFilename, 'common examples must contain exactly four labelled commands');
-}
+for (const reason of validateReadmeContract(readme)) add(readmeFilename, reason);
 for (const [needle, reason] of [
   ['ywtc init --interactive', 'interactive initialization is not documented'],
   ['ywtc migrate --interactive', 'interactive migration is not documented'],
-  ['Обычный `ywtc init`', 'non-interactive initialization is not documented'],
+  ['`ywtc init` создаёт пустой шаблон', 'non-interactive initialization is not documented'],
   ['не права конкретных страниц', 'connection-only verification boundary is not documented'],
 ]) {
   if (!readme.includes(needle)) add(readmeFilename, reason);

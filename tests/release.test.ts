@@ -117,7 +117,6 @@ describe('release validation', () => {
     expect(readme).toContain(
       'brew tap iwonz/ywtc https://github.com/iwonz/ywtc.git\nbrew trust --tap iwonz/ywtc\nbrew install ywtc',
     );
-    expect(readme).toContain('Homebrew 7');
   });
 
   it('publishes a public scoped package with the ywtc binary', async () => {
