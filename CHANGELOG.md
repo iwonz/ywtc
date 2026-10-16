@@ -2,6 +2,29 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [3.5.0](https://github.com/iwonz/ywtc/compare/v3.4.1...v3.5.0) (2026-10-16)
+
+
+### Features
+
+* **reports:** add interactive migration dashboard ([466b444](https://github.com/iwonz/ywtc/commit/466b444ef1b54d3d2f83da6c43e52fc967e9dd05))
+
+
+### Bug Fixes
+
+* **reports:** embed deterministic report fonts ([6bdfb1b](https://github.com/iwonz/ywtc/commit/6bdfb1b62b3dd869ebde578c6a0fa30739835ec0))
+
+
+### Tests
+
+* **reports:** normalize visual snapshot canvas ([c186e41](https://github.com/iwonz/ywtc/commit/c186e419ebe861c389c680e2baa7f79434216663))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v3.4.1 ([2ce2aac](https://github.com/iwonz/ywtc/commit/2ce2aac45774234bff8ed37a6c1df592ffd4582a))
+* **release:** retry report dashboard pipeline ([324456f](https://github.com/iwonz/ywtc/commit/324456fb5f6cec029d8c960ce75e6d91d031eb9e))
+
 ## [3.4.1](https://github.com/iwonz/ywtc/compare/v3.4.0...v3.4.1) (2026-10-16)
 
 
