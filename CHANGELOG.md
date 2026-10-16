@@ -2,6 +2,23 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.0.0](https://github.com/iwonz/ywtc/compare/v3.6.0...v4.0.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* destination pages and comment archives proven by state mappings are overwritten from source on rerun instead of preserving destination edits as content conflicts.
+
+### Features
+
+* make mapped destination updates source-authoritative ([b33cc0b](https://github.com/iwonz/ywtc/commit/b33cc0b0fe6f97a5a9d4d2e65f7497e1cf2a9efb))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v3.6.0 ([5ffe5e5](https://github.com/iwonz/ywtc/commit/5ffe5e5366e423e5007feef9fc3cb9517a084464))
+* **release:** retry automated release workflow ([a1fae54](https://github.com/iwonz/ywtc/commit/a1fae5448518bbb078d9656e2e438c3e9eec9f2e))
+
 ## [3.6.0](https://github.com/iwonz/ywtc/compare/v3.5.0...v3.6.0) (2026-10-16)
 
 
