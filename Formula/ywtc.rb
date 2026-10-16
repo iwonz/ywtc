@@ -1,8 +1,8 @@
 class Ywtc < Formula
   desc "Transfer Yandex Wiki and Confluence content or export it to files"
   homepage "https://github.com/iwonz/ywtc"
-  url "https://registry.npmjs.org/@iwonz/ywtc/-/ywtc-4.1.0.tgz"
-  sha256 "3b28c0fb1a2a662f57e7ead079fa5c7cd90b5b091cedff9d005b0797c589d776"
+  url "https://registry.npmjs.org/@iwonz/ywtc/-/ywtc-4.1.1.tgz"
+  sha256 "85effdd77f8a5d8b5de9ed48fe4987148893d85ba4a75f8507e654b1d313832d"
   license "MIT"
 
   depends_on "node@24"
