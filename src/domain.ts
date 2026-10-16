@@ -175,8 +175,15 @@ export interface AdapterCapabilities {
 
 export interface SourceStatusExclusion {
   id: string;
+  canonicalId?: string;
   locator: string;
   title?: string;
+  url?: string;
+  parentId?: string;
+  ancestorIds?: string[];
+  depth?: number;
+  discoveredFromId?: string;
+  metadataComplete?: boolean;
   reason: 'source-status';
   status?: string;
 }

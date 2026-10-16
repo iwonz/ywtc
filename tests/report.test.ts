@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {listReports} from '../src/report-catalog.js';
-import {TransferReport, type TransferReportData, type TransferReportPage} from '../src/report.js';
+import {REPORT_DATA_MARKER, TransferReport, type TransferReportData, type TransferReportPage} from '../src/report.js';
 
 function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sourceCanonicalId' | 'sourceId' | 'sourceTitle' | 'status'>): TransferReportPage {
   return {
@@ -33,16 +33,21 @@ describe('transfer report', () => {
   it('reconciles source inventory, exact outcomes, issue context, HTML, JSON, and catalog counts', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-report-'));
     const report = new TransferReport({
+      secrets: ['top-secret', 'admin@example.com'],
       dryRun: false,
       scope: 'subtree',
       direction: 'yandex-wiki → confluence',
-      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example.com/root'},
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example.com/root?token=top-secret&view=1'},
       destination: {provider: 'confluence', profile: 'docs', id: '10', url: 'https://docs.example.com/pages/10'},
       state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'existing'},
     });
     report.setSelection({
       requestedStatus: 'current', effectiveStatus: 'current', returnedDescendants: 4, selectedDescendants: 2,
-      excluded: [{id: '4', locator: 'root/obsolete', title: 'Obsolete', reason: 'source-status', status: 'obsolete'}],
+      excluded: [{
+        id: '4', canonicalId: 'wiki:4', locator: 'root/obsolete', title: 'Obsolete',
+        url: 'https://wiki.example.com/root/obsolete', parentId: '1', ancestorIds: ['1'], depth: 1,
+        reason: 'source-status', status: 'obsolete', metadataComplete: true,
+      }],
       maximumDepth: 1,
       hierarchyGaps: [{pageId: 'wiki:2', missingParentId: 'wiki:4', selectedParentId: 'wiki:1', reason: 'source-status'}],
       notes: ['Only accessible hierarchy pages are visible.'],
@@ -54,8 +59,17 @@ describe('transfer report', () => {
     report.addPage(page({
       sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete', links: 3, images: 1, tables: 1,
       resources: 1, sourceBytes: 7, transferredBytes: 7,
-      resourceItems: [{sourceId: 'image', sourceName: 'image.png', kind: 'image', status: 'complete', sourceBytes: 7, transferredBytes: 7, destinationName: 'image.png'}],
-      comments: {status: 'complete', threads: 1, comments: 2, participants: 2, attachments: 1, bytes: 512, archiveName: 'comments.zip', destinationId: 'comment-1', preview: 'Архив комментариев из оригинала'},
+      resourceItems: [{
+        sourceId: 'image', sourceName: 'image.png', sourceUrl: 'https://wiki.example.com/download/image.png',
+        sourceReference: '/download/image.png', kind: 'image', status: 'complete', sourceBytes: 7, transferredBytes: 7,
+        sha256: 'abcdef', destinationName: 'image.png', destinationUrl: 'https://docs.example.com/download/image.png',
+      }],
+      comments: {
+        status: 'complete', threads: 1, comments: 2, participants: 2, attachments: 1, bytes: 512,
+        archiveName: 'comments.zip', archiveUrl: 'https://docs.example.com/comments.zip', destinationId: 'comment-1',
+        destinationUrl: 'https://docs.example.com/comments/1', preview: 'Архив комментариев из оригинала',
+        items: [{threadId: 'thread-1', commentId: 'comment-1', author: 'A. User', createdAt: '2026-10-16T12:00:00Z', outcome: 'complete', sourceUrl: 'https://wiki.example.com/root#comment-comment-1'}],
+      },
     }), {source: '<p>private source preview</p>', destination: '<p>private destination preview</p>'});
     report.addPage(page({
       sourceCanonicalId: 'wiki:2', sourceId: '2', sourceTitle: 'Partial child', status: 'partial', depth: 1, parentId: 'wiki:1', degraded: true,
@@ -73,6 +87,7 @@ describe('transfer report', () => {
     }));
     report.issue({code: 'resource-transfer-failed', severity: 'error', phase: 'resource', pageId: 'wiki:2', resourceId: 'manual', retryable: true, message: '\u001B[31mupload failed\u001B[0m'});
     report.issue({code: 'resource-transfer-failed', severity: 'error', phase: 'resource', pageId: 'wiki:2', resourceId: 'manual', retryable: true, message: '\u001B[31mupload failed\u001B[0m'});
+    report.output('untrusted-fixture', '</script><script>globalThis.ywtcInjected=true</script> top-secret admin@example.com');
     report.setEdges([]);
     report.finish('partial');
     const paths = await report.write(directory);
@@ -80,6 +95,9 @@ describe('transfer report', () => {
     const html = await readFile(paths.html, 'utf8');
 
     expect(json).not.toHaveProperty('version');
+    expect(json.excludedPages).toEqual([expect.objectContaining({
+      sourceCanonicalId: 'wiki:4', sourceTitle: 'Obsolete', projectedParentId: 'wiki:1', metadataComplete: true,
+    })]);
     expect(json.summary).toMatchObject({
       pages: 3, complete: 1, partial: 1, failed: 1, blocked: 0, conflicts: 0, unprocessedPages: 0,
       returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, maximumDepth: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
@@ -101,23 +119,25 @@ describe('transfer report', () => {
     expect(JSON.stringify(json)).not.toContain('\u001b');
     expect(JSON.stringify(json)).not.toContain('private source preview');
     expect(JSON.stringify(json)).not.toContain('private destination preview');
-    expect(html).toContain('Source scope inventory');
-    expect(html).toContain('Selection and hierarchy');
+    expect(JSON.stringify(json)).not.toContain('top-secret');
+    expect(JSON.stringify(json)).not.toContain('admin@example.com');
+    expect(json.source.url).toContain('view=1');
+    expect(json.source.url).toContain('%5BREDACTED%5D');
+    expect(html).toContain('Content-Security-Policy');
+    expect(html).toContain('id="root"');
+    expect(html).toContain('data:image/png;base64,');
+    expect(html).not.toContain(REPORT_DATA_MARKER);
+    expect(html).not.toContain('</script><script>globalThis.ywtcInjected=true</script>');
+    expect(html).toContain('\\u003c/script\\u003e\\u003cscript\\u003eglobalThis.ywtcInjected=true\\u003c/script\\u003e');
+    expect(html).toContain('Transfer report');
+    expect(html).toContain('Page hierarchy');
     expect(html).toContain('Obsolete');
-    expect(html).toContain('Destination repairs');
-    expect(html).toContain('Transfer outcomes');
-    expect(html).toContain('Needs attention');
-    expect(html).toContain('1 errors');
-    expect(html).toContain('0 warnings');
-    expect(html).toContain('1 degradations');
     expect(html).toContain('Partial child');
     expect(html).toContain('manual.pdf');
-    expect(html).toContain('Page comment archives');
     expect(html).toContain('comments.zip');
-    expect(html).toContain('Destination archive preview');
+    expect(html).toContain('comment-1');
     expect(html).toContain('Repeat the same migration to retry this object.');
-    expect(html).toContain('Traversal edges are collected only for');
-    expect(html).toContain('download="report.json"');
+    expect(html).toContain('report.json');
 
     const catalog = await listReports(directory);
     expect(catalog.reports[0]).toMatchObject({
@@ -220,8 +240,8 @@ describe('transfer report', () => {
       errors: 1, rootErrors: 1, dependentPages: 1, dependentFiles: 1, dependentComments: 1,
       failed: 1, blocked: 1, resourcesBlocked: 1, resourcesPlanned: 0,
     });
-    expect(html).toContain('Blocked dependencies');
-    expect(html).toContain('1 pages · 1 files · 1 comment archives');
+    expect(html).toContain('destination-page-staging-failed');
+    expect(html).toContain('parent unavailable');
     expect(catalog.reports[0]).toMatchObject({
       errors: 1, rootErrors: 1, dependentPages: 1, dependentFiles: 1, dependentComments: 1,
       resourcesBlocked: 1, resourcesPlanned: 0,

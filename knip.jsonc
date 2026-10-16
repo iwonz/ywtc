@@ -6,6 +6,9 @@
   ],
   "project": [
     "src/**/*.ts",
+    "report-ui/src/**/*.ts",
+    "report-ui/src/**/*.tsx",
+    "report-ui/src/**/*.css",
     "tests/**/*.ts",
     "scripts/**/*.mjs",
     "scripts/**/*.ts"

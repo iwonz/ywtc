@@ -160,9 +160,22 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
       pages,
       returned: hydrated.length,
       excluded: options.status === 'current'
-        ? hydrated.filter((item) => item.sourceStatus !== 'current').map((item) => ({
-          id: item.id, locator: item.locator, title: item.title, reason: 'source-status' as const, status: 'non-current',
-        }))
+        ? hydrated.filter((item) => item.sourceStatus !== 'current').map((item) => {
+          const rootIndex = item.ancestorIds?.indexOf(page.id) ?? -1;
+          return {
+            id: item.id,
+            canonicalId: item.canonicalId,
+            locator: item.locator,
+            title: item.title,
+            url: item.url,
+            ...(item.parentId ? {parentId: item.parentId} : {}),
+            ...(item.ancestorIds?.length ? {ancestorIds: item.ancestorIds} : {}),
+            ...(rootIndex >= 0 ? {depth: item.ancestorIds!.length - rootIndex} : {}),
+            reason: 'source-status' as const,
+            status: 'non-current',
+            metadataComplete: true,
+          };
+        })
         : [],
       effectiveStatus: options.status,
       notes: options.status === 'all'

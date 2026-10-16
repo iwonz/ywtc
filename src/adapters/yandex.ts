@@ -226,6 +226,7 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     }
     const currentIds = new Set(current.map((identity) => identity.id));
     const selected = options.status === 'current' ? all.filter((identity) => currentIds.has(identity.id)) : all;
+    const excludedIdentities = options.status === 'current' ? all.filter((identity) => !currentIds.has(identity.id)) : [];
     const results = await Promise.allSettled(selected.map(async (identity) => {
       const detail = await this.client.getPageById(identity.id);
       const normalized = sourcePage(this.profile, detail);
@@ -241,16 +242,42 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     if (failures.length > 0) {
       throw new Error(`Yandex Wiki descendant inventory is incomplete; ${failures.length} page detail request(s) failed: ${failures.join('; ')}`);
     }
+    const excludedResults = await Promise.allSettled(excludedIdentities.map(async (identity) => {
+      const detail = await this.client.getPageById(identity.id);
+      const expectedLocator = normalizeWikiSlug(identity.slug);
+      const locator = normalizeWikiSlug(detail.slug);
+      if (locator !== expectedLocator) throw new Error(`detail slug ${locator} conflicts with inventory slug ${expectedLocator}`);
+      const ancestors = ancestorIds(detail);
+      const rootIndex = ancestors.indexOf(page.id);
+      const immediateParentId = parentId(detail);
+      return {
+        id: String(identity.id),
+        canonicalId: canonical(this.profile, identity.id),
+        locator,
+        title: detail.title || locator.split('/').at(-1) || `Page ${identity.id}`,
+        url: pageUrl(this.profile, locator),
+        ...(immediateParentId ? {parentId: immediateParentId} : {}),
+        ...(ancestors.length > 0 ? {ancestorIds: ancestors} : {}),
+        ...(rootIndex >= 0 ? {depth: ancestors.length - rootIndex} : {}),
+        reason: 'source-status' as const,
+        status: 'obsolete' as const,
+        metadataComplete: true,
+      };
+    }));
+    const excludedFailures = excludedResults.filter((result) => result.status === 'rejected').length;
     return {
       pages: results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []),
       returned: all.length,
-      excluded: options.status === 'current'
-        ? all.filter((identity) => !currentIds.has(identity.id)).map((identity) => ({
-          id: String(identity.id), locator: normalizeWikiSlug(identity.slug), reason: 'source-status' as const, status: 'obsolete',
-        }))
-        : [],
+      excluded: excludedResults.map((result, index) => result.status === 'fulfilled' ? result.value : {
+        id: String(excludedIdentities[index]!.id),
+        canonicalId: canonical(this.profile, excludedIdentities[index]!.id),
+        locator: normalizeWikiSlug(excludedIdentities[index]!.slug),
+        reason: 'source-status' as const,
+        status: 'obsolete' as const,
+        metadataComplete: false,
+      }),
       effectiveStatus: options.status,
-      notes: [],
+      notes: excludedFailures > 0 ? [`Yandex Wiki did not expose complete hierarchy metadata for ${excludedFailures} excluded page(s).`] : [],
     };
   }
 

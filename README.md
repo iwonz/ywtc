@@ -270,9 +270,11 @@ Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json
 
 ## Отчёты
 
-Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и `report.json`, затем печатает run ID, кликабельный `file://` URL и готовую команду повторного открытия. `--open-report` сразу открывает отчёт; `ywtc reports list` показывает историю, `ywtc reports open <run-id>` открывает конкретный, а `ywtc reports open last` или `ywtc reports open` — последний корректный.
+Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и очищенный `report.json`, затем печатает run ID, `file://` URL и команду повторного открытия. `--open-report` открывает отчёт сразу; `ywtc reports list` показывает историю, `ywtc reports open <run-id>` — выбранный запуск, а `ywtc reports open last` или `ywtc reports open` — последний корректный.
 
-Отчёт отдельно показывает root, effective `source-status`, сколько descendants вернул source, сколько выбрано и исключено, максимальную глубину, hierarchy gaps и результаты восстановления родителей. Количество страниц, файлов и page comment archives сверяется с исчерпывающими статусами; для комментариев отдельно видны ветки, записи, участники, вложения, байты, revisions, stale/conflict/fallback и фактически прочитанный destination preview. Source bytes не смешиваются с подтверждёнными transferred bytes, а неизвестные размеры отмечаются явно. Ошибки, конфликты, retryable failures и деградации привязаны к конкретной странице и объекту. HTML/JSON, итог терминала и `reports list` используют одинаковые счётчики.
+Автономный HTML-отчёт работает без сети. В краткой таблице сопоставлены source inventory и destination outcomes для страниц, файлов, комментариев и байтов. Ниже находится раскрытое дерево исходной иерархии, включая исключённые страницы; доступны поиск, фильтры проблем и прямые ссылки на source/destination. Строка страницы открывает детали файлов, комментариев, родителей, первопричин и рекомендуемых действий, а вкладка сравнения показывает sandboxed source/destination preview. Зависимые `blocked` объекты сгруппированы под root error. Интерфейс поддерживает RU/EN, системную/светлую/тёмную тему и мобильный экран.
+
+HTML/JSON, итог терминала и `reports list` используют одинаковые счётчики. Известный source volume отделён от подтверждённых transferred bytes; неизвестные размеры отмечены явно. `report.json` не содержит содержимое страниц, тексты комментариев или preview HTML — они остаются только в локальном `index.html`.
 
 ### Статусы переноса
 

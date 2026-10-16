@@ -1,9 +1,10 @@
 import {createHash} from 'node:crypto';
 import {mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import PQueue from 'p-queue';
 import {createProviderAdapter} from './adapters/factory.js';
-import type {AppConfig} from './config.js';
+import {secretValues, type AppConfig} from './config.js';
 import {
   appendGridSnapshots,
   assertDestinationContent,
@@ -293,6 +294,7 @@ function destinationFromState(state: PageTransferState, adapter: DestinationAdap
 function reportPage(input: {
   page: SourcePage & {depth: number; projectedParentId?: string};
   destination?: DestinationPage;
+  destinationFile?: {id: string; url: string; parentId?: string};
   status: PageTransferStatus;
   inventoryStatus?: ReportInventoryStatus;
   resources: SourceResource[];
@@ -308,6 +310,18 @@ function reportPage(input: {
   commentState?: CommentTransferState | undefined;
   blockedBy?: Required<Pick<BlockingCause, 'blockedByPageId' | 'blockedByCode'>> & {blockedReason?: string};
 }): TransferReportPage {
+  const inventory = input.commentInventory;
+  const commentResourceIds = new Set<string>();
+  for (const thread of inventory?.threads ?? []) {
+    const stack = [thread.root];
+    while (stack.length > 0) {
+      const entry = stack.pop()!;
+      for (const attachment of entry.attachments) {
+        if (attachment.resourceId) commentResourceIds.add(attachment.resourceId);
+      }
+      stack.push(...entry.replies);
+    }
+  }
   const transferable = input.resources.filter(
     (resource): resource is SourceResource & {kind: 'attachment' | 'image'} => resource.kind !== 'grid',
   );
@@ -318,12 +332,16 @@ function reportPage(input: {
     return {
       sourceId: resource.id,
       sourceName: resource.name,
-      kind: resource.kind,
+      ...(resource.downloadUrl ? {sourceUrl: resource.downloadUrl} : {}),
+      ...(resource.referenceAliases?.[0] ? {sourceReference: resource.referenceAliases[0]} : {}),
+      kind: commentResourceIds.has(resource.id) ? 'comment-attachment' as const : resource.kind,
       status,
       ...(sourceBytes !== undefined ? {sourceBytes} : {}),
       ...(status === 'complete' && sourceBytes !== undefined ? {transferredBytes: sourceBytes} : {}),
       ...(state?.destinationId ? {destinationId: state.destinationId} : {}),
       ...(state?.destinationName ? {destinationName: state.destinationName} : {}),
+      ...(state?.destinationUrl ? {destinationUrl: state.destinationUrl} : {}),
+      ...(state?.sha256 ? {sha256: state.sha256} : {}),
       ...(state?.lastError ? {error: state.lastError} : {}),
       ...(status === 'blocked' && input.blockedBy ? input.blockedBy : {}),
     };
@@ -331,24 +349,56 @@ function reportPage(input: {
   const knownBytes = resourceItems.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
   const transferredBytes = resourceItems.reduce((total, resource) => total + (resource.transferredBytes ?? 0), 0);
   const commentsEnabled = input.commentsEnabled ?? true;
-  const inventory = input.commentInventory;
   const commentState = input.commentState;
   const commentStatus = !commentsEnabled
     ? 'skipped' as const
     : commentState?.status
       ?? (inventory?.status === 'failed' ? 'failed' as const : inventory?.status === 'empty' ? 'complete' as const : 'planned' as const);
   const commentError = commentState?.lastError ?? inventory?.error;
+  const commentItems = inventory?.threads.flatMap((thread) => {
+    const result: NonNullable<TransferReportPage['comments']['items']> = [];
+    const visit = (entry: (typeof thread)['root']): void => {
+      const author = entry.author.displayName
+        ?? entry.author.username
+        ?? entry.author.publicName
+        ?? entry.author.providerId;
+      result.push({
+        threadId: thread.id,
+        commentId: entry.id,
+        ...(entry.parentId ? {parentId: entry.parentId} : {}),
+        author,
+        ...(entry.createdAt ? {createdAt: entry.createdAt} : {}),
+        ...(entry.status ? {sourceStatus: entry.status} : {}),
+        outcome: commentStatus,
+        sourceUrl: `${input.page.url}#comment-${encodeURIComponent(entry.id)}`,
+        ...(commentState?.destinationUrl ? {destinationUrl: commentState.destinationUrl} : {}),
+        ...(commentError ? {error: commentError} : {}),
+      });
+      for (const reply of entry.replies) visit(reply);
+    };
+    visit(thread.root);
+    return result;
+  });
   return {
     sourceCanonicalId: input.page.canonicalId,
     sourceId: input.page.id,
     sourceTitle: input.page.title,
     sourceUrl: input.page.url,
+    ...(input.page.parentId ? {sourceParentId: input.page.parentId} : {}),
+    ...(input.page.ancestorIds?.length ? {sourceAncestorIds: input.page.ancestorIds} : {}),
     ...(input.destination ? {
       destinationId: input.destination.id,
       destinationTitle: input.destination.title,
       destinationUrl: input.destination.url,
+      ...(input.destination.parentId ? {destinationParentId: input.destination.parentId} : {}),
     } : {}),
-    ...(input.page.projectedParentId ? {parentId: input.page.projectedParentId} : {}),
+    ...(input.destinationFile ? {
+      destinationId: input.destinationFile.id,
+      destinationTitle: input.page.title,
+      destinationUrl: input.destinationFile.url,
+      ...(input.destinationFile.parentId ? {destinationParentId: input.destinationFile.parentId} : {}),
+    } : {}),
+    ...(input.page.projectedParentId ? {parentId: input.page.projectedParentId, projectedParentId: input.page.projectedParentId} : {}),
     depth: input.page.depth,
     status: input.status,
     inventoryStatus: input.inventoryStatus ?? 'complete',
@@ -376,11 +426,14 @@ function reportPage(input: {
       attachments: commentState?.attachments ?? inventory?.attachments ?? 0,
       bytes: commentState?.bytes ?? inventory?.knownBytes ?? 0,
       ...(commentState?.archiveName ? {archiveName: commentState.archiveName} : {}),
+      ...(commentState?.archiveUrl ? {archiveUrl: commentState.archiveUrl} : {}),
       ...(commentState?.destinationId ? {destinationId: commentState.destinationId} : {}),
+      ...(commentState?.destinationUrl ? {destinationUrl: commentState.destinationUrl} : {}),
       ...(commentState?.previousDestinationIds?.length ? {revision: true} : {}),
       ...(commentState?.status === 'stale' ? {stale: true} : {}),
       ...(commentError ? {error: commentError} : {}),
       ...(commentState?.preview ? {preview: commentState.preview} : {}),
+      ...(commentItems?.length ? {items: commentItems} : {}),
       ...(commentStatus === 'blocked' && input.blockedBy ? input.blockedBy : {}),
     },
   };
@@ -521,6 +574,7 @@ export class Migrator {
     if (!options.dryRun) await store.save();
     const run = await store.beginRun(options.scope, options.dryRun, sourceStatus, commentsEnabled);
     const report = new TransferReport({
+      secrets: secretValues(this.config),
       dryRun: options.dryRun,
       commentsEnabled,
       scope: options.scope,
@@ -730,6 +784,8 @@ export class Migrator {
         const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage);
         output = result.directory;
         archive = result.archive;
+        const exportEntry = path.join(result.directory, options.destination.format === 'html' ? 'index.html' : 'index.md');
+        report.setDestinationUrl(pathToFileURL(exportEntry).toString());
         report.output('directory', result.directory);
         if (result.archive) report.output('archive', result.archive);
         if (result.backup) report.output('backup', result.backup);
@@ -833,6 +889,7 @@ export class Migrator {
         sourceName: sourceResource?.name ?? resource.name,
         destinationId: resource.path,
         destinationName: resource.name,
+        destinationUrl: pathToFileURL(path.join(destination.path, resource.path)).toString(),
         ...(resource.sha256 ? {sha256: resource.sha256} : {}),
         ...(resource.size !== undefined ? {size: resource.size} : {}),
         status: options.dryRun ? 'planned' as const : 'complete' as const,
@@ -871,8 +928,16 @@ export class Migrator {
         }} : {}),
         updatedAt: new Date().toISOString(),
       });
+      const parentManifestPage = manifestPage?.parentId
+        ? result.manifest.pages.find((item) => item.sourceCanonicalId === manifestPage.parentId)
+        : undefined;
       report.addPage(reportPage({
         page,
+        ...(manifestPage ? {destinationFile: {
+          id: manifestPage.path,
+          url: pathToFileURL(path.join(destination.path, manifestPage.path)).toString(),
+          ...(parentManifestPage ? {parentId: parentManifestPage.path} : {}),
+        }} : {}),
         status: pageStatus,
         resources: sourceResources,
         document,
@@ -1085,6 +1150,7 @@ export class Migrator {
       const archiveState = zip ? {
         ...(archiveResource ? {archiveResourceId: archiveResource.id} : {}),
         archiveName: archiveResource?.name ?? zip.name,
+        ...(archiveResource?.url ? {archiveUrl: archiveResource.url} : {}),
         archivePath: zip.path,
         archiveSha256: zip.sha256,
       } : {};
@@ -1195,6 +1261,7 @@ export class Migrator {
         fingerprint,
         destinationId: verified.id,
         destinationFingerprint: verified.fingerprint,
+        ...(verified.url ? {destinationUrl: verified.url} : {}),
         ...(previousIds?.length ? {previousDestinationIds: previousIds} : {}),
         ...archiveState,
         ...fullArchiveState,
@@ -1694,6 +1761,7 @@ export class Migrator {
                 sourceName: resource.name,
                 destinationId: mappedRemote.id,
                 destinationName: mappedRemote.name,
+                ...(mappedRemote.url ? {destinationUrl: mappedRemote.url} : {}),
                 sha256: downloaded.sha256,
                 size: downloaded.size,
                 cachePath: downloaded.path,
@@ -1717,6 +1785,7 @@ export class Migrator {
                 sourceName: resource.name,
                 destinationId: reconciled.id,
                 destinationName: reconciled.name,
+                ...(reconciled.url ? {destinationUrl: reconciled.url} : {}),
                 sha256: downloaded.sha256,
                 size: downloaded.size,
                 cachePath: downloaded.path,
@@ -1780,6 +1849,7 @@ export class Migrator {
               sourceName: resource.name,
               destinationId: result.id,
               destinationName: result.name,
+              ...(result.url ? {destinationUrl: result.url} : {}),
               sha256: downloaded.sha256,
               size: downloaded.size,
               cachePath: downloaded.path,

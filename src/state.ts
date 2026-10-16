@@ -39,6 +39,7 @@ export interface ResourceTransferState extends BlockingCause {
   sourceName: string;
   destinationId?: string;
   destinationName: string;
+  destinationUrl?: string;
   sha256?: string;
   size?: number;
   cachePath?: string;
@@ -52,9 +53,11 @@ export interface CommentTransferState extends BlockingCause {
   fingerprint?: string;
   destinationId?: string;
   destinationFingerprint?: string;
+  destinationUrl?: string;
   previousDestinationIds?: string[];
   archiveResourceId?: string;
   archiveName?: string;
+  archiveUrl?: string;
   archivePath?: string;
   archiveSha256?: string;
   fullArchiveResourceId?: string;
@@ -227,6 +230,7 @@ const resourceStateSchema = z.object({
   sourceName: z.string(),
   destinationId: z.string().optional(),
   destinationName: z.string(),
+  destinationUrl: z.string().optional(),
   sha256: z.string().optional(),
   size: z.number().nonnegative().optional(),
   cachePath: z.string().optional(),
@@ -243,9 +247,11 @@ const commentStateSchema = z.object({
   fingerprint: z.string().optional(),
   destinationId: z.string().optional(),
   destinationFingerprint: z.string().optional(),
+  destinationUrl: z.string().optional(),
   previousDestinationIds: z.array(z.string()).optional(),
   archiveResourceId: z.string().optional(),
   archiveName: z.string().optional(),
+  archiveUrl: z.string().optional(),
   archivePath: z.string().optional(),
   archiveSha256: z.string().optional(),
   fullArchiveResourceId: z.string().optional(),

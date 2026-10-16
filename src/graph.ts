@@ -124,8 +124,17 @@ export async function discoverPageGraph(input: {
             if (resolved.sourceStatus === undefined) throw new Error(`${adapter.kind} did not expose status for linked page ${resolved.id}`);
             if (resolved.sourceStatus !== 'current') {
               discovery.excluded.push({
-                id: resolved.id, locator: resolved.locator, title: resolved.title,
-                reason: 'source-status', status: 'non-current',
+                id: resolved.id,
+                canonicalId: resolved.canonicalId,
+                locator: resolved.locator,
+                title: resolved.title,
+                url: resolved.url,
+                ...(resolved.parentId ? {parentId: resolved.parentId} : {}),
+                ...(resolved.ancestorIds?.length ? {ancestorIds: resolved.ancestorIds} : {}),
+                discoveredFromId: page.id,
+                reason: 'source-status',
+                status: 'non-current',
+                metadataComplete: true,
               });
               edges.push({from: page.canonicalId, to: resolved.canonicalId, raw: reference.raw, status: 'external', message: 'Excluded by --source-status current'});
               continue;

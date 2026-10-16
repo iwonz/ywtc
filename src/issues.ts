@@ -2,14 +2,36 @@ import {stripAnsi} from './content-model.js';
 
 export type IssueSeverity = 'normalization' | 'degradation' | 'warning' | 'blocked' | 'error';
 type IssuePhase = 'discovery' | 'inventory' | 'page' | 'resource' | 'comment' | 'verification' | 'report';
+export type IssueCategory =
+  | 'network'
+  | 'rate-limit'
+  | 'authorization'
+  | 'permissions'
+  | 'provider-api'
+  | 'parsing'
+  | 'rendering-layout'
+  | 'verification'
+  | 'hierarchy'
+  | 'conflict'
+  | 'attachment-image'
+  | 'comment'
+  | 'filtering'
+  | 'dependency'
+  | 'unknown';
+export type IssueObjectType = 'run' | 'page' | 'resource' | 'comment';
 
 export interface MigrationIssue {
   code: string;
   severity: IssueSeverity;
   phase: IssuePhase;
+  category?: IssueCategory;
+  objectType?: IssueObjectType;
+  objectId?: string;
   message: string;
   pageId?: string;
   resourceId?: string;
+  commentId?: string;
+  rootCauseId?: string;
   blockedByPageId?: string;
   blockedByCode?: string;
   retryable: boolean;
@@ -27,7 +49,15 @@ export class IssueCollector {
 
   add(input: IssueInput): MigrationIssue {
     const message = normalizedMessage(input.message);
-    const key = [input.code, input.severity, input.phase, input.pageId ?? '', input.resourceId ?? ''].join('\0');
+    const key = [
+      input.code,
+      input.severity,
+      input.phase,
+      input.pageId ?? '',
+      input.resourceId ?? '',
+      input.commentId ?? '',
+      input.objectId ?? '',
+    ].join('\0');
     const previous = this.values.get(key);
     if (previous) {
       previous.occurrences += 1;

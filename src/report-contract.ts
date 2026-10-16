@@ -1,0 +1,258 @@
+import type {GraphEdgeStatus, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
+import type {IssueCategory, IssueObjectType, MigrationIssue} from './issues.js';
+import type {CommentTransferStatus, PageTransferStatus, ResourceTransferState, RunStatus, StateLoadSource} from './state.js';
+
+export type ReportInventoryStatus = 'pending' | 'complete' | 'failed';
+export type ReportResourceStatus = ResourceTransferState['status'];
+export type ReportPresentationStatus = PageTransferStatus | 'excluded';
+
+export interface TransferReportResource {
+  sourceId: string;
+  sourceName: string;
+  sourceUrl?: string;
+  sourceReference?: string;
+  kind: Exclude<SourceResource['kind'], 'grid'> | 'comment-attachment';
+  status: ReportResourceStatus;
+  sourceBytes?: number;
+  transferredBytes?: number;
+  sha256?: string;
+  destinationId?: string;
+  destinationName?: string;
+  destinationUrl?: string;
+  error?: string;
+  blockedByPageId?: string;
+  blockedByCode?: string;
+  blockedReason?: string;
+}
+
+export interface TransferReportCommentItem {
+  threadId: string;
+  commentId: string;
+  parentId?: string;
+  author: string;
+  createdAt?: string;
+  sourceStatus?: string;
+  outcome: CommentTransferStatus;
+  sourceUrl?: string;
+  destinationUrl?: string;
+  error?: string;
+}
+
+export interface TransferReportPage {
+  sourceCanonicalId: string;
+  sourceId: string;
+  sourceTitle: string;
+  sourceUrl: string;
+  sourceParentId?: string;
+  sourceAncestorIds?: string[];
+  destinationId?: string;
+  destinationTitle?: string;
+  destinationUrl?: string;
+  destinationParentId?: string;
+  /** Projected report parent. Kept as an alias while state uses projectedParentId. */
+  parentId?: string;
+  projectedParentId?: string;
+  depth: number;
+  status: PageTransferStatus;
+  inventoryStatus: ReportInventoryStatus;
+  resources: number;
+  resourceItems: TransferReportResource[];
+  sourceBytes?: number;
+  transferredBytes: number;
+  bytesUnknown: number;
+  links: number;
+  images: number;
+  tables: number;
+  grids: number;
+  codeBlocks: number;
+  degraded: boolean;
+  resourceFallbacks: Array<{name: string; error: string}>;
+  warnings: string[];
+  normalizations?: string[];
+  error?: string;
+  blockedByPageId?: string;
+  blockedByCode?: string;
+  blockedReason?: string;
+  comments: {
+    status: CommentTransferStatus;
+    threads: number;
+    comments: number;
+    participants: number;
+    attachments: number;
+    bytes: number;
+    archiveName?: string;
+    archiveUrl?: string;
+    destinationId?: string;
+    destinationUrl?: string;
+    revision?: boolean;
+    stale?: boolean;
+    error?: string;
+    preview?: string;
+    items?: TransferReportCommentItem[];
+    blockedByPageId?: string;
+    blockedByCode?: string;
+    blockedReason?: string;
+  };
+}
+
+export interface TransferReportExcludedPage {
+  sourceCanonicalId: string;
+  sourceId: string;
+  sourceTitle: string;
+  sourceUrl?: string;
+  sourceParentId?: string;
+  sourceAncestorIds?: string[];
+  projectedParentId?: string;
+  discoveredFromId?: string;
+  depth?: number;
+  status: 'excluded';
+  sourceStatus?: string;
+  reason: string;
+  metadataComplete: boolean;
+}
+
+export interface TransferReportEdge {
+  from: string;
+  raw: string;
+  to?: string;
+  status: GraphEdgeStatus;
+  message?: string;
+}
+
+export interface TransferReportIssue extends MigrationIssue {
+  category: IssueCategory;
+  objectType: IssueObjectType;
+  objectId?: string;
+  pageTitle?: string;
+  pageAnchor?: string;
+  resourceName?: string;
+  commentLabel?: string;
+  action: string;
+}
+
+type PageStatusCounts = Record<PageTransferStatus, number>;
+type ResourceStatusCounts = Record<ReportResourceStatus, number>;
+type EdgeStatusCounts = Record<GraphEdgeStatus, number>;
+type CommentStatusCounts = Record<CommentTransferStatus, number>;
+
+export interface TransferReportSummary {
+  pages: number;
+  returnedDescendants: number;
+  selectedDescendants: number;
+  excludedPages: number;
+  maximumDepth: number;
+  hierarchyGaps: number;
+  hierarchyRepairs: number;
+  complete: number;
+  partial: number;
+  failed: number;
+  blocked: number;
+  conflicts: number;
+  notStartedPages: number;
+  unprocessedPages: number;
+  resources: number;
+  attachments: number;
+  resourceImages: number;
+  resourcesComplete: number;
+  resourcesPartial: number;
+  resourcesFailed: number;
+  resourcesBlocked: number;
+  resourcesNotStarted: number;
+  resourcesPlanned: number;
+  bytes: number;
+  sourceBytes: number;
+  bytesUnknown: number;
+  links: number;
+  images: number;
+  tables: number;
+  grids: number;
+  codeBlocks: number;
+  cycles: number;
+  normalizations: number;
+  degradations: number;
+  warnings: number;
+  errors: number;
+  rootErrors: number;
+  dependentPages: number;
+  dependentFiles: number;
+  dependentComments: number;
+  retryableFailures: number;
+  inventoryComplete: boolean;
+  inventoriedPages: number;
+  inventoryFailedPages: number;
+  commentThreads: number;
+  comments: number;
+  commentParticipants: number;
+  commentAttachments: number;
+  commentBytes: number;
+  commentStatuses: CommentStatusCounts;
+  durationMs?: number;
+  pageStatuses: PageStatusCounts;
+  resourceStatuses: ResourceStatusCounts;
+  traversalStatuses: EdgeStatusCounts;
+}
+
+export interface TransferReportData {
+  runId: string;
+  startedAt: string;
+  finishedAt?: string;
+  status: RunStatus;
+  dryRun: boolean;
+  commentsEnabled: boolean;
+  scope: TransferScope;
+  sourceStatus: SourceStatus;
+  selection: SourceSelection;
+  direction: string;
+  source: {provider: ProviderKind; profile: string; rootId: string; title: string; url: string};
+  destination: {provider: ProviderKind | 'filesystem'; profile?: string; id: string; url?: string; format?: string};
+  state: {id: string; path: string; mode: 'automatic' | 'explicit'; source: StateLoadSource; backupPath?: string};
+  pages: TransferReportPage[];
+  excludedPages: TransferReportExcludedPage[];
+  edges: TransferReportEdge[];
+  hierarchyRepairs: Array<{
+    sourceCanonicalId: string;
+    mode: 'moved' | 'recreated';
+    oldParentId?: string;
+    newParentId: string;
+    oldDestinationId: string;
+    newDestinationId: string;
+    verified: boolean;
+  }>;
+  warnings: string[];
+  errors: string[];
+  issues: TransferReportIssue[];
+  outputs: Array<{label: string; value: string}>;
+  summary: TransferReportSummary;
+}
+
+export interface MigrationReportPaths {
+  runId: string;
+  directory: string;
+  html: string;
+  json: string;
+}
+
+export interface PreviewPair {
+  source: string;
+  destination: string;
+}
+
+export interface ReportPresentationPayload {
+  report: TransferReportData;
+  previews: Record<string, PreviewPair>;
+}
+
+export const pageStatuses: PageTransferStatus[] = [
+  'discovered',
+  'planned',
+  'skeleton-created',
+  'not-started',
+  'complete',
+  'partial',
+  'conflict',
+  'failed',
+  'blocked',
+];
+export const resourceStatuses: ReportResourceStatus[] = ['planned', 'not-started', 'blocked', 'complete', 'partial', 'failed'];
+export const edgeStatuses: GraphEdgeStatus[] = ['resolved', 'external', 'inaccessible', 'broken', 'cycle', 'unsupported'];
+export const commentStatuses: CommentTransferStatus[] = ['planned', 'not-started', 'blocked', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped'];

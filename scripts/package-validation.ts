@@ -2,6 +2,7 @@ import {execFile} from 'node:child_process';
 import {access, mkdtemp, readFile, stat} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -52,6 +53,9 @@ const forbidden = packResult.files
     || filename.startsWith('.states/')
     || filename.includes('/.states/'));
 if (forbidden.length > 0) throw new Error(`Packed archive contains runtime data: ${forbidden.join(', ')}`);
+for (const required of ['dist/report-ui/index.html', 'docs/assets/report-header-transparent.png']) {
+  if (!packResult.files.some((file) => file.path === required)) throw new Error(`Packed archive is missing ${required}`);
+}
 
 const prefix = path.join(temporary, 'prefix');
 await execFileAsync('npm', ['install', '--global', '--ignore-scripts', '--prefix', prefix, archive], {
@@ -131,4 +135,35 @@ await Promise.all([
   stat(path.join(automaticWorkspace, '.states', 'cache')),
   stat(path.join(automaticWorkspace, '.states', 'reports')),
 ]);
+
+const installedReportModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'report.js');
+const installedReportDirectory = path.join(temporary, 'installed-report');
+const reportSmoke = `
+  import {TransferReport} from ${JSON.stringify(pathToFileURL(installedReportModule).toString())};
+  const report = new TransferReport({
+    dryRun: true,
+    scope: 'page',
+    direction: 'yandex-wiki → html',
+    source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Smoke', url: 'https://wiki.example.com/smoke'},
+    destination: {provider: 'filesystem', id: '/tmp/export', format: 'html'},
+    state: {id: 'smoke', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
+  });
+  report.addPage({
+    sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Smoke', sourceUrl: 'https://wiki.example.com/smoke',
+    depth: 0, status: 'planned', inventoryStatus: 'complete', resources: 0, resourceItems: [], sourceBytes: 0,
+    transferredBytes: 0, bytesUnknown: 0, links: 0, images: 0, tables: 0, grids: 0, codeBlocks: 0,
+    degraded: false, resourceFallbacks: [], warnings: [], normalizations: [],
+    comments: {status: 'planned', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0},
+  });
+  report.finish('completed');
+  const paths = await report.write(${JSON.stringify(installedReportDirectory)});
+  process.stdout.write(JSON.stringify(paths));
+`;
+const generated = await execFileAsync(process.execPath, ['--input-type=module', '--eval', reportSmoke], {encoding: 'utf8'});
+const generatedPaths = JSON.parse(generated.stdout) as {html: string; json: string};
+const installedHtml = await readFile(generatedPaths.html, 'utf8');
+await stat(generatedPaths.json);
+if (!installedHtml.includes('Content-Security-Policy') || !installedHtml.includes('data:image/png;base64,')) {
+  throw new Error('Installed package did not generate a complete autonomous report');
+}
 process.stdout.write(`Package verified: ${packResult.filename}\n`);
