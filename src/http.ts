@@ -66,7 +66,7 @@ function safeErrorMessage(error: AxiosError): string {
   const guidance = status === 401
     ? 'authentication rejected; check token and auth type'
     : status === 403
-      ? 'permission denied; check source visibility and destination page/attachment permissions'
+      ? 'request forbidden; check object visibility, content restrictions, provider validation, security filters, and token permissions'
       : status === 404
         ? 'resource or API route not found; check URL, page ID, deployment, and API compatibility'
         : status === 409

@@ -195,10 +195,7 @@ function resetResourceDestinations(resources: PageTransferState['resources']): P
 
 function sourceDerivedTextMatches(expectedBody: string, actualBody: string | undefined, provider: SourcePage['provider'], page: SourcePage): boolean {
   if (actualBody === undefined) return false;
-  const result = verifyDestinationContent(expectedBody, actualBody, provider, page);
-  if (result.status === 'complete') return true;
-  const text = (value: string): string => renderedPreviewHtml(value, provider).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  return text(expectedBody) === text(actualBody);
+  return verifyDestinationContent(expectedBody, actualBody, provider, page).status === 'complete';
 }
 
 const REVISION_RETRY_DELAYS_MS = [500, 1_000, 2_000] as const;
@@ -226,6 +223,7 @@ async function updateMappedPage(input: {
   let current = input.current;
   let title = input.title;
   let retainedMappedTitle = false;
+  let forbiddenRetried = false;
   for (let attempt = 0; ; attempt += 1) {
     const verification = verifyDestinationContent(input.body, current.content, input.destination.kind, input.sourcePage);
     if (verification.status === 'complete' && current.title === title) {
@@ -251,6 +249,20 @@ async function updateMappedPage(input: {
           pageId: input.sourcePage.canonicalId,
           retryable: false,
           message: `${input.sourcePage.title}: retained mapped destination title "${current.title}" because the source title is occupied`,
+        });
+        continue;
+      }
+      if (error instanceof HttpRequestError && error.status === 403 && !forbiddenRetried) {
+        forbiddenRetried = true;
+        current = await verifyConfirmedDestinationPage(input.destination, current, input.consistencyOptions);
+        const delay = await revisionDelay(0, input.consistencyOptions);
+        input.report.issue({
+          code: 'destination-update-retry',
+          severity: 'normalization',
+          phase: 'page',
+          pageId: input.sourcePage.canonicalId,
+          retryable: true,
+          message: `${input.sourcePage.title}: destination rejected a mapped update once; refreshed immutable page ${current.id} and retrying after ${delay} ms`,
         });
         continue;
       }
@@ -354,7 +366,6 @@ async function createPageWithAllocatedTitle(input: {
       throw error;
     }
     created = await verifyConfirmedDestinationPage(input.destination, created, input.consistencyOptions);
-    assertDestinationContent(input.bootstrap.body, created.content, input.destination.kind, input.sourcePage);
     if (created.parentId !== input.parent.id) {
       throw new Error(`Destination hierarchy verification failed for ${input.sourcePage.title}: expected parent ${input.parent.id}, received ${created.parentId ?? 'none'}`);
     }

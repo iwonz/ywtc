@@ -58,6 +58,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let reparented = 0;
   let failUpload = false;
   let failUpdate = false;
+  let forbiddenUpdateFailures = 0;
   let failCreatedVerification = false;
   let failRecoveryLookup = false;
   let normalizeBootstrapBody = false;
@@ -65,6 +66,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let failAttachmentListing = false;
   let createTitleConflicts = 0;
   let ambiguousCreate = false;
+  let stripLinksOnRead = false;
   let downloads = 0;
   let sourceResolutions = 0;
   let destinationResolutions = 0;
@@ -138,6 +140,10 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     updatePage: async ({page: selected, title, body}: {page: DestinationPage; title: string; body: string}) => {
       updated += 1;
       if (failUpdate) throw new Error('provider reported a generic conflict while destination update was unavailable');
+      if (forbiddenUpdateFailures > 0) {
+        forbiddenUpdateFailures -= 1;
+        throw new HttpRequestError('HTTP request failed: status=403: request forbidden', 403, 'PUT');
+      }
       current = page(title, body, selected.id, selected.parentId ?? container.id);
       pages.set(current.id, current);
       return current;
@@ -156,6 +162,14 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
       verificationReads.set(selected.id, reads + 1);
       if (normalizeBootstrapBody && reads > 0 && verified.content && !verified.content.startsWith('\n')) {
         const body = `\n${verified.content}`;
+        verified = page(verified.title, body, verified.id, verified.parentId ?? container.id);
+        pages.set(verified.id, verified);
+        current = verified;
+      }
+      if (stripLinksOnRead && verified.content) {
+        const body = verified.content
+          .replace(/<ac:link\b[^>]*>[\s\S]*?<\/ac:link>/gi, 'Manual')
+          .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1');
         verified = page(verified.title, body, verified.id, verified.parentId ?? container.id);
         pages.set(verified.id, verified);
         current = verified;
@@ -186,6 +200,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     destination,
     setFailUpload: (value: boolean) => { failUpload = value; },
     setFailUpdate: (value: boolean) => { failUpdate = value; },
+    setForbiddenUpdateFailures: (value: number) => { forbiddenUpdateFailures = value; },
     setFailCreatedVerification: (value: boolean) => { failCreatedVerification = value; },
     setFailRecoveryLookup: (value: boolean) => { failRecoveryLookup = value; },
     setNormalizeBootstrapBody: (value: boolean) => { normalizeBootstrapBody = value; },
@@ -193,6 +208,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setFailAttachmentListing: (value: boolean) => { failAttachmentListing = value; },
     setCreateTitleConflicts: (value: number) => { createTitleConflicts = value; },
     setAmbiguousCreate: () => { ambiguousCreate = true; },
+    setStripLinksOnRead: (value: boolean) => { stripLinksOnRead = value; },
     setDestinationPreflightError: (error: Error) => { destinationPreflightError = error; },
     setLegacyPlaceholder: () => {
       current = page(current!.title, legacyTransferPlaceholder('confluence', fixtureRoot), current!.id);
@@ -287,6 +303,52 @@ describe('source-derived remote page safety', () => {
     });
     expect(adapters.snapshot().current?.content).toContain('Important body');
     expect(adapters.snapshot().current?.content).not.toContain('ywtc transfer in progress');
+  });
+
+  it('checkpoints a created page before strict verification and never duplicates it on rerun', async () => {
+    const {directory, config, options} = await setup();
+    const adapters = fixture();
+    adapters.setStripLinksOnRead(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+
+    const first = await migrator.run(options);
+    expect(first).toMatchObject({status: 'partial', hasErrors: true});
+    const stateName = (await readdir(path.join(directory, '.states'))).find((name) => name.endsWith('.json'))!;
+    const firstState = JSON.parse(await readFile(path.join(directory, '.states', stateName), 'utf8')) as TransferState;
+    expect(firstState.pages[root.canonicalId]).toMatchObject({destinationId: '200', status: 'failed'});
+
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'partial', hasErrors: true});
+    expect(adapters.snapshot().created).toBe(1);
+    const resumedState = JSON.parse(await readFile(path.join(directory, '.states', stateName), 'utf8')) as TransferState;
+    expect(resumedState.pages[root.canonicalId]?.destinationId).toBe('200');
+  });
+
+  it('refreshes and retries one forbidden update for a proven mapped page', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setForbiddenUpdateFailures(1);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5}).run(options);
+    expect(result).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 1, partial: 0}});
+    expect(adapters.snapshot()).toMatchObject({created: 1, updated: 2});
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.issues).toContainEqual(expect.objectContaining({code: 'destination-update-retry', severity: 'normalization'}));
+  });
+
+  it('keeps bootstrap content and reports a persistent mapped update rejection as partial', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setForbiddenUpdateFailures(2);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5}).run(options);
+    expect(result).toMatchObject({status: 'partial', hasErrors: true, summary: {partial: 1}});
+    expect(adapters.snapshot()).toMatchObject({created: 1, updated: 2});
+    expect(adapters.snapshot().current?.content).toContain('Important body');
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.issues).toContainEqual(expect.objectContaining({code: 'page-transfer-failed', message: expect.stringContaining('request forbidden')}));
   });
 
   it('accepts provider markup normalization between bootstrap creation and final rendering', async () => {

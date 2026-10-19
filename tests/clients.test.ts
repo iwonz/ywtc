@@ -1,5 +1,5 @@
 import {Readable} from 'node:stream';
-import {mkdtemp, readFile, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import nock from 'nock';
@@ -159,6 +159,28 @@ describe('provider clients', () => {
         results: [{id: 7, name: 'file.txt', is_downloadable: true, download_url: '/file', size: 5}],
       });
     await expect(new YandexWikiClient(wiki, 5_000, limits).uploadAttachment({pageId: 2, filename: 'file.txt', path: filename, size: 5})).resolves.toMatchObject({id: 7});
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('retries an aborted Yandex response stream without publishing a partial cache file', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-yandex-download-'));
+    const destination = path.join(directory, 'large.bin');
+    const failing = new Readable({
+      read() {
+        this.push(Buffer.from('partial'));
+        this.destroy(Object.assign(new Error('aborted'), {code: 'ECONNRESET'}));
+      },
+    });
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/2/attachments/7/download').reply(200, () => failing)
+      .get('/v1/pages/2/attachments/7/download').reply(200, 'complete', {'Content-Type': 'application/octet-stream'});
+
+    await expect(new YandexWikiClient(wiki, 5_000, limits).download(2, 7, destination)).resolves.toMatchObject({
+      path: destination,
+      size: 8,
+    });
+    await expect(readFile(destination, 'utf8')).resolves.toBe('complete');
+    expect((await readdir(directory)).filter((name) => name.includes('.part-'))).toEqual([]);
     expect(api.isDone()).toBe(true);
   });
 

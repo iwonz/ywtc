@@ -1,4 +1,3 @@
-import transform from '@diplodoc/transform';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {load} from 'cheerio';
@@ -24,6 +23,7 @@ import type {
   TransformationNotice,
 } from './domain.js';
 import {convertYfmToStorage} from './conversion.js';
+import {transformYfm} from './diplodoc.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
 
@@ -38,8 +38,32 @@ function transformationNotices(input: {
   adaptations?: readonly string[];
   degradations?: readonly string[];
 }): TransformationNotice[] {
+  const code = (kind: TransformationNotice['kind'], message: string): string => {
+    const normalized = message
+      .toLocaleLowerCase()
+      .replace(/https?:\/\/\S+/g, '<url>')
+      .replace(/variable\s+[^\s]+\s+not\s+found/gi, 'variable <name> not found')
+      .replace(/"[^"]+"|'[^']+'/g, '<value>')
+      .replace(/\b\d+(?:\.\d+)?\b/g, '<number>')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const known = /variable <name> not found/.test(normalized)
+      ? 'unresolved-yfm-variable'
+      : /empty heading|header without title/.test(normalized)
+        ? 'empty-heading'
+        : /dynamic table/.test(normalized)
+          ? 'static-grid'
+          : /alternative text/.test(normalized)
+            ? 'image-alternative-text'
+            : /layout|column/.test(normalized)
+              ? 'layout'
+              : /tab/.test(normalized)
+                ? 'tabs'
+                : sha256(normalized).slice(0, 12);
+    return `content-${kind}-${known}`;
+  };
   const make = (kind: TransformationNotice['kind'], message: string): TransformationNotice => ({
-    code: `${kind}:${sha256(message).slice(0, 12)}`,
+    code: code(kind, message),
     kind,
     message,
     verification: kind === 'normalization'
@@ -57,6 +81,16 @@ function transformationNotices(input: {
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+}
+
+function meaningfulImageAlternative(alt: string | undefined, filename: string): string | undefined {
+  const value = alt?.replace(/\s+/g, ' ').trim();
+  if (!value) return undefined;
+  const basename = filename.split('/').at(-1) ?? filename;
+  return value.localeCompare(filename, undefined, {sensitivity: 'accent'}) === 0
+    || value.localeCompare(basename, undefined, {sensitivity: 'accent'}) === 0
+    ? undefined
+    : value;
 }
 
 function absoluteResourceUrl(page: SourcePage, resource: SourceResource): string {
@@ -406,7 +440,7 @@ function containsEmptyYfmHeading(content: string): boolean {
 
 function yfmFragmentToHtml(content: string, warnings: string[], normalizations: string[]): string {
   try {
-    const result = transform(content || '', {
+    const result = transformYfm(content || '', {
       allowHTML: true,
       needToSanitizeHtml: true,
       supportGithubAnchors: true,
@@ -798,7 +832,12 @@ export function emptyRendererFallbackReason(document: NormalizedDocument): strin
 }
 
 function semanticText(value: string): string {
-  return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  return value
+    .replace(/\u00a0/g, ' ')
+    .replace(/\{(?:gray|grey|red|green|blue|orange|yellow|purple|black|white)\}(?:\s|&#x20;)*/gi, '')
+    .replace(/[\u200b-\u200d\ufeff]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 interface SemanticContent {
@@ -808,6 +847,7 @@ interface SemanticContent {
   tableCells: string[];
   code: string[];
   links: string[];
+  anchorLinks: string[];
   images: string[];
   imageLabels: string[];
   imageAttributes: string[];
@@ -825,7 +865,13 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     const node = $(element);
     if (!semanticText(node.text()) && node.find('img,table,pre,code,a[href],[id],a[name]').length === 0 && !node.is('[id],a[name]')) node.remove();
   });
-  const textValues = (selector: string): string[] => $(selector).toArray().map((element) => semanticText($(element).text()));
+  const meaningful = (element: Parameters<typeof $>[0]): boolean => {
+    const item = $(element);
+    return Boolean(semanticText(item.text())) || item.find('img,a[href],table,pre,code,[id],a[name]').length > 0;
+  };
+  const textValues = (selector: string): string[] => $(selector).toArray()
+    .map((element) => semanticText($(element).text()))
+    .filter(Boolean);
   const macroNames: string[] = [];
   if (provider === 'confluence') {
     const storage = load(`<root>${body}</root>`, {xmlMode: true}, false);
@@ -855,27 +901,37 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     if (cells.every((cell) => !cell)) return [];
     return [`${layoutIndex}:${sectionIndex}:${item.attr('data-ywtc-layout-type') ?? 'unsupported'}:${cells.join('::')}`];
   }));
+  const links = $('a[href]').toArray().map((element) => ({
+    href: $(element).attr('href') ?? '',
+    label: semanticText($(element).text()),
+  }));
+  const meaningfulRows = $('tr').toArray().filter((row) => $(row).children('th,td').toArray().some((cell) => meaningful(cell)));
+  const meaningfulLists = $('ul,ol').toArray().filter((list) => $(list).find('li').toArray().some((item) => meaningful(item)));
+  const meaningfulDetails = $('details').toArray().filter((item) => meaningful(item));
+  const meaningfulAsides = $('aside').toArray().filter((item) => meaningful(item));
   return {
     text: semanticText($.root().text()),
-    headings: $('h1,h2,h3,h4,h5,h6').toArray().map((element) => `${element.tagName}:${semanticText($(element).text())}`),
-    listItems: textValues('li'),
-    tableCells: $('th,td').toArray().map((element) => `${element.tagName}:${semanticText($(element).text())}`),
-    code: textValues('pre,code'),
-    links: $('a[href]').toArray().map((element) => `${$(element).attr('href') ?? ''}|${semanticText($(element).text())}`).sort(),
+    headings: $('h1,h2,h3,h4,h5,h6').toArray()
+      .map((element) => `${element.tagName}:${semanticText($(element).text())}`)
+      .filter((value) => !/:$/.test(value)),
+    listItems: $('li').toArray().filter((element) => meaningful(element)).map((element) => semanticText($(element).text())),
+    tableCells: $('th,td').toArray().filter((element) => meaningful(element)).map((element) => `${element.tagName}:${semanticText($(element).text())}`),
+    code: [...textValues('pre'), ...$('code').toArray().filter((element) => $(element).parents('pre').length === 0).map((element) => semanticText($(element).text())).filter(Boolean)],
+    links: links.filter(({href}) => !href.startsWith('#')).map(({href, label}) => `${href}|${label}`).sort(),
+    anchorLinks: links.filter(({href, label}) => href.startsWith('#') && Boolean(label)).map(({label}) => label).sort(),
     images: $('img').toArray().map((element) => $(element).attr('src') ?? '').sort(),
-    imageLabels: $('img').toArray().map((element) => $(element).attr('alt') ?? '').sort(),
+    imageLabels: $('img').toArray().map((element) => semanticText($(element).attr('alt') ?? '')).filter(Boolean).sort(),
     imageAttributes: $('img').toArray().map((element) => [
       $(element).attr('src') ?? '',
-      $(element).attr('alt') ?? '',
       $(element).attr('width') ?? '',
       $(element).attr('height') ?? '',
     ].join('|')).sort(),
-    anchors: $('[id],a[name]').toArray().map((element) => $(element).attr('id') ?? $(element).attr('name') ?? '').filter(Boolean).sort(),
+    anchors: $('a[name],a[id],.ywtc-anchor').toArray().map((element) => $(element).attr('id') ?? $(element).attr('name') ?? '').filter(Boolean).sort(),
     structure: {
-      lists: $('ul,ol').length,
-      rows: $('tr').length,
-      details: $('details').length,
-      asides: $('aside').length,
+      lists: meaningfulLists.length,
+      rows: meaningfulRows.length,
+      details: meaningfulDetails.length,
+      asides: meaningfulAsides.length,
       codeBlocks: $('pre').length,
     },
     macros: macroNames.sort(),
@@ -890,6 +946,7 @@ function semanticContentIsEmpty(content: SemanticContent): boolean {
     && content.tableCells.length === 0
     && content.code.length === 0
     && content.links.length === 0
+    && content.anchorLinks.length === 0
     && content.images.length === 0
     && content.imageAttributes.length === 0
     && content.anchors.length === 0
@@ -927,8 +984,28 @@ export function verifyDestinationContent(
   if (expectedEmpty && !actualEmpty) {
     return {status: 'failed', differences: [`Verification found unexpected destination content for semantically empty source page ${page.title}`], adaptations: []};
   }
-  const differs = (key: keyof SemanticContent): boolean => JSON.stringify(expected[key]) !== JSON.stringify(actual[key]);
-  const missingData = (['text', 'tableCells', 'code', 'links', 'images', 'anchors', 'macros'] as const).filter(differs);
+  const containsMultiset = (actualValues: readonly string[], expectedValues: readonly string[]): boolean => {
+    const counts = new Map<string, number>();
+    for (const value of actualValues) counts.set(value, (counts.get(value) ?? 0) + 1);
+    for (const value of expectedValues) {
+      const remaining = counts.get(value) ?? 0;
+      if (remaining === 0) return false;
+      counts.set(value, remaining - 1);
+    }
+    return true;
+  };
+  const structureContains = Object.entries(expected.structure).every(([key, count]) => actual.structure[key as keyof SemanticContent['structure']] >= count);
+  const textPreserved = expected.text === actual.text;
+  const missingData = [
+    ...(!textPreserved ? ['text'] : []),
+    ...(!containsMultiset(actual.tableCells, expected.tableCells) ? ['tableCells'] : []),
+    ...(!containsMultiset(actual.code, expected.code) ? ['code'] : []),
+    ...(!containsMultiset(actual.links, expected.links) ? ['links'] : []),
+    ...(!containsMultiset(actual.anchorLinks, expected.anchorLinks) ? ['anchorLinks'] : []),
+    ...(!containsMultiset(actual.images, expected.images) ? ['images'] : []),
+    ...(!containsMultiset(actual.anchors, expected.anchors) ? ['anchors'] : []),
+    ...(!containsMultiset(actual.macros, expected.macros) ? ['macros'] : []),
+  ];
   if (missingData.length > 0) {
     return {
       status: 'failed',
@@ -936,7 +1013,16 @@ export function verifyDestinationContent(
       adaptations: [],
     };
   }
-  const missingStructure = (['headings', 'listItems', 'imageLabels', 'imageAttributes', 'structure'] as const).filter(differs);
+  const labelsPreserved = expected.imageLabels.every((label) => (
+    actual.imageLabels.includes(label) || actual.text.includes(`Image description: ${label}`)
+  ));
+  const missingStructure = [
+    ...(!containsMultiset(actual.headings, expected.headings) ? ['headings'] : []),
+    ...(!containsMultiset(actual.listItems, expected.listItems) ? ['listItems'] : []),
+    ...(!labelsPreserved ? ['imageLabels'] : []),
+    ...(!containsMultiset(actual.imageAttributes, expected.imageAttributes) ? ['imageAttributes'] : []),
+    ...(!structureContains ? ['structure'] : []),
+  ];
   if (missingStructure.length > 0) {
     return {
       status: 'partial',
@@ -944,7 +1030,7 @@ export function verifyDestinationContent(
       adaptations: [],
     };
   }
-  if (differs('layouts')) return {status: 'complete', differences: [], adaptations: [`Destination adapted visual layout geometry for ${page.title} while preserving its payload`]};
+  if (!containsMultiset(actual.layouts, expected.layouts)) return {status: 'complete', differences: [], adaptations: [`Destination adapted visual layout geometry for ${page.title} while preserving its payload`]};
   return {status: 'complete', differences: [], adaptations: []};
 }
 
@@ -1155,6 +1241,7 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
   if (document.rawFormat === 'confluence-storage') {
     const $ = load(`<main data-root>${document.raw}</main>`, {xmlMode: true}, false);
     const warnings: string[] = [];
+    const adaptations = [...document.adaptations];
     $('script, iframe, object, embed, form').each((_index, element) => {
       const raw = $.html(element);
       warnings.push(`Active or embedded element <${element.tagName}> was preserved as inert source text`);
@@ -1169,6 +1256,11 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       if (!binding) return;
       if (binding.kind === 'uploaded') {
         attachment.attr('ri:filename', binding.resource.name);
+        const alternative = meaningfulImageAlternative(image.attr('ac:alt'), binding.resource.name);
+        if (alternative && !image.next().text().includes(`Image description: ${alternative}`)) {
+          image.after(`<p><em>Image description: ${escapeHtml(alternative)}</em></p>`);
+          adaptations.push('Attachment image alternative text was preserved as a readable caption for destination compatibility');
+        }
         return;
       }
       const target = bindingTarget(binding);
@@ -1228,8 +1320,8 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       body: $('main[data-root]').html() ?? '<p></p>',
       warnings,
       normalizations: [...document.normalizations],
-      adaptations: [...document.adaptations],
-      notices: transformationNotices({normalizations: document.normalizations, adaptations: document.adaptations, degradations: warnings}),
+      adaptations,
+      notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: warnings}),
       degraded: warnings.length > 0,
       representedReferences: document.references.length,
       preservedExternalReferences: preservedExternalImageCount(document, context),

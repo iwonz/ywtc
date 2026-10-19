@@ -30,7 +30,7 @@ describe('source page content contracts', () => {
     const client = {
       getAttachments: async () => [{
         id: 7, name: 'image.png', is_downloadable: true,
-        download_url: 'https://wiki.example/root/.files/image-3.png', size: 0, has_preview: true,
+        download_url: 'https://wiki.example/root/.files/image-3.png', size: '127.34', has_preview: true,
       }],
       getPageGrids: async () => [],
     } as unknown as YandexWikiClient;
@@ -42,6 +42,22 @@ describe('source page content contracts', () => {
     expect(resources[0]).toMatchObject({name: 'image.png', preferredName: 'image-3.png'});
     expect(resources[0]?.size).toBeUndefined();
     expect(resources[0]?.referenceAliases).toContain('/root/.files/image-3.png');
+  });
+
+  it('uses explicit attachment size units while leaving ambiguous decimal metadata unknown', async () => {
+    const client = {
+      getAttachments: async () => [
+        {id: 7, name: 'unknown.apk', is_downloadable: true, download_url: '/unknown.apk', size: '58.16'},
+        {id: 8, name: 'known.bin', is_downloadable: true, download_url: '/known.bin', size: '1.5 MiB'},
+        {id: 9, name: 'bytes.bin', is_downloadable: true, download_url: '/bytes.bin', size: '2048'},
+      ],
+      getPageGrids: async () => [],
+    } as unknown as YandexWikiClient;
+    const resources = await new YandexAdapter(yandexProfile, client).listResources({
+      provider: 'yandex-wiki', profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root',
+      locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm', references: [],
+    });
+    expect(resources.map((resource) => resource.size)).toEqual([undefined, 1_572_864, 2_048]);
   });
 
   it('selects all Yandex descendants by default and reports current-only exclusions', async () => {

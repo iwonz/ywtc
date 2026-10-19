@@ -1,6 +1,6 @@
-import transform from '@diplodoc/transform';
 import {load} from 'cheerio';
 import {LinkifyIt} from 'linkify-it';
+import {transformYfm} from './diplodoc.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
 import type {YandexGrid} from './types.js';
@@ -73,6 +73,16 @@ function escapeAttribute(value: unknown): string {
 
 function cdata(value: unknown): string {
   return String(value ?? '').replaceAll(']]>', ']]]]><![CDATA[>');
+}
+
+function meaningfulImageAlternative(alt: string | undefined, filename: string): string | undefined {
+  const value = alt?.replace(/\s+/g, ' ').trim();
+  if (!value) return undefined;
+  const basename = filename.split('/').at(-1) ?? filename;
+  return value.localeCompare(filename, undefined, {sensitivity: 'accent'}) === 0
+    || value.localeCompare(basename, undefined, {sensitivity: 'accent'}) === 0
+    ? undefined
+    : value;
 }
 
 const legacyTextColors: Record<string, string> = {
@@ -329,6 +339,7 @@ function renderHtmlToStorage(
     }
 
     if (name === 'a') {
+      if (classes.has('yfm-anchor') || element.attr('aria-hidden') === 'true') return '';
       const href = element.attr('href');
       if (!href) {
         const id = element.attr('id') ?? element.attr('name');
@@ -349,7 +360,14 @@ function renderHtmlToStorage(
       ].join('');
       if (filename) {
         stats.attachedImages += 1;
-        return `<ac:image${attrs}><ri:attachment ri:filename="${escapeAttribute(filename)}"/></ac:image>`;
+        const alternative = meaningfulImageAlternative(element.attr('alt'), filename);
+        if (alternative) {
+          adaptations.add('Attachment image alternative text was preserved as a readable caption for destination compatibility');
+        }
+        const caption = alternative
+          ? `<p><em>Image description: ${escapeXml(alternative)}</em></p>`
+          : '';
+        return `<ac:image${attrs}><ri:attachment ri:filename="${escapeAttribute(filename)}"/></ac:image>${caption}`;
       }
       const fallback = resourceFallbackFor(src, context);
       if (fallback) {
@@ -455,7 +473,7 @@ function convertYfmFragmentToStorage(
   stats: ConversionStats,
 ): string {
   try {
-    const output = transform(content || '', {
+    const output = transformYfm(content || '', {
       allowHTML: true,
       needToSanitizeHtml: true,
       supportGithubAnchors: true,
@@ -524,7 +542,7 @@ export function convertYfmToStorage(content: string, context: ConversionContext)
  */
 export function renderYfmPreview(content: string): string {
   try {
-    const output = transform(content || '', {
+    const output = transformYfm(content || '', {
       allowHTML: true,
       needToSanitizeHtml: true,
       supportGithubAnchors: true,

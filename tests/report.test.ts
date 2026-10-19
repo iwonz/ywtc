@@ -30,6 +30,25 @@ function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sou
 }
 
 describe('transfer report', () => {
+  it('deduplicates variable diagnostics through a stable transformation issue code', () => {
+    const report = new TransferReport({
+      dryRun: false,
+      scope: 'page',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example.com/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
+    });
+    report.addPage(page({
+      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'partial', degraded: true,
+      warnings: ['WARN Variable first_name not found', 'WARN Variable team_name not found'],
+    }));
+    report.finish('partial');
+    expect(report.data.issues).toEqual([
+      expect.objectContaining({code: 'content-warning-unresolved-yfm-variable', severity: 'degradation', occurrences: 2}),
+    ]);
+  });
+
   it('reconciles source inventory, exact outcomes, issue context, HTML, JSON, and catalog counts', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-report-'));
     const report = new TransferReport({

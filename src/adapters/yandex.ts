@@ -120,6 +120,7 @@ function attachmentSize(value: string | number): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
   const match = value.trim().match(/^(\d+(?:[.,]\d+)?)\s*(B|KB|KIB|MB|MIB|GB|GIB)?$/i);
   if (!match?.[1]) return undefined;
+  if (!match[2] && /[.,]/.test(match[1])) return undefined;
   const number = Number(match[1].replace(',', '.'));
   const unit = match[2]?.toLocaleUpperCase() ?? 'B';
   const multiplier = unit === 'KB' ? 1_000

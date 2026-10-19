@@ -29,6 +29,15 @@ const destination: DestinationPage = {
 };
 
 describe('normalized content pipeline', () => {
+  it('isolates Diplodoc diagnostics between source pages', () => {
+    const unresolved = normalizePageContent(source('Hello {{ missing_value }}'));
+    expect(unresolved.warnings.join(' ')).toMatch(/missing_value|variable/i);
+
+    const clean = normalizePageContent(source('# Clean page\n\nContent'));
+    expect(clean.warnings).toEqual([]);
+    expect(clean.degraded).toBe(false);
+  });
+
   it('discovers Markdown, bare, Confluence page, attachment, and anchor references', () => {
     expect(extractPageReferences('[Child](/child) https://wiki.example.com/other', 'yfm').filter((item) => item.kind === 'page')).toHaveLength(2);
     const storage = '<ac:link ac:anchor="part"><ri:page ri:content-id="2" ri:content-title="Child"/></ac:link><ri:attachment ri:filename="a.pdf"/>';
@@ -197,6 +206,49 @@ describe('normalized content pipeline', () => {
       'confluence',
       page,
     ).status).toBe('failed');
+  });
+
+  it('accepts empty scaffolding, legacy color tokens, and regenerated service anchors without hiding data loss', () => {
+    const page = source('Body');
+    const expected = [
+      '<h2 id="generated-one">Section</h2>',
+      '<p><a href="#generated-one">Section</a></p>',
+      '<ul><li>{red}&#x20;MAU</li><li></li></ul>',
+      '<table><tbody><tr><td>Value</td></tr><tr><td></td></tr></tbody></table>',
+    ].join('');
+    const normalized = [
+      '<h2 id="provider-anchor">Section</h2>',
+      '<p><a href="#provider-anchor">Section</a></p>',
+      '<ul><li>MAU</li></ul>',
+      '<table><tbody><tr><td>Value</td></tr></tbody></table>',
+    ].join('');
+    expect(verifyDestinationContent(expected, normalized, 'confluence', page).status).toBe('complete');
+    expect(verifyDestinationContent(expected, normalized.replace('Value', ''), 'confluence', page).status).toBe('failed');
+  });
+
+  it('preserves meaningful attachment image alt text as a verified caption', async () => {
+    const page = source('![Architecture diagram](image.png)');
+    const image: SourceResource = {
+      provider: 'yandex-wiki', id: 'image', pageId: page.id, name: 'image.png', preferredName: 'image.png', kind: 'image',
+    };
+    const bindings = sourceResourceBindings(page, [image]);
+    setSourceResourceBinding(bindings, page, [image], image, {kind: 'uploaded', resource: {id: 'uploaded', name: 'image.png'}});
+    const context: RenderContext = {
+      pages: new Map(), resources: bindings, sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const rendered = await renderConfluenceStorage(normalizePageContent(page), page, context, 'DOC');
+    expect(rendered.body).toContain('Image description: Architecture diagram');
+    expect(rendered.adaptations).toContainEqual(expect.stringContaining('alternative text'));
+    const providerNormalized = rendered.body.replace(' ac:alt="Architecture diagram"', '');
+    expect(verifyDestinationContent(rendered.body, providerNormalized, 'confluence', page).status).toBe('complete');
+
+    const redundant = source('![image.png](image.png)');
+    const redundantBindings = sourceResourceBindings(redundant, [image]);
+    setSourceResourceBinding(redundantBindings, redundant, [image], image, {kind: 'uploaded', resource: {id: 'uploaded', name: 'image.png'}});
+    const redundantRendered = await renderConfluenceStorage(normalizePageContent(redundant), redundant, {
+      pages: new Map(), resources: redundantBindings, sourcePages: new Map([[redundant.canonicalId, redundant]]), currentPageId: redundant.canonicalId,
+    }, 'DOC');
+    expect(redundantRendered.body).not.toContain('Image description:');
   });
 
   it('treats empty editor scaffolding as a complete empty page without fallback', async () => {

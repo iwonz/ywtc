@@ -1,14 +1,14 @@
-import {createHash} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {createWriteStream} from 'node:fs';
 import {open} from 'node:fs/promises';
-import {mkdir} from 'node:fs/promises';
+import {mkdir, rename, rm} from 'node:fs/promises';
 import path from 'node:path';
 import {Transform, type Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import PQueue from 'p-queue';
 import {z} from 'zod';
 import type {NetworkLimits, YandexConnectionProfile} from '../config.js';
-import {RetryingHttpClient} from '../http.js';
+import {HttpRequestError, RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
 import type {
   DownloadedFile,
@@ -253,30 +253,45 @@ export class YandexWikiClient implements YandexWikiApi {
 
   async download(pageId: number, attachmentId: number, destination: string): Promise<DownloadedFile> {
     return this.downloadQueue.add(async () => {
-      const response = await this.authenticated.request<Readable>({
-        method: 'GET',
-        url: `/pages/${pageId}/attachments/${attachmentId}/download`,
-        responseType: 'stream',
-      });
-
       await mkdir(path.dirname(destination), {recursive: true});
-      const hash = createHash('sha256');
-      let size = 0;
-      const meter = new Transform({
-        transform(chunk: Buffer, _encoding, callback) {
-          hash.update(chunk);
-          size += chunk.length;
-          callback(null, chunk);
-        },
-      });
-      await pipeline(response.data, meter, createWriteStream(destination, {mode: 0o600}));
-      const contentType = response.headers['content-type'];
-      return {
-        path: destination,
-        size,
-        sha256: hash.digest('hex'),
-        ...(typeof contentType === 'string' ? {mimeType: contentType} : {}),
-      };
+      for (let attempt = 0; ; attempt += 1) {
+        const temporary = `${destination}.part-${randomUUID()}`;
+        try {
+          const response = await this.authenticated.request<Readable>({
+            method: 'GET',
+            url: `/pages/${pageId}/attachments/${attachmentId}/download`,
+            responseType: 'stream',
+          });
+          const hash = createHash('sha256');
+          let size = 0;
+          const meter = new Transform({
+            transform(chunk: Buffer, _encoding, callback) {
+              hash.update(chunk);
+              size += chunk.length;
+              callback(null, chunk);
+            },
+          });
+          await pipeline(response.data, meter, createWriteStream(temporary, {mode: 0o600}));
+          await rename(temporary, destination);
+          const contentType = response.headers['content-type'];
+          return {
+            path: destination,
+            size,
+            sha256: hash.digest('hex'),
+            ...(typeof contentType === 'string' ? {mimeType: contentType} : {}),
+          };
+        } catch (error) {
+          await rm(temporary, {force: true});
+          const code = error instanceof Error && 'code' in error ? String(error.code ?? '') : '';
+          const retryable = !(error instanceof HttpRequestError)
+            && code !== 'ERR_CANCELED'
+            && (/aborted|premature close|socket hang up/i.test(error instanceof Error ? error.message : String(error))
+              || ['ECONNRESET', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE', 'ETIMEDOUT'].includes(code));
+          if (!retryable || attempt >= 3) throw error;
+          const delay = Math.min(4_000, 250 * 2 ** attempt + Math.floor(Math.random() * 125));
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
     }) as Promise<DownloadedFile>;
   }
 

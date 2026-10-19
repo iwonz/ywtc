@@ -31,7 +31,7 @@ describe('HTTP retry and log safety', () => {
 
   it.each([
     [401, /authentication rejected/],
-    [403, /permission denied/],
+    [403, /request forbidden/],
     [404, /resource or API route not found/],
     [409, /provider rejected the current revision or request state/],
     [413, /payload too large/],

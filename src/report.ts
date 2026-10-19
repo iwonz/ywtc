@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -185,6 +185,32 @@ function sanitizedValue(value: unknown, secrets: readonly string[]): unknown {
   return value;
 }
 
+function transformationIssueCode(kind: 'normalization' | 'adaptation' | 'warning', message: string): string {
+  const normalized = message
+    .toLocaleLowerCase()
+    .replace(/https?:\/\/\S+/g, '<url>')
+    .replace(/variable\s+[^\s]+\s+not\s+found/gi, 'variable <name> not found')
+    .replace(/"[^"]+"|'[^']+'/g, '<value>')
+    .replace(/\b\d+(?:\.\d+)?\b/g, '<number>')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const known = /variable <name> not found/.test(normalized)
+    ? 'unresolved-yfm-variable'
+    : /empty heading|header without title/.test(normalized)
+      ? 'empty-heading'
+      : /dynamic table/.test(normalized)
+        ? 'static-grid'
+        : /alternative text/.test(normalized)
+          ? 'image-alternative-text'
+          : /layout|column/.test(normalized)
+            ? 'layout'
+            : /tab/.test(normalized)
+              ? 'tabs'
+              : undefined;
+  const suffix = known ?? createHash('sha256').update(normalized).digest('hex').slice(0, 12);
+  return `content-${kind}-${suffix}`;
+}
+
 export function injectReportPayload(shell: string, payload: ReportPresentationPayload): string {
   const occurrences = shell.split(REPORT_DATA_MARKER).length - 1;
   if (occurrences !== 1) throw new Error(`Compiled report shell must contain exactly one data marker; found ${occurrences}`);
@@ -335,13 +361,13 @@ export class TransferReport {
     if (this.data.selection.excluded.length > 0) this.data.excludedPages = reportExcludedPages(this.data.selection, this.data);
     if (!collectIssues) return;
     for (const message of page.normalizations) {
-      this.issue({code: `normalization:${message}`, severity: 'normalization', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
+      this.issue({code: transformationIssueCode('normalization', message), severity: 'normalization', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
     }
     for (const message of page.adaptations) {
-      this.issue({code: `adaptation:${message}`, severity: 'adaptation', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
+      this.issue({code: transformationIssueCode('adaptation', message), severity: 'adaptation', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
     }
     for (const message of page.warnings) {
-      this.issue({code: `warning:${message}`, severity: page.degraded ? 'degradation' : 'warning', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
+      this.issue({code: transformationIssueCode('warning', message), severity: page.degraded ? 'degradation' : 'warning', phase: 'page', pageId: page.sourceCanonicalId, retryable: false, message});
     }
   }
 
