@@ -30,6 +30,12 @@ export interface SourcePage {
   space?: string;
   rawContent: string;
   rawFormat: RawContentFormat;
+  /** Provider acknowledged the page but did not expose its managed payload inline. */
+  contentAvailability?: {
+    status: 'provider-unavailable';
+    sourceType: string;
+    reason: 'provider-null-body';
+  };
   modifiedAt?: string;
   version?: string;
   references: PageReference[];
@@ -306,6 +312,26 @@ export interface SourceSelection {
   notes: string[];
 }
 
+export interface SourceDiscoveryFailure {
+  page: DiscoveredPage;
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export class IncompleteSourceDiscoveryError extends Error {
+  constructor(
+    message: string,
+    readonly pages: DiscoveredPage[],
+    readonly selection: SourceSelection,
+    readonly failures: SourceDiscoveryFailure[],
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'IncompleteSourceDiscoveryError';
+  }
+}
+
 export interface PageGraph {
   rootId: string;
   pages: DiscoveredPage[];
@@ -353,6 +379,11 @@ export interface NormalizedDocument {
   root: NormalizedNode;
   raw: string;
   rawFormat: RawContentFormat;
+  sourceContentUnavailable?: {
+    sourceType: string;
+    sourceUrl: string;
+    reason: 'provider-null-body';
+  };
   references: NormalizedReference[];
   warnings: string[];
   normalizations: string[];

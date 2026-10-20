@@ -5,7 +5,7 @@ import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import type {AppConfig, ConfluenceConnectionProfile, ConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
 import {legacyTransferPlaceholder, rawContentFallback} from '../src/content-model.js';
-import {DestinationTitleConflictError} from '../src/domain.js';
+import {DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../src/domain.js';
 import type {DestinationAdapter, DestinationContainer, DestinationPage, SourceAdapter, SourcePage, SourceResource, UploadedResource} from '../src/domain.js';
 import type {Logger} from '../src/logger.js';
 import {HttpRequestError} from '../src/http.js';
@@ -263,6 +263,62 @@ describe('source-derived remote page safety', () => {
     await expect(readdir(options.reportsDirectory)).rejects.toThrow();
   });
 
+  it('reports every known page when detail discovery is incomplete without destination mutations', async () => {
+    const {config, options} = await setup();
+    const hydrated = {...child, depth: 1, projectedParentId: root.canonicalId};
+    const failed = {
+      ...child,
+      id: '3',
+      canonicalId: 'source:yandex-wiki:3',
+      title: 'Unavailable',
+      locator: 'root/unavailable',
+      url: 'https://wiki.example/root/unavailable',
+      depth: 1,
+      projectedParentId: root.canonicalId,
+    };
+    const adapters = fixture([child]);
+    adapters.source.getDescendants = async () => {
+      throw new IncompleteSourceDiscoveryError(
+        'Yandex Wiki descendant inventory is incomplete: 1 of 2 selected page detail request(s) failed',
+        [{...root, depth: 0}, hydrated, failed],
+        {
+          requestedStatus: 'all', effectiveStatus: 'all', returnedDescendants: 2, selectedDescendants: 2,
+          excluded: [], maximumDepth: 1, hierarchyGaps: [], notes: ['No destination mutation was attempted.'],
+        },
+        [{page: failed, code: 'source-page-detail-invalid', message: 'invalid provider content', retryable: false}],
+      );
+    };
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    let failure: MigrationRunError | undefined;
+    try {
+      await new Migrator(config, logger, factory).run({...options, scope: 'subtree', comments: true});
+    } catch (error) {
+      if (error instanceof MigrationRunError) failure = error;
+      else throw error;
+    }
+
+    expect(failure?.message).toBe('Yandex Wiki descendant inventory is incomplete: 1 of 2 selected page detail request(s) failed');
+    expect(adapters.snapshot()).toMatchObject({created: 0, updated: 0, uploaded: 0});
+    const report = JSON.parse(await readFile(failure!.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.summary).toMatchObject({
+      pages: 3,
+      returnedDescendants: 2,
+      selectedDescendants: 2,
+      failed: 1,
+      notStartedPages: 2,
+      errors: 1,
+      retryableFailures: 0,
+      inventoryComplete: false,
+      dependentComments: 0,
+      commentStatuses: {'not-started': 3},
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'source-page-detail-invalid',
+      pageId: failed.canonicalId,
+      retryable: false,
+    }));
+  });
+
   it('keeps full content with a source fallback when upload fails, then resumes without duplication', async () => {
     const {directory, config, options} = await setup();
     const adapters = fixture();
@@ -474,6 +530,27 @@ describe('source-derived remote page safety', () => {
     expect(resumed).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 1, partial: 0}});
     expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 0});
     expect(adapters.snapshot().current?.content).toBe('<p></p>');
+  });
+
+  it('transfers unavailable provider Grid content as a readable partial page without blocking the run', async () => {
+    const {config, options} = await setup();
+    const gridRoot: SourcePage = {
+      ...root,
+      rawContent: '',
+      references: [],
+      contentAvailability: {status: 'provider-unavailable', sourceType: 'grid', reason: 'provider-null-body'},
+    };
+    const adapters = fixture([], gridRoot, false);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, logger, factory).run(options);
+    expect(result).toMatchObject({
+      status: 'completed-with-warnings',
+      hasErrors: false,
+      summary: {complete: 0, partial: 1, failed: 0, blocked: 0, degradations: 1},
+    });
+    expect(adapters.snapshot().current?.content).toContain(gridRoot.url);
+    expect(adapters.snapshot()).toMatchObject({created: 1});
   });
 
   it('reconciles an existing raw source snapshot when its state mapping is unavailable', async () => {

@@ -564,6 +564,13 @@ export function normalizePageContent(page: SourcePage): NormalizedDocument {
     root: {type: 'document', children},
     raw: page.rawContent,
     rawFormat: page.rawFormat,
+    ...(page.contentAvailability?.status === 'provider-unavailable' ? {
+      sourceContentUnavailable: {
+        sourceType: page.contentAvailability.sourceType,
+        sourceUrl: page.url,
+        reason: page.contentAvailability.reason,
+      },
+    } : {}),
     references,
     warnings,
     normalizations,
@@ -588,8 +595,25 @@ function gridCell(value: unknown): string {
 }
 
 export function appendGridSnapshots(document: NormalizedDocument, resources: SourceResource[]): NormalizedDocument {
-  const grids = resources.filter((resource) => resource.kind === 'grid');
-  if (grids.length === 0) return document;
+  const grids = resources.filter((resource) => resource.kind === 'grid' && resource.metadata?.grid);
+  if (grids.length === 0) {
+    if (!document.sourceContentUnavailable) return document;
+    const warning = `Yandex Wiki ${document.sourceContentUnavailable.sourceType} content is unavailable through the provider API; the original page link was preserved`;
+    const fallbackHtml = `<aside class="ywtc-fallback"><p>${escapeHtml(warning)}.</p><p><a data-ywtc-source-fallback="true" href="${escapeHtml(document.sourceContentUnavailable.sourceUrl)}">Open original page</a></p></aside>`;
+    const htmlNode = document.root.children?.find((node) => node.type === 'html');
+    if (htmlNode) htmlNode.value = fallbackHtml;
+    else document.root.children?.push({type: 'html', value: fallbackHtml});
+    const warnings = [...document.warnings, warning];
+    return {
+      ...document,
+      raw: `> ${warning}.\n>\n> [Open original page](${document.sourceContentUnavailable.sourceUrl})\n`,
+      warnings,
+      notices: transformationNotices({normalizations: document.normalizations, adaptations: document.adaptations, degradations: warnings}),
+      degraded: true,
+      semanticallyEmpty: false,
+      metrics: {...document.metrics, links: document.metrics.links + 1},
+    };
+  }
   const html = grids.map((resource) => {
     const grid = resource.metadata?.grid as {title?: string; structure?: {columns?: Array<{title?: string}>}; rows?: Array<{row?: unknown[]}>} | undefined;
     const columns = grid?.structure?.columns ?? [];
@@ -600,8 +624,9 @@ export function appendGridSnapshots(document: NormalizedDocument, resources: Sou
   if (htmlNode) htmlNode.value = `${htmlNode.value ?? ''}${html}`;
   else document.root.children?.push({type: 'html', value: html});
   const adaptations = [...document.adaptations, ...grids.map((resource) => `Dynamic table "${resource.name}" was converted to a static table`)];
+  const {sourceContentUnavailable: _resolvedSourceContent, ...resolvedDocument} = document;
   return {
-    ...document,
+    ...resolvedDocument,
     adaptations,
     notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: document.warnings}),
     semanticallyEmpty: false,
@@ -1055,6 +1080,7 @@ function relativeTarget(currentPath: string | undefined, targetPath: string): st
 function rewritePortableHtml(html: string, context: RenderContext): string {
   const $ = load(html, null, false);
   $('a').each((_index, element) => {
+    if ($(element).attr('data-ywtc-source-fallback') === 'true') return;
     const href = $(element).attr('href');
     if (!href) return;
     const current = context.sourcePages.get(context.currentPageId);
@@ -1177,6 +1203,18 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
   if (document.semanticallyEmpty) {
     return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
+  if (document.sourceContentUnavailable) {
+    return {
+      body: document.raw,
+      warnings: [...document.warnings],
+      normalizations: [...document.normalizations],
+      adaptations: [...document.adaptations],
+      notices: [...document.notices],
+      degraded: true,
+      representedReferences: document.references.length,
+      preservedExternalReferences: 0,
+    };
+  }
   if (document.rawFormat === 'yfm') {
     let body = document.raw;
     const resourceWarnings = new Set<string>();
@@ -1237,6 +1275,22 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
 export async function renderConfluenceStorage(document: NormalizedDocument, page: SourcePage, context: RenderContext, spaceKey: string): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
     return {body: '<p></p>', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
+  }
+  if (document.sourceContentUnavailable) {
+    const $ = load(htmlFromDocument(document), null, false);
+    $('aside.ywtc-fallback').each((_index, element) => {
+      $(element).replaceWith(`<blockquote>${$(element).html() ?? ''}</blockquote>`);
+    });
+    return {
+      body: $.html(),
+      warnings: [...document.warnings],
+      normalizations: [...document.normalizations],
+      adaptations: [...document.adaptations],
+      notices: [...document.notices],
+      degraded: true,
+      representedReferences: document.references.length,
+      preservedExternalReferences: 0,
+    };
   }
   if (document.rawFormat === 'confluence-storage') {
     const $ = load(`<main data-root>${document.raw}</main>`, {xmlMode: true}, false);

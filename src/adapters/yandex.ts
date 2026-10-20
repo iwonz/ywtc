@@ -10,19 +10,21 @@ import type {
   DestinationComment,
   DestinationContainer,
   DestinationPage,
+  DiscoveredPage,
   PageReference,
   SourceAdapter,
   SourceStatus,
   SourcePage,
   SourceResource,
+  SourceSelection,
   UploadedResource,
 } from '../domain.js';
-import {DestinationRevisionConflictError, DestinationTitleConflictError} from '../domain.js';
+import {DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../domain.js';
 import {normalizeCommentForest} from '../comments.js';
 import {HttpRequestError} from '../http.js';
 import {normalizeWikiSlug, safeFilename} from '../input.js';
 import type {YandexWikiClient} from '../clients/yandex-wiki.js';
-import type {YandexAttachment, YandexPageDetails} from '../types.js';
+import type {YandexAttachment, YandexPageDetails, YandexPageIdentity} from '../types.js';
 
 const capabilities: AdapterCapabilities = {
   readPages: true,
@@ -55,8 +57,11 @@ function canonical(profile: YandexConnectionProfile, id: string | number): strin
 }
 
 function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): SourcePage {
-  if (page.content === undefined) throw new Error(`Yandex Wiki page response for ${page.id} is missing content`);
-  const rawContent = page.content;
+  const unavailableGrid = page.page_type === 'grid' && page.content === null;
+  if (typeof page.content !== 'string' && !unavailableGrid) {
+    throw new Error(`Yandex Wiki page response for ${page.id} is missing content`);
+  }
+  const rawContent = page.content ?? '';
   const parent = parentId(page);
   const ancestors = ancestorIds(page);
   return {
@@ -71,9 +76,105 @@ function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): 
     ...(ancestors.length > 0 ? {ancestorIds: ancestors} : {}),
     rawContent,
     rawFormat: 'yfm',
+    ...(unavailableGrid ? {
+      contentAvailability: {
+        status: 'provider-unavailable' as const,
+        sourceType: page.page_type,
+        reason: 'provider-null-body' as const,
+      },
+    } : {}),
     ...(page.attributes?.modified_at ? {modifiedAt: page.attributes.modified_at, version: page.attributes.modified_at} : {}),
     references: extractPageReferences(rawContent, 'yfm'),
   };
+}
+
+function sourceDetailFailure(error: unknown): {code: string; message: string; retryable: boolean} {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof HttpRequestError)) {
+    return {
+      code: /schema error|missing content/i.test(message) ? 'source-page-detail-invalid' : 'source-page-detail-provider-error',
+      message,
+      retryable: false,
+    };
+  }
+  if (error.status === 429) return {code: 'rate-limit-source-page-detail', message, retryable: true};
+  if ((error.status ?? 0) >= 500) return {code: 'network-source-page-detail', message, retryable: true};
+  if (error.status === 401) return {code: 'authorization-source-page-detail', message, retryable: false};
+  if (error.status === 403) return {code: 'permissions-source-page-detail', message, retryable: false};
+  if (error.status === undefined && error.code !== 'ERR_CANCELED') {
+    return {code: 'network-source-page-detail', message, retryable: true};
+  }
+  return {code: 'source-page-detail-provider-error', message, retryable: false};
+}
+
+function sourceIdentityStub(
+  profile: YandexConnectionProfile,
+  root: SourcePage,
+  identity: YandexPageIdentity,
+  selected: YandexPageIdentity[],
+  currentOnly: boolean,
+): SourcePage {
+  const locator = normalizeWikiSlug(identity.slug);
+  const byLocator = new Map<string, string>([
+    [normalizeWikiSlug(root.locator), root.id],
+    ...selected.map((item): [string, string] => [normalizeWikiSlug(item.slug), String(item.id)]),
+  ]);
+  const segments = locator.split('/').filter(Boolean);
+  const ancestorIds = segments.slice(0, -1)
+    .map((_segment, index) => byLocator.get(segments.slice(0, index + 1).join('/')))
+    .filter((value): value is string => Boolean(value) && value !== String(identity.id));
+  const parent = ancestorIds.at(-1);
+  return {
+    provider: 'yandex-wiki',
+    profile: profile.name,
+    id: String(identity.id),
+    canonicalId: canonical(profile, identity.id),
+    title: segments.at(-1) || `Page ${identity.id}`,
+    locator,
+    url: pageUrl(profile, locator),
+    ...(parent ? {parentId: parent} : {}),
+    ...(ancestorIds.length > 0 ? {ancestorIds} : {}),
+    ...(currentOnly ? {sourceStatus: 'current' as const} : {}),
+    rawContent: '',
+    rawFormat: 'yfm',
+    references: [],
+  };
+}
+
+function projectDiscoveryEvidence(root: SourcePage, descendants: SourcePage[]): DiscoveredPage[] {
+  const pages = [root, ...descendants.filter((page) => page.canonicalId !== root.canonicalId)];
+  const byProviderId = new Map(pages.map((page) => [page.id, page]));
+  const projectedParents = new Map<string, string | undefined>([[root.canonicalId, undefined]]);
+  for (const page of pages.slice(1)) {
+    const ancestor = [...(page.ancestorIds ?? (page.parentId ? [page.parentId] : []))]
+      .reverse()
+      .map((id) => byProviderId.get(id))
+      .find(Boolean);
+    projectedParents.set(page.canonicalId, (ancestor ?? root).canonicalId);
+  }
+  const depths = new Map<string, number>([[root.canonicalId, 0]]);
+  const depthOf = (canonicalId: string): number => {
+    const cached = depths.get(canonicalId);
+    if (cached !== undefined) return cached;
+    const trail: string[] = [];
+    let current: string | undefined = canonicalId;
+    const seen = new Set<string>();
+    while (current && depths.get(current) === undefined && !seen.has(current)) {
+      seen.add(current);
+      trail.push(current);
+      current = projectedParents.get(current);
+    }
+    let depth = current ? depths.get(current) ?? 0 : 0;
+    for (const item of trail.reverse()) {
+      depth += 1;
+      depths.set(item, depth);
+    }
+    return depths.get(canonicalId) ?? 1;
+  };
+  return pages.map((page): DiscoveredPage => {
+    const projectedParentId = projectedParents.get(page.canonicalId);
+    return {...page, depth: depthOf(page.canonicalId), ...(projectedParentId ? {projectedParentId} : {})};
+  }).sort((left, right) => left.depth - right.depth || left.canonicalId.localeCompare(right.canonicalId));
 }
 
 function destinationPage(profile: YandexConnectionProfile, page: YandexPageDetails): DestinationPage {
@@ -245,12 +346,11 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
         expectedLocator,
       };
     }));
-    const failures = results.flatMap((result, index) => result.status === 'rejected'
-      ? [`${selected[index]?.id ?? 'unknown'} (${selected[index]?.slug ?? 'unknown'}): ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`]
-      : []);
-    if (failures.length > 0) {
-      throw new Error(`Yandex Wiki descendant inventory is incomplete; ${failures.length} page detail request(s) failed: ${failures.join('; ')}`);
-    }
+    const detailFailures = results.flatMap((result, index) => {
+      const identity = selected[index];
+      if (result.status !== 'rejected' || !identity) return [];
+      return [{identity, ...sourceDetailFailure(result.reason)}];
+    });
     const excludedResults = await Promise.allSettled(excludedIdentities.map(async (identity) => {
       const detail = await this.client.getPageById(identity.id);
       const locator = normalizeWikiSlug(detail.slug);
@@ -272,39 +372,75 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
       };
     }));
     const excludedFailures = excludedResults.filter((result) => result.status === 'rejected').length;
+    const pages = results.flatMap((result) => result.status === 'fulfilled' && result.value.belongsToSubtree ? [result.value.page] : []);
+    const excluded = [
+      ...excludedResults.map((result, index) => result.status === 'fulfilled' ? result.value : {
+        id: String(excludedIdentities[index]!.id),
+        canonicalId: canonical(this.profile, excludedIdentities[index]!.id),
+        locator: normalizeWikiSlug(excludedIdentities[index]!.slug),
+        reason: 'source-status' as const,
+        status: 'obsolete' as const,
+        metadataComplete: false,
+      }),
+      ...results.flatMap((result) => result.status === 'fulfilled' && !result.value.belongsToSubtree ? [{
+        id: result.value.page.id,
+        canonicalId: result.value.page.canonicalId,
+        locator: result.value.page.locator,
+        title: result.value.page.title,
+        url: result.value.page.url,
+        ...(result.value.page.parentId ? {parentId: result.value.page.parentId} : {}),
+        ...(result.value.page.ancestorIds ? {ancestorIds: result.value.page.ancestorIds} : {}),
+        reason: 'inventory-drift' as const,
+        ...(result.value.page.sourceStatus ? {status: result.value.page.sourceStatus} : {}),
+        metadataComplete: true,
+      }] : []),
+    ];
+    const notes = [
+      ...(excludedFailures > 0 ? [`Yandex Wiki did not expose complete hierarchy metadata for ${excludedFailures} excluded page(s).`] : []),
+      ...(results.some((result) => result.status === 'fulfilled' && !result.value.belongsToSubtree)
+        ? ['Yandex Wiki inventory changed during discovery; pages moved outside the selected subtree were excluded by immutable page ID.']
+        : []),
+      ...locatorDrifts,
+    ];
+    if (detailFailures.length > 0) {
+      const failedPages = detailFailures.map(({identity}) => sourceIdentityStub(
+        this.profile,
+        page,
+        identity,
+        selected,
+        options.status === 'current',
+      ));
+      const evidencePages = projectDiscoveryEvidence(page, [...pages, ...failedPages]);
+      const evidenceById = new Map(evidencePages.map((item) => [item.id, item]));
+      const selection: SourceSelection = {
+        requestedStatus: options.status,
+        effectiveStatus: options.status,
+        returnedDescendants: all.length,
+        selectedDescendants: evidencePages.length - 1,
+        excluded,
+        maximumDepth: Math.max(0, ...evidencePages.map((item) => item.depth)),
+        hierarchyGaps: [],
+        notes: [...notes, 'Selected page detail hydration was incomplete; no destination mutation was attempted.'],
+      };
+      const message = `Yandex Wiki descendant inventory is incomplete: ${detailFailures.length} of ${selection.selectedDescendants} selected page detail request(s) failed`;
+      throw new IncompleteSourceDiscoveryError(
+        message,
+        evidencePages,
+        selection,
+        detailFailures.map((failure) => ({
+          page: evidenceById.get(String(failure.identity.id))!,
+          code: failure.code,
+          message: failure.message,
+          retryable: failure.retryable,
+        })),
+      );
+    }
     return {
-      pages: results.flatMap((result) => result.status === 'fulfilled' && result.value.belongsToSubtree ? [result.value.page] : []),
+      pages,
       returned: all.length,
-      excluded: [
-        ...excludedResults.map((result, index) => result.status === 'fulfilled' ? result.value : {
-          id: String(excludedIdentities[index]!.id),
-          canonicalId: canonical(this.profile, excludedIdentities[index]!.id),
-          locator: normalizeWikiSlug(excludedIdentities[index]!.slug),
-          reason: 'source-status' as const,
-          status: 'obsolete' as const,
-          metadataComplete: false,
-        }),
-        ...results.flatMap((result) => result.status === 'fulfilled' && !result.value.belongsToSubtree ? [{
-          id: result.value.page.id,
-          canonicalId: result.value.page.canonicalId,
-          locator: result.value.page.locator,
-          title: result.value.page.title,
-          url: result.value.page.url,
-          ...(result.value.page.parentId ? {parentId: result.value.page.parentId} : {}),
-          ...(result.value.page.ancestorIds ? {ancestorIds: result.value.page.ancestorIds} : {}),
-          reason: 'inventory-drift' as const,
-          ...(result.value.page.sourceStatus ? {status: result.value.page.sourceStatus} : {}),
-          metadataComplete: true,
-        }] : []),
-      ],
+      excluded,
       effectiveStatus: options.status,
-      notes: [
-        ...(excludedFailures > 0 ? [`Yandex Wiki did not expose complete hierarchy metadata for ${excludedFailures} excluded page(s).`] : []),
-        ...(results.some((result) => result.status === 'fulfilled' && !result.value.belongsToSubtree)
-          ? ['Yandex Wiki inventory changed during discovery; pages moved outside the selected subtree were excluded by immutable page ID.']
-          : []),
-        ...locatorDrifts,
-      ],
+      notes,
     };
   }
 

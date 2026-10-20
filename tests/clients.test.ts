@@ -115,6 +115,19 @@ describe('provider clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
+  it('accepts an explicit null body in Yandex Grid page details', async () => {
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/27')
+      .query({fields: 'breadcrumbs,redirect,attributes,content'})
+      .reply(200, {id: 27, slug: 'root/grid', title: 'Grid', page_type: 'grid', content: null});
+    await expect(new YandexWikiClient(wiki, 5_000, limits).getPageById(27)).resolves.toMatchObject({
+      id: 27,
+      page_type: 'grid',
+      content: null,
+    });
+    expect(api.isDone()).toBe(true);
+  });
+
   it('enumerates every Yandex descendant page, follows short cursor pages, and applies actuality only when requested', async () => {
     const api = nock('https://api.wiki.yandex.net')
       .get('/v1/pages/1/descendants').query({include_self: false, page_size: 100})

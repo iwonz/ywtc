@@ -3,7 +3,7 @@ import {ConfluenceAdapter} from '../src/adapters/confluence.js';
 import {YandexAdapter} from '../src/adapters/yandex.js';
 import type {YandexWikiClient} from '../src/clients/yandex-wiki.js';
 import type {ConfluenceConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
-import {DestinationRevisionConflictError, DestinationTitleConflictError} from '../src/domain.js';
+import {DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../src/domain.js';
 import {HttpRequestError} from '../src/http.js';
 import type {ConfluenceApi, ConfluencePage, YandexPageDetails} from '../src/types.js';
 
@@ -24,6 +24,21 @@ describe('source page content contracts', () => {
     await expect(new YandexAdapter(yandexProfile, missingClient).resolvePage('root')).rejects.toThrow(/missing content/);
     const emptyClient = {getPageBySlug: async () => ({...base, content: ''})} as unknown as YandexWikiClient;
     await expect(new YandexAdapter(yandexProfile, emptyClient).resolvePage('root')).resolves.toMatchObject({rawContent: ''});
+  });
+
+  it('marks null Yandex Grid content as provider-unavailable without accepting null ordinary pages', async () => {
+    const gridClient = {
+      getPageBySlug: async () => ({id: 2, slug: 'root/grid', title: 'Grid', page_type: 'grid', content: null}),
+    } as unknown as YandexWikiClient;
+    await expect(new YandexAdapter(yandexProfile, gridClient).resolvePage('root/grid')).resolves.toMatchObject({
+      rawContent: '',
+      contentAvailability: {status: 'provider-unavailable', sourceType: 'grid', reason: 'provider-null-body'},
+    });
+
+    const ordinaryClient = {
+      getPageBySlug: async () => ({id: 3, slug: 'root/page', title: 'Page', page_type: 'page', content: null}),
+    } as unknown as YandexWikiClient;
+    await expect(new YandexAdapter(yandexProfile, ordinaryClient).resolvePage('root/page')).rejects.toThrow(/missing content/);
   });
 
   it('uses the Yandex download URL basename as the preferred resource name', async () => {
@@ -86,17 +101,38 @@ describe('source page content contracts', () => {
     expect(calls).toEqual(['all', 'actual']);
   });
 
-  it('fails the complete Yandex inventory when any selected detail cannot be loaded', async () => {
+  it('preserves structured evidence when selected Yandex details cannot be loaded', async () => {
     const client = {
-      getDescendants: async () => [{id: 2, slug: 'root/child'}, {id: 3, slug: 'root/missing'}],
+      getDescendants: async () => [
+        {id: 2, slug: 'root/child'},
+        {id: 3, slug: 'root/missing'},
+        {id: 4, slug: 'root/transient'},
+      ],
       getPageById: async (id: number) => {
-        if (id === 3) throw new Error('not found');
+        if (id === 3) return {id, slug: 'root/missing', title: 'Missing', page_type: 'page'};
+        if (id === 4) throw new HttpRequestError('provider unavailable', 503, 'GET');
         return {id, slug: 'root/child', title: 'Child', page_type: 'page', content: 'body', breadcrumbs: [{id: 1, slug: 'root', title: 'Root'}]};
       },
     } as unknown as YandexWikiClient;
     const adapter = new YandexAdapter(yandexProfile, client);
     const sourceRoot = {provider: 'yandex-wiki' as const, profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root', locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm' as const, references: []};
-    await expect(adapter.getDescendants(sourceRoot, {status: 'all'})).rejects.toThrow(/inventory is incomplete.*3 \(root\/missing\): not found/);
+    const error = await adapter.getDescendants(sourceRoot, {status: 'all'}).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(IncompleteSourceDiscoveryError);
+    expect(error).toMatchObject({
+      message: 'Yandex Wiki descendant inventory is incomplete: 2 of 3 selected page detail request(s) failed',
+      selection: {returnedDescendants: 3, selectedDescendants: 3, maximumDepth: 1},
+      pages: expect.arrayContaining([
+        expect.objectContaining({id: '1', depth: 0}),
+        expect.objectContaining({id: '2', depth: 1}),
+        expect.objectContaining({id: '3', depth: 1}),
+        expect.objectContaining({id: '4', depth: 1}),
+      ]),
+      failures: expect.arrayContaining([
+        expect.objectContaining({code: 'source-page-detail-invalid', retryable: false, page: expect.objectContaining({id: '3'})}),
+        expect.objectContaining({code: 'network-source-page-detail', retryable: true, page: expect.objectContaining({id: '4'})}),
+      ]),
+    });
+    expect(String(error)).not.toContain('root/missing');
   });
 
   it('keeps renamed pages by immutable ID and excludes pages moved outside the selected subtree', async () => {

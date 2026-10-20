@@ -28,7 +28,7 @@ import {
   verifyCommentArchive,
 } from './comments.js';
 import {ConfirmedDestinationMissingError, type ConsistencyRetryOptions, verifyConfirmedDestinationPage} from './consistency.js';
-import {DestinationOwnershipConflictError, DestinationRevisionConflictError, DestinationTitleConflictError} from './domain.js';
+import {DestinationOwnershipConflictError, DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from './domain.js';
 import type {
   CommentInventory,
   DestinationAdapter,
@@ -129,7 +129,10 @@ function sha256(value: string): string {
 }
 
 function sourceFingerprint(page: SourcePage): string {
-  return sha256(`${page.title}\0${page.rawContent}\0${page.version ?? ''}`);
+  const availability = page.contentAvailability
+    ? `${page.contentAvailability.status}:${page.contentAvailability.sourceType}:${page.contentAvailability.reason}`
+    : 'available';
+  return sha256(`${page.title}\0${page.rawContent}\0${page.version ?? ''}\0${availability}`);
 }
 
 function cachedPagePath(cacheDirectory: string, canonicalId: string): string {
@@ -748,18 +751,49 @@ export class Migrator {
     } catch (error) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
-      report.updatePage(root.canonicalId, {status: 'failed', inventoryStatus: 'failed', error: message});
-      report.issue({
-        code: 'source-discovery-failed',
-        severity: 'error',
-        phase: 'discovery',
-        pageId: root.canonicalId,
-        retryable: true,
-        message,
-      });
+      if (error instanceof IncompleteSourceDiscoveryError) {
+        report.registerPages(error.pages);
+        report.setSelection(error.selection);
+        await store.setRunSelection(run.id, error.selection);
+        const failures = new Map(error.failures.map((failure) => [failure.page.canonicalId, failure]));
+        for (const page of error.pages) {
+          const failure = failures.get(page.canonicalId);
+          report.updatePage(page.canonicalId, {
+            status: failure ? 'failed' : 'not-started',
+            inventoryStatus: failure ? 'failed' : 'pending',
+            ...(failure ? {error: failure.message} : {}),
+            comments: {
+              status: commentsEnabled ? 'not-started' : 'skipped',
+              threads: 0,
+              comments: 0,
+              participants: 0,
+              attachments: 0,
+              bytes: 0,
+            },
+          });
+          if (failure) report.issue({
+            code: failure.code,
+            severity: 'error',
+            phase: 'discovery',
+            pageId: page.canonicalId,
+            retryable: failure.retryable,
+            message: `${page.title}: ${failure.message}`,
+          });
+        }
+      } else {
+        report.updatePage(root.canonicalId, {status: 'failed', inventoryStatus: 'failed', error: message});
+        report.issue({
+          code: 'source-discovery-failed',
+          severity: 'error',
+          phase: 'discovery',
+          pageId: root.canonicalId,
+          retryable: error instanceof HttpRequestError && (error.status === 429 || (error.status ?? 0) >= 500),
+          message,
+        });
+      }
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, 0));
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, report.data.summary.pages));
       throw new MigrationRunError(message, reportPaths, stateLocation.filename, {cause: error});
     }
 

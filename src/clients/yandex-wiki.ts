@@ -42,7 +42,7 @@ const pageSchema = z.object({
   slug: z.string().min(1),
   title: z.string(),
   page_type: z.enum(['page', 'grid', 'wysiwyg', 'template']),
-  content: z.string().optional(),
+  content: z.string().nullable().optional(),
   breadcrumbs: z.array(breadcrumbSchema).optional(),
   redirect: z.object({
     page_id: z.number().int(),

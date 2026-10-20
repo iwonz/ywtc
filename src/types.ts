@@ -14,7 +14,7 @@ export interface YandexPageDetails {
   slug: string;
   title: string;
   page_type: YandexPageType;
-  content?: string;
+  content?: string | null;
   breadcrumbs?: YandexBreadcrumb[];
   redirect?: {
     page_id: number;

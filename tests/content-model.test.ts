@@ -113,6 +113,42 @@ describe('normalized content pipeline', () => {
     expect((await renderConfluenceStorage(document, page, context, 'DOC')).body).toContain('<table>');
   });
 
+  it('recovers provider-null Grid pages from Grid data without degrading them', async () => {
+    const page: SourcePage = {
+      ...source(''),
+      contentAvailability: {status: 'provider-unavailable', sourceType: 'grid', reason: 'provider-null-body'},
+    };
+    const grid: SourceResource = {
+      provider: 'yandex-wiki', id: 'grid-1', pageId: page.id, name: 'Results.grid.json', kind: 'grid',
+      metadata: {grid: {title: 'Results', structure: {columns: [{title: 'Name'}]}, rows: [{row: ['Value']}]}},
+    };
+    const document = appendGridSnapshots(normalizePageContent(page), [grid]);
+    expect(document.degraded).toBe(false);
+    expect(document.semanticallyEmpty).toBe(false);
+    expect(document.warnings).toEqual([]);
+    expect(document.adaptations).toContainEqual(expect.stringContaining('Dynamic table'));
+  });
+
+  it('keeps a provider-null Grid page visible and partial when no Grid payload is exposed', async () => {
+    const page: SourcePage = {
+      ...source(''),
+      contentAvailability: {status: 'provider-unavailable', sourceType: 'grid', reason: 'provider-null-body'},
+    };
+    const document = appendGridSnapshots(normalizePageContent(page), []);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    expect(document.degraded).toBe(true);
+    expect(document.semanticallyEmpty).toBe(false);
+    expect(document.warnings).toContainEqual(expect.stringContaining('unavailable through the provider API'));
+    expect((await renderYfm(document, context)).body).toContain(page.url);
+    expect((await renderConfluenceStorage(document, page, context, 'DOC')).body).toContain(page.url);
+
+    const emptyPage = appendGridSnapshots(normalizePageContent(source('')), []);
+    expect(emptyPage.semanticallyEmpty).toBe(true);
+    expect(emptyPage.degraded).toBe(false);
+  });
+
   it('keeps unavailable resources as explicit source fallbacks and uses native uploaded attachments', async () => {
     const page = source('![Diagram](diagram.png)\n\n[Download](manual.pdf)');
     const resources: SourceResource[] = [
