@@ -2,6 +2,19 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.1.4](https://github.com/iwonz/ywtc/compare/v4.1.3...v4.1.4) (2026-10-20)
+
+
+### Bug Fixes
+
+* **migration:** handle unavailable Yandex grid content ([6963068](https://github.com/iwonz/ywtc/commit/6963068e01402e2da06c9b2769177682e8e926e2))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.1.3 ([e416bc2](https://github.com/iwonz/ywtc/commit/e416bc2b40a696194c64ef695861dbcc000cc43f))
+* **release:** retry validation after commitlint failure ([abbaca6](https://github.com/iwonz/ywtc/commit/abbaca668e3585db6cb2eb3c180f8042ee19789a))
+
 ## [4.1.3](https://github.com/iwonz/ywtc/compare/v4.1.2...v4.1.3) (2026-10-19)
 
 
