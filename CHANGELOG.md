@@ -2,6 +2,19 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.1.6](https://github.com/iwonz/ywtc/compare/v4.1.5...v4.1.6) (2026-10-21)
+
+
+### Bug Fixes
+
+* **migration:** resume large source inventories ([c1aa449](https://github.com/iwonz/ywtc/commit/c1aa449bb5e4d85d7a5378cf1100197a66b369d3))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.1.5 ([c5c4f59](https://github.com/iwonz/ywtc/commit/c5c4f599dd352480d9d3f74a47123230fa989b9b))
+* **release:** retry after commitlint failure ([0a13962](https://github.com/iwonz/ywtc/commit/0a1396204a5fb0d40c9cc30c27c6a2c32836b21a))
+
 ## [4.1.5](https://github.com/iwonz/ywtc/compare/v4.1.4...v4.1.5) (2026-10-21)
 
 
