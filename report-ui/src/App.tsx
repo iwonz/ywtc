@@ -195,6 +195,12 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
   const summary = report.summary;
   const sourceBytes = summary.sourceBytes + summary.commentBytes;
   const sections = visibleSummarySections(summary);
+  const inventoryTelemetry = countText([
+    [summary.inventoryReusedPages ?? 0, t('reused')],
+    [summary.inventoryFreshPages ?? 0, t('fresh')],
+    [summary.inventoryRecoveryAttempts ?? 0, t('recoveryAttempts')],
+    [summary.inventoryRemainingFailures ?? 0, t('remainingFailures')],
+  ]);
   const rows: Array<{
     id: string;
     icon: ReactNode;
@@ -278,7 +284,11 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
       {!summary.inventoryComplete && (
         <Alert color="yellow" icon={<AlertTriangle size={16} />} title={t('inventoryIncomplete')}>
           {summary.inventoriedPages}/{summary.pages} {t('pages').toLocaleLowerCase()}
+          {inventoryTelemetry ? ` · ${inventoryTelemetry}` : ''}
         </Alert>
+      )}
+      {summary.inventoryComplete && inventoryTelemetry && (
+        <Text size="sm" c="dimmed">{t('inventory')} · {inventoryTelemetry}</Text>
       )}
     </Stack>
   );

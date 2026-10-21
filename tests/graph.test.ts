@@ -28,6 +28,25 @@ describe('page graph discovery', () => {
     expect(graph.pages.find((item) => item.id === 'c')?.projectedParentId).toBe('wiki:b');
   });
 
+  it('reuses linked pages when a reference already exposes immutable identity', async () => {
+    const root = page('root', []);
+    root.references = [{raw: '/child', href: '/child', pageId: 'child', kind: 'page'}];
+    const child = page('child', []);
+    let resolutions = 0;
+    const adapter = {
+      resolveReference: async () => { resolutions += 1; return child; },
+      getDescendants: async () => [],
+    } as unknown as SourceAdapter;
+    const graph = await discoverPageGraph({
+      adapter,
+      root,
+      scope: 'linked',
+      checkpoint: {loadPage: async (id) => id === 'child' ? child : undefined, savePage: async () => undefined},
+    });
+    expect(resolutions).toBe(0);
+    expect(graph.pages.map((item) => item.id)).toEqual(['root', 'child']);
+  });
+
   it('keeps page and subtree selection distinct', async () => {
     const root = page('root', ['/linked']);
     const child = {...page('child', [], 'root'), locator: 'root/child', ancestorIds: ['root']};

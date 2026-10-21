@@ -98,6 +98,11 @@ function emptySummary(): TransferReportSummary {
     inventoryComplete: false,
     inventoriedPages: 0,
     inventoryFailedPages: 0,
+    inventoryReusedPages: 0,
+    inventoryFreshPages: 0,
+    inventoryPendingPages: 0,
+    inventoryRecoveryAttempts: 0,
+    inventoryRemainingFailures: 0,
     commentThreads: 0,
     comments: 0,
     commentParticipants: 0,
@@ -384,6 +389,20 @@ export class TransferReport {
     this.data.destination.url = url;
   }
 
+  setInventoryTelemetry(input: {
+    reusedPages: number;
+    freshPages: number;
+    pendingPages: number;
+    recoveryAttempts: number;
+    remainingFailures: number;
+  }): void {
+    this.data.summary.inventoryReusedPages = input.reusedPages;
+    this.data.summary.inventoryFreshPages = input.freshPages;
+    this.data.summary.inventoryPendingPages = input.pendingPages;
+    this.data.summary.inventoryRecoveryAttempts = input.recoveryAttempts;
+    this.data.summary.inventoryRemainingFailures = input.remainingFailures;
+  }
+
   addHierarchyRepair(repair: TransferReportData['hierarchyRepairs'][number]): void {
     this.data.hierarchyRepairs.push(repair);
   }
@@ -528,6 +547,11 @@ export class TransferReport {
       inventoryComplete: this.data.pages.length > 0 && inventoriedPages === this.data.pages.length,
       inventoriedPages,
       inventoryFailedPages,
+      inventoryReusedPages: this.data.summary.inventoryReusedPages ?? 0,
+      inventoryFreshPages: this.data.summary.inventoryFreshPages ?? 0,
+      inventoryPendingPages: this.data.summary.inventoryPendingPages ?? 0,
+      inventoryRecoveryAttempts: this.data.summary.inventoryRecoveryAttempts ?? 0,
+      inventoryRemainingFailures: this.data.summary.inventoryRemainingFailures ?? 0,
       commentThreads: this.data.pages.reduce((total, page) => total + page.comments.threads, 0),
       comments: this.data.pages.reduce((total, page) => total + page.comments.comments, 0),
       commentParticipants: this.data.pages.reduce((total, page) => total + page.comments.participants, 0),

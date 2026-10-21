@@ -186,6 +186,11 @@ export interface TransferReportSummary {
   inventoryComplete: boolean;
   inventoriedPages: number;
   inventoryFailedPages: number;
+  inventoryReusedPages?: number;
+  inventoryFreshPages?: number;
+  inventoryPendingPages?: number;
+  inventoryRecoveryAttempts?: number;
+  inventoryRemainingFailures?: number;
   commentThreads: number;
   comments: number;
   commentParticipants: number;

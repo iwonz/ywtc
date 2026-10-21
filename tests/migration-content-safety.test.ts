@@ -72,6 +72,8 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let sourceResolutions = 0;
   let destinationResolutions = 0;
   let destinationPreflightError: Error | undefined;
+  const resourceReads = new Map<string, number>();
+  const resourceFailures = new Map<string, number>();
   let version = 0;
   const verificationReads = new Map<string, number>();
   let current: DestinationPage | undefined;
@@ -93,7 +95,15 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     getPage: async (id: string) => id === fixtureRoot.id ? fixtureRoot : descendants.find((page) => page.id === id) ?? fixtureRoot,
     getDescendants: async () => descendants,
     resolveReference: async () => undefined,
-    listResources: async (page: SourcePage) => page.id === fixtureRoot.id && includeRootResource ? [resource] : [],
+    listResources: async (page: SourcePage) => {
+      resourceReads.set(page.id, (resourceReads.get(page.id) ?? 0) + 1);
+      const remaining = resourceFailures.get(page.id) ?? 0;
+      if (remaining > 0) {
+        resourceFailures.set(page.id, remaining - 1);
+        throw new HttpRequestError('provider gateway timed out after bounded retries', 504, 'GET', `/pages/${page.id}/attachments`, undefined, 4);
+      }
+      return page.id === fixtureRoot.id && includeRootResource ? [resource] : [];
+    },
     readComments: async () => ({
       status: 'empty' as const, threads: [], comments: 0, participants: 0, attachments: 0,
       knownBytes: 0, unknownSizes: 0, warnings: [],
@@ -216,6 +226,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setStripLinksOnRead: (value: boolean) => { stripLinksOnRead = value; },
     setStripLinksOnNextUpdatedRead: () => { stripLinksOnNextUpdatedRead = true; },
     setDestinationPreflightError: (error: Error) => { destinationPreflightError = error; },
+    setResourceFailures: (pageId: string, count: number) => { resourceFailures.set(pageId, count); },
     setLegacyPlaceholder: () => {
       current = page(current!.title, legacyTransferPlaceholder('confluence', fixtureRoot), current!.id);
       pages.set(current.id, current);
@@ -228,6 +239,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setAllCurrentMissing: () => { for (const id of pages.keys()) missingIds.add(id); },
     snapshot: () => ({
       created, updated, reparented, downloads, sourceResolutions, destinationResolutions, current, pages: [...pages.values()],
+      resourceReads: Object.fromEntries(resourceReads),
       uploaded: [...uploaded.values()].reduce((total, items) => total + items.size, 0),
     }),
   };
@@ -846,7 +858,73 @@ describe('source-derived remote page safety', () => {
       pageStatuses: {failed: 1},
     });
     expect(report.pages[0]).toMatchObject({sourceTitle: 'Root', status: 'failed', inventoryStatus: 'failed'});
-    expect(report.issues[0]).toMatchObject({code: 'source-inventory-failed', pageTitle: 'Root', retryable: true});
+    expect(report.issues[0]).toMatchObject({code: 'source-inventory-resources-list', pageTitle: 'Root', retryable: false});
     expect(adapters.snapshot()).toMatchObject({created: 0, updated: 0, uploaded: 0});
+  });
+
+  it('recovers a late transient source inventory failure without rereading successful pages', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture([child], root, false);
+    adapters.setResourceFailures(child.id, 1);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const result = await new Migrator(config, logger, factory, {}, {
+      delaysMs: [0, 0, 0],
+      sleep: async () => undefined,
+    }).run({...options, scope: 'subtree'});
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      summary: {inventoryFreshPages: 2, inventoryReusedPages: 0, inventoryRecoveryAttempts: 1, inventoryRemainingFailures: 0},
+    });
+    expect(adapters.snapshot()).toMatchObject({created: 2, resourceReads: {'1': 1, '2': 2}});
+  });
+
+  it('resumes an exhausted source inventory from retained page checkpoints', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture([child], root, false);
+    adapters.setResourceFailures(child.id, 4);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory, {}, {
+      delaysMs: [0, 0, 0],
+      sleep: async () => undefined,
+    });
+
+    let first: MigrationRunError | undefined;
+    try {
+      await migrator.run({...options, scope: 'subtree'});
+    } catch (error) {
+      if (error instanceof MigrationRunError) first = error;
+      else throw error;
+    }
+    expect(first?.message).toMatch(/1\/2 pages checkpointed.*destination mutations: 0.*resume the retained checkpoints/);
+    expect(adapters.snapshot()).toMatchObject({created: 0, resourceReads: {'1': 1, '2': 4}});
+    const firstReport = JSON.parse(await readFile(first!.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(firstReport.summary).toMatchObject({inventoryFreshPages: 1, inventoryReusedPages: 0, inventoryRecoveryAttempts: 3, inventoryRemainingFailures: 1});
+
+    const resumed = await migrator.run({...options, scope: 'subtree'});
+    expect(resumed).toMatchObject({
+      status: 'completed',
+      summary: {inventoryFreshPages: 1, inventoryReusedPages: 1, inventoryRemainingFailures: 0},
+    });
+    expect(adapters.snapshot()).toMatchObject({created: 2, resourceReads: {'1': 1, '2': 5}});
+  });
+
+  it('reuses a completed dry-run inventory for the confirmed live run', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture([], root, false);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+
+    const dryRun = await migrator.run({...options, dryRun: true});
+    expect(dryRun).toMatchObject({status: 'completed', summary: {inventoryFreshPages: 1, inventoryReusedPages: 0}});
+    expect(adapters.snapshot()).toMatchObject({created: 0, resourceReads: {'1': 1}});
+
+    const live = await migrator.run(options);
+    expect(live).toMatchObject({status: 'completed', summary: {inventoryFreshPages: 0, inventoryReusedPages: 1}});
+    expect(adapters.snapshot()).toMatchObject({created: 1, resourceReads: {'1': 1}});
+
+    const refreshed = await migrator.run({...options, dryRun: true});
+    expect(refreshed).toMatchObject({status: 'completed', summary: {inventoryFreshPages: 1, inventoryReusedPages: 0}});
+    expect(adapters.snapshot()).toMatchObject({created: 1, resourceReads: {'1': 2}});
   });
 });

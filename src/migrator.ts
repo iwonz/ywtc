@@ -61,6 +61,12 @@ import {
   type TransferReportSummary,
 } from './report.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
+import {
+  SourceInventoryOperationError,
+  SourceInventoryStore,
+  sourceInventoryIssueCode,
+  sourceInventoryOperationError,
+} from './source-inventory.js';
 import {destinationTitleCandidates} from './title-allocation.js';
 import {
   resolveStateLocation,
@@ -103,6 +109,52 @@ export interface TransferResult {
   output?: string;
   archive?: string;
   summary: TransferReportSummary;
+}
+
+export interface InventoryRecoveryOptions {
+  delaysMs?: readonly number[];
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+}
+
+const DEFAULT_INVENTORY_RECOVERY_DELAYS_MS = [5_000, 15_000, 30_000] as const;
+
+async function inventoryRecoveryDelay(
+  milliseconds: number,
+  signal: AbortSignal | undefined,
+  sleep: InventoryRecoveryOptions['sleep'],
+): Promise<void> {
+  if (signal?.aborted) throw signal.reason ?? new Error('Transfer cancelled');
+  if (sleep) {
+    await sleep(milliseconds, signal);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(resolve, milliseconds);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timeout);
+      reject(signal.reason ?? new Error('Transfer cancelled'));
+    }, {once: true});
+  });
+}
+
+function inventoryFailureMessage(page: SourcePage, error: SourceInventoryOperationError): string {
+  const details = [
+    error.operation,
+    error.details.status !== undefined ? `HTTP ${error.details.status}` : undefined,
+    error.details.code,
+    error.details.attempts ? `${error.details.attempts} request attempt(s)` : undefined,
+    error.details.endpoint,
+  ].filter(Boolean).join(' · ');
+  return `${page.title}: ${details}: ${error.message}`;
+}
+
+interface PageInventoryResult {
+  page: SourcePage & {depth: number; projectedParentId?: string};
+  sourcePage: SourcePage;
+  resources: SourceResource[];
+  document: NormalizedDocument;
+  comments?: CommentInventory;
+  reused: boolean;
 }
 
 function sourceIdentity(locator: RemoteLocator, root: SourcePage): EndpointIdentity {
@@ -662,6 +714,7 @@ export class Migrator {
     private readonly logger: Logger,
     private readonly adapterFactory: typeof createProviderAdapter = createProviderAdapter,
     private readonly consistencyOptions: ConsistencyRetryOptions = {},
+    private readonly inventoryRecoveryOptions: InventoryRecoveryOptions = {},
   ) {}
 
   async run(options: TransferOptions): Promise<TransferResult> {
@@ -719,20 +772,53 @@ export class Migrator {
         ...(store.loadInfo.backupFilename ? {backupPath: store.loadInfo.backupFilename} : {}),
       },
     });
+    const sourceInventoryStore = await SourceInventoryStore.open({
+      cacheDirectory: options.cacheDirectory,
+      stateId: stateLocation.id,
+      runId: run.id,
+      sourceCanonicalId: root.canonicalId,
+      sourceProfile: source.profile.name,
+      sourceProvider: source.kind,
+      scope: options.scope,
+      sourceStatus,
+      commentsEnabled,
+      fresh: options.fresh ?? false,
+    });
+    await sourceInventoryStore.savePage(root);
     report.registerPages([{...root, depth: 0}]);
 
     let graph: PageGraph;
     let sourceFingerprints: Map<string, string>;
+    let inventoryRecoveryAttempts = 0;
+    const inventoryRecoveryDelays = this.inventoryRecoveryOptions.delaysMs ?? DEFAULT_INVENTORY_RECOVERY_DELAYS_MS;
     try {
       status(`Discovering ${options.scope} scope from ${root.title}`);
-      graph = await discoverPageGraph({
-        adapter: source,
-        root,
-        scope: options.scope,
-        sourceStatus,
-        ...(options.signal ? {signal: options.signal} : {}),
-        onProgress: (progress) => status(`Discovery: ${progress.pages} pages, ${progress.edges} links${progress.active ? ` · ${progress.active}` : ''}`),
-      });
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          graph = await discoverPageGraph({
+            adapter: source,
+            root,
+            scope: options.scope,
+            sourceStatus,
+            ...(options.signal ? {signal: options.signal} : {}),
+            checkpoint: sourceInventoryStore,
+            onProgress: (progress) => status(`Discovery: ${progress.pages} pages, ${progress.edges} links${progress.active ? ` · ${progress.active}` : ''}`),
+          });
+          break;
+        } catch (error) {
+          const retryable = error instanceof IncompleteSourceDiscoveryError
+            ? error.failures.some((failure) => failure.retryable)
+            : error instanceof SourceInventoryOperationError
+              ? error.retryable
+              : error instanceof HttpRequestError
+                && (error.status === 429 || (error.status ?? 0) >= 500 || error.status === undefined);
+          const delay = inventoryRecoveryDelays[attempt];
+          if (!retryable || delay === undefined || options.signal?.aborted) throw error;
+          inventoryRecoveryAttempts += 1;
+          status(`Discovery recovery ${attempt + 1}/${inventoryRecoveryDelays.length} · retrying failed page details after ${delay} ms; completed details remain checkpointed`);
+          await inventoryRecoveryDelay(delay, options.signal, this.inventoryRecoveryOptions.sleep);
+        }
+      }
       report.registerPages(graph.pages);
       report.setEdges(graph.edges);
       report.setSelection(graph.selection);
@@ -754,6 +840,13 @@ export class Migrator {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof IncompleteSourceDiscoveryError) {
+        report.setInventoryTelemetry({
+          reusedPages: 0,
+          freshPages: 0,
+          pendingPages: Math.max(0, error.pages.length - error.failures.length),
+          recoveryAttempts: inventoryRecoveryAttempts,
+          remainingFailures: error.failures.length,
+        });
         report.registerPages(error.pages);
         report.setSelection(error.selection);
         await store.setRunSelection(run.id, error.selection);
@@ -783,6 +876,10 @@ export class Migrator {
           });
         }
       } else {
+        report.setInventoryTelemetry({
+          reusedPages: 0, freshPages: 0, pendingPages: 0,
+          recoveryAttempts: inventoryRecoveryAttempts, remainingFailures: 1,
+        });
         report.updatePage(root.canonicalId, {status: 'failed', inventoryStatus: 'failed', error: message});
         report.issue({
           code: 'source-discovery-failed',
@@ -801,88 +898,204 @@ export class Migrator {
 
     const resourcesByPage = new Map<string, SourceResource[]>();
     const commentsByPage = new Map<string, CommentInventory>();
-    const inventoryQueue = new PQueue({concurrency: options.concurrency});
+    const inventoryResults = new Map<string, PageInventoryResult>();
+    const inventoryFailures = new Map<string, SourceInventoryOperationError>();
+    const commentFailures = new Map<string, SourceInventoryOperationError>();
+    let reusedInventoryCount = 0;
+    let freshInventoryCount = 0;
     const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
     status(`Inspecting content and resources for ${graph.pages.length} pages`);
-    const inventoryErrors: string[] = [];
-    await Promise.all(graph.pages.map((page) => inventoryQueue.add(async () => {
+
+    const readComments = async (page: PageInventoryResult): Promise<CommentInventory> => {
+      if (!commentsEnabled) {
+        return {status: 'skipped', threads: [], comments: 0, participants: 0, attachments: 0, knownBytes: 0, unknownSizes: 0, warnings: []};
+      }
+      try {
+        if (!source.readComments) throw new Error(`${source.profile.name} does not implement comment reads`);
+        const comments = await source.readComments(page.sourcePage);
+        resolveCommentAttachmentReferences(comments, page.resources);
+        commentFailures.delete(page.page.canonicalId);
+        return comments;
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason ?? error;
+        const typed = sourceInventoryOperationError('comments-read', error);
+        commentFailures.set(page.page.canonicalId, typed);
+        const message = inventoryFailureMessage(page.sourcePage, typed);
+        return {status: 'failed', threads: [], comments: 0, participants: 0, attachments: 0, knownBytes: 0, unknownSizes: 0, warnings: [], error: message};
+      }
+    };
+
+    const inspectPage = async (page: PageInventoryResult['page']): Promise<void> => {
       try {
         if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
-        const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
-        const resources = await source.listResources(page);
-        resourcesByPage.set(page.canonicalId, resources);
-        let commentInventory: CommentInventory | undefined;
-        if (commentsEnabled) {
+        const sourcePage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
+        const checkpoint = await sourceInventoryStore.loadComplete(sourcePage);
+        let result: PageInventoryResult;
+        if (checkpoint) {
+          result = {
+            page,
+            sourcePage: checkpoint.page,
+            resources: checkpoint.resources!,
+            document: checkpoint.document!,
+            ...(checkpoint.comments ? {comments: checkpoint.comments} : {}),
+            reused: true,
+          };
+          await cacheDocument(options.cacheDirectory, page.canonicalId, result.document);
+        } else {
+          let resources: SourceResource[];
           try {
-            if (!source.readComments) throw new Error(`${source.profile.name} does not implement comment reads`);
-            commentInventory = await source.readComments(cachedPage);
-            resolveCommentAttachmentReferences(commentInventory, resources);
-            commentsByPage.set(page.canonicalId, commentInventory);
-            inventory.commentThreads += commentInventory.threads.length;
-            inventory.comments += commentInventory.comments;
-            inventory.commentParticipants += commentInventory.participants;
-            inventory.commentAttachments += commentInventory.attachments;
-            inventory.commentBytes += commentInventory.knownBytes;
-            for (const warning of commentInventory.warnings) report.issue({
-              code: `comment-inventory-warning:${warning}`,
-              severity: 'warning',
-              phase: 'inventory',
-              pageId: page.canonicalId,
-              retryable: false,
-              message: `${page.title}: ${warning}`,
-            });
+            resources = await source.listResources(sourcePage);
           } catch (error) {
-            const message = `${page.title}: comments could not be read: ${error instanceof Error ? error.message : String(error)}`;
-            commentInventory = {status: 'failed', threads: [], comments: 0, participants: 0, attachments: 0, knownBytes: 0, unknownSizes: 0, warnings: [], error: message};
-            commentsByPage.set(page.canonicalId, commentInventory);
-            report.issue({code: 'comment-inventory-failed', severity: 'error', phase: 'inventory', pageId: page.canonicalId, retryable: true, message});
+            throw sourceInventoryOperationError('resources-list', error);
           }
+          let document: NormalizedDocument;
+          try {
+            document = appendGridSnapshots(normalizePageContent(sourcePage), resources);
+          } catch (error) {
+            throw sourceInventoryOperationError('normalization', error);
+          }
+          await cacheDocument(options.cacheDirectory, page.canonicalId, document);
+          result = {page, sourcePage, resources, document, reused: false};
         }
-        const document = appendGridSnapshots(normalizePageContent(cachedPage), resources);
-        await cacheDocument(
-          options.cacheDirectory,
-          page.canonicalId,
-          document,
-        );
-        inventory.resources += resources.filter((resource) => resource.kind !== 'grid').length;
-        inventory.bytes += resources.reduce((total, resource) => total + (resource.size ?? 0), 0);
-        inventory.unknownSizes += resources.filter((resource) => resource.kind !== 'grid' && resource.size === undefined).length;
-        inventory.grids += resources.filter((resource) => resource.kind === 'grid').length;
-        inventory.links += document.metrics.links;
-        inventory.images += document.metrics.images;
-        inventory.tables += document.metrics.tables;
-        inventory.codeBlocks += document.metrics.codeBlocks;
-        report.addPage(reportPage({
-          page,
-          status: 'planned',
-          resources,
-          document,
-          commentsEnabled,
-          ...(commentInventory ? {commentInventory} : {}),
-        }), undefined, false);
-        status(`Inspected ${page.title} · ${resources.length} resources`);
+
+        if (commentsEnabled && (!result.comments || result.comments.status === 'failed')) {
+          result.comments = await readComments(result);
+        }
+        try {
+          await sourceInventoryStore.saveComplete({
+            page: result.sourcePage,
+            resources: result.resources,
+            document: result.document,
+            ...(result.comments ? {comments: result.comments} : {}),
+          });
+        } catch (error) {
+          throw sourceInventoryOperationError('checkpoint-write', error);
+        }
+        inventoryResults.set(page.canonicalId, result);
+        if (result.reused) reusedInventoryCount += 1;
+        else freshInventoryCount += 1;
+        inventoryFailures.delete(page.canonicalId);
+        status(`Inventory ${inventoryResults.size}/${graph.pages.length} · ${reusedInventoryCount} reused · ${freshInventoryCount} fresh · ${Math.max(0, graph.pages.length - inventoryResults.size - inventoryFailures.size)} pending · ${page.title}`);
       } catch (error) {
-        const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
-        inventoryErrors.push(message);
-        report.updatePage(page.canonicalId, {status: 'failed', inventoryStatus: 'failed', error: message});
-        report.issue({
-          code: 'source-inventory-failed',
-          severity: 'error',
-          phase: 'inventory',
-          pageId: page.canonicalId,
-          retryable: true,
-          message,
+        inventoryFailures.set(page.canonicalId, error instanceof SourceInventoryOperationError
+          ? error
+          : sourceInventoryOperationError('resources-list', error));
+      }
+    };
+
+    const retryComments = async (result: PageInventoryResult): Promise<void> => {
+      result.comments = await readComments(result);
+      try {
+        await sourceInventoryStore.saveComplete({
+          page: result.sourcePage,
+          resources: result.resources,
+          document: result.document,
+          ...(result.comments ? {comments: result.comments} : {}),
+        });
+      } catch (error) {
+        const typed = sourceInventoryOperationError('checkpoint-write', error);
+        inventoryFailures.set(result.page.canonicalId, typed);
+      }
+    };
+
+    const runInventoryWave = async (pages: PageInventoryResult['page'][], concurrency: number): Promise<void> => {
+      const queue = new PQueue({concurrency: Math.max(1, concurrency)});
+      await Promise.all(pages.map((page) => queue.add(() => inspectPage(page))));
+    };
+
+    await runInventoryWave(graph.pages, options.concurrency);
+    for (const [round, delay] of inventoryRecoveryDelays.entries()) {
+      const required = graph.pages.filter((page) => inventoryFailures.get(page.canonicalId)?.retryable);
+      const hasNonRetryableRequiredFailure = [...inventoryFailures.values()].some((error) => !error.retryable);
+      const comments = hasNonRetryableRequiredFailure
+        ? []
+        : graph.pages.filter((page) => !inventoryFailures.has(page.canonicalId) && commentFailures.get(page.canonicalId)?.retryable);
+      if (required.length === 0 && comments.length === 0) break;
+      inventoryRecoveryAttempts += 1;
+      const recoveryConcurrency = Math.max(1, Math.floor(options.concurrency / (round + 2)));
+      status(`Inventory recovery ${round + 1}/${inventoryRecoveryDelays.length} · ${required.length} required page(s) · ${comments.length} comment archive(s) · concurrency ${recoveryConcurrency} · retrying after ${delay} ms`);
+      await inventoryRecoveryDelay(delay, options.signal, this.inventoryRecoveryOptions.sleep);
+      await runInventoryWave(required, recoveryConcurrency);
+      const commentQueue = new PQueue({concurrency: recoveryConcurrency});
+      await Promise.all(comments.map((page) => commentQueue.add(async () => {
+        const result = inventoryResults.get(page.canonicalId);
+        if (result) await retryComments(result);
+      })));
+    }
+
+    for (const page of graph.pages) {
+      const result = inventoryResults.get(page.canonicalId);
+      if (!result) continue;
+      const {resources, document, comments: commentInventory} = result;
+      resourcesByPage.set(page.canonicalId, resources);
+      if (commentInventory) commentsByPage.set(page.canonicalId, commentInventory);
+      inventory.resources += resources.filter((resource) => resource.kind !== 'grid').length;
+      inventory.bytes += resources.reduce((total, resource) => total + (resource.size ?? 0), 0);
+      inventory.unknownSizes += resources.filter((resource) => resource.kind !== 'grid' && resource.size === undefined).length;
+      inventory.grids += resources.filter((resource) => resource.kind === 'grid').length;
+      inventory.links += document.metrics.links;
+      inventory.images += document.metrics.images;
+      inventory.tables += document.metrics.tables;
+      inventory.codeBlocks += document.metrics.codeBlocks;
+      if (commentInventory) {
+        inventory.commentThreads += commentInventory.threads.length;
+        inventory.comments += commentInventory.comments;
+        inventory.commentParticipants += commentInventory.participants;
+        inventory.commentAttachments += commentInventory.attachments;
+        inventory.commentBytes += commentInventory.knownBytes;
+        for (const warning of commentInventory.warnings) report.issue({
+          code: `comment-inventory-warning:${warning}`,
+          severity: 'warning', phase: 'inventory', pageId: page.canonicalId, retryable: false,
+          message: `${page.title}: ${warning}`,
         });
       }
-    })));
+      report.addPage(reportPage({
+        page,
+        status: 'planned',
+        resources,
+        document,
+        commentsEnabled,
+        ...(commentInventory ? {commentInventory} : {}),
+      }), undefined, false);
+    }
+
+    for (const page of graph.pages) {
+      const error = inventoryFailures.get(page.canonicalId);
+      if (!error) continue;
+      const message = inventoryFailureMessage(page, error);
+      report.updatePage(page.canonicalId, {status: 'failed', inventoryStatus: 'failed', error: message});
+      report.issue({
+        code: sourceInventoryIssueCode(error), severity: 'error', phase: 'inventory', pageId: page.canonicalId,
+        retryable: error.retryable, message,
+      });
+    }
+    for (const page of graph.pages) {
+      const error = commentFailures.get(page.canonicalId);
+      if (!error || inventoryFailures.has(page.canonicalId)) continue;
+      report.issue({
+        code: sourceInventoryIssueCode(error), severity: 'error', phase: 'inventory', pageId: page.canonicalId,
+        retryable: error.retryable, message: inventoryFailureMessage(page, error),
+      });
+    }
+    report.setInventoryTelemetry({
+      reusedPages: reusedInventoryCount,
+      freshPages: freshInventoryCount,
+      pendingPages: Math.max(0, graph.pages.length - inventoryResults.size - inventoryFailures.size),
+      recoveryAttempts: inventoryRecoveryAttempts,
+      remainingFailures: inventoryFailures.size + commentFailures.size,
+    });
     await store.setRunComments(run.id, {threads: inventory.commentThreads, comments: inventory.comments, attachments: inventory.commentAttachments});
-    if (inventoryErrors.length > 0) {
+    if (inventoryFailures.size > 0) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, graph.pages.length));
-      throw new MigrationRunError('Resource preflight failed before destination mutation', reportPaths, stateLocation.filename);
+      const first = graph.pages.map((page) => ({page, error: inventoryFailures.get(page.canonicalId)})).find((item) => item.error);
+      const retained = inventoryResults.size;
+      const message = `Source inventory incomplete: ${retained}/${graph.pages.length} pages checkpointed; ${inventoryFailures.size} required failure(s) remain after ${inventoryRecoveryAttempts} recovery attempt(s); destination mutations: 0.${first?.error ? ` First failure: ${inventoryFailureMessage(first.page, first.error)}.` : ''} Repeat the same migration to resume the retained checkpoints.`;
+      throw new MigrationRunError(message, reportPaths, stateLocation.filename);
     }
+    await sourceInventoryStore.markReady();
     if (!options.dryRun) {
       for (const page of graph.pages) {
         if (store.value.pages[page.canonicalId]) continue;
@@ -969,6 +1182,9 @@ export class Migrator {
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, graph.pages.length));
+      if (!options.dryRun && (finalStatus === 'completed' || finalStatus === 'completed-with-warnings')) {
+        await sourceInventoryStore.retire();
+      }
       status(`${finalStatus}: source ${report.data.summary.pages} pages · ${report.data.summary.complete} complete · ${report.data.summary.partial} partial · ${report.data.summary.failed + report.data.summary.blocked} failed/blocked · files ${report.data.summary.resourcesComplete}/${report.data.summary.resources} complete · ${report.data.summary.errors} errors · ${report.data.summary.warnings} warnings · ${report.data.summary.degradations} degradations`);
       return {
         status: finalStatus,

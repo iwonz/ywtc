@@ -9,6 +9,7 @@ export type RawContentFormat = 'yfm' | 'confluence-storage';
 export interface PageReference {
   raw: string;
   href?: string;
+  pageId?: string;
   pageTitle?: string;
   anchor?: string;
   kind: 'page' | 'attachment' | 'anchor' | 'external' | 'unsupported';
@@ -230,6 +231,11 @@ export interface DescendantDiscovery {
   notes: string[];
 }
 
+export interface SourcePageCheckpoint {
+  loadPage(id: string, locator?: string): Promise<SourcePage | undefined>;
+  savePage(page: SourcePage): Promise<void>;
+}
+
 export interface SourceAdapter {
   readonly profile: ConnectionProfile;
   readonly kind: ProviderKind;
@@ -238,7 +244,7 @@ export interface SourceAdapter {
   resolvePage(locator: string): Promise<SourcePage>;
   getPage(id: string): Promise<SourcePage>;
   supportsSourceStatus(scope: TransferScope, status: SourceStatus): boolean;
-  getDescendants(page: SourcePage, options: {status: SourceStatus}): Promise<DescendantDiscovery>;
+  getDescendants(page: SourcePage, options: {status: SourceStatus; checkpoint?: SourcePageCheckpoint}): Promise<DescendantDiscovery>;
   resolveReference(from: SourcePage, reference: PageReference): Promise<SourcePage | undefined>;
   listResources(page: SourcePage): Promise<SourceResource[]>;
   readComments?(page: SourcePage): Promise<CommentInventory>;

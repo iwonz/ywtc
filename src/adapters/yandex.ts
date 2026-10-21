@@ -22,6 +22,7 @@ import type {
 import {DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../domain.js';
 import {normalizeCommentForest} from '../comments.js';
 import {HttpRequestError} from '../http.js';
+import {SourceInventoryOperationError, sourceInventoryIssueCode, sourceInventoryOperationError} from '../source-inventory.js';
 import {normalizeWikiSlug, safeFilename} from '../input.js';
 import type {YandexWikiClient} from '../clients/yandex-wiki.js';
 import type {YandexAttachment, YandexPageDetails, YandexPageIdentity} from '../types.js';
@@ -90,6 +91,9 @@ function sourcePage(profile: YandexConnectionProfile, page: YandexPageDetails): 
 
 function sourceDetailFailure(error: unknown): {code: string; message: string; retryable: boolean} {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof SourceInventoryOperationError) {
+    return {code: sourceInventoryIssueCode(error), message, retryable: error.retryable};
+  }
   if (!(error instanceof HttpRequestError)) {
     return {
       code: /schema error|missing content/i.test(message) ? 'source-page-detail-invalid' : 'source-page-detail-provider-error',
@@ -317,7 +321,7 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     return status === 'all' || scope !== 'linked';
   }
 
-  async getDescendants(page: SourcePage, options: {status: SourceStatus}) {
+  async getDescendants(page: SourcePage, options: {status: SourceStatus; checkpoint?: import('../domain.js').SourcePageCheckpoint}) {
     const all = await this.client.getDescendants(Number(page.id));
     const current = options.status === 'current'
       ? await this.client.getDescendants(Number(page.id), {actuality: 'actual'})
@@ -332,9 +336,12 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     const excludedIdentities = options.status === 'current' ? all.filter((identity) => !currentIds.has(identity.id)) : [];
     const locatorDrifts: string[] = [];
     const results = await Promise.allSettled(selected.map(async (identity) => {
-      const detail = await this.client.getPageById(identity.id);
-      const normalized = sourcePage(this.profile, detail);
       const expectedLocator = normalizeWikiSlug(identity.slug);
+      const cached = await options.checkpoint?.loadPage(String(identity.id), expectedLocator);
+      const normalized = cached ?? sourcePage(this.profile, await this.client.getPageById(identity.id).catch((error: unknown) => {
+        throw sourceInventoryOperationError('page-detail', error, `/pages/${identity.id}`);
+      }));
+      if (!cached) await options.checkpoint?.savePage(normalized);
       if (normalized.locator !== expectedLocator) {
         locatorDrifts.push(`Yandex Wiki page ${identity.id} changed locator from ${expectedLocator} to ${normalized.locator} during discovery; immutable ID was retained.`);
       }
@@ -352,16 +359,22 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
       return [{identity, ...sourceDetailFailure(result.reason)}];
     });
     const excludedResults = await Promise.allSettled(excludedIdentities.map(async (identity) => {
-      const detail = await this.client.getPageById(identity.id);
-      const locator = normalizeWikiSlug(detail.slug);
-      const ancestors = ancestorIds(detail);
+      const expectedLocator = normalizeWikiSlug(identity.slug);
+      const cached = await options.checkpoint?.loadPage(String(identity.id), expectedLocator);
+      const detail = cached ? undefined : await this.client.getPageById(identity.id).catch((error: unknown) => {
+        throw sourceInventoryOperationError('page-detail', error, `/pages/${identity.id}`);
+      });
+      const hydrated = cached ?? sourcePage(this.profile, detail!);
+      if (!cached) await options.checkpoint?.savePage(hydrated);
+      const locator = hydrated.locator;
+      const ancestors = hydrated.ancestorIds ?? [];
       const rootIndex = ancestors.indexOf(page.id);
-      const immediateParentId = parentId(detail);
+      const immediateParentId = hydrated.parentId;
       return {
         id: String(identity.id),
         canonicalId: canonical(this.profile, identity.id),
         locator,
-        title: detail.title || locator.split('/').at(-1) || `Page ${identity.id}`,
+        title: hydrated.title || locator.split('/').at(-1) || `Page ${identity.id}`,
         url: pageUrl(this.profile, locator),
         ...(immediateParentId ? {parentId: immediateParentId} : {}),
         ...(ancestors.length > 0 ? {ancestorIds: ancestors} : {}),
@@ -453,8 +466,12 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
 
   async listResources(page: SourcePage): Promise<SourceResource[]> {
     const [attachments, grids] = await Promise.all([
-      this.client.getAttachments(Number(page.id)),
-      this.client.getPageGrids(Number(page.id)),
+      this.client.getAttachments(Number(page.id)).catch((error: unknown) => {
+        throw sourceInventoryOperationError('attachments-list', error, `/pages/${page.id}/attachments`);
+      }),
+      this.client.getPageGrids(Number(page.id)).catch((error: unknown) => {
+        throw sourceInventoryOperationError('grids-list', error, `/pages/${page.id}/grids`);
+      }),
     ]);
     const attachmentItems = attachments.filter((attachment) => attachment.is_downloadable).map((attachment) => attachmentResource(this.profile, page, attachment));
     const gridItems = await Promise.all(grids.map(async (summary): Promise<SourceResource> => ({
@@ -463,29 +480,35 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
       pageId: page.id,
       name: `${safeFilename(summary.title)}.grid.json`,
       kind: 'grid',
-      metadata: {grid: await this.client.getGrid(summary.id)},
+      metadata: {grid: await this.client.getGrid(summary.id).catch((error: unknown) => {
+        throw sourceInventoryOperationError('grid-read', error, `/grids/${encodeURIComponent(summary.id)}`);
+      })},
     })));
     return [...attachmentItems, ...gridItems];
   }
 
   async readComments(page: SourcePage): Promise<CommentInventory> {
-    const topLevel = await this.client.getPageComments(Number(page.id));
-    const all = new Map<string, import('../types.js').YandexComment>();
-    for (const root of topLevel) {
-      all.set(String(root.id), root);
-      const thread = await this.client.getCommentThread(Number(page.id), String(root.id));
-      for (const entry of thread) if (!all.has(String(entry.id))) all.set(String(entry.id), entry);
+    try {
+      const topLevel = await this.client.getPageComments(Number(page.id));
+      const all = new Map<string, import('../types.js').YandexComment>();
+      for (const root of topLevel) {
+        all.set(String(root.id), root);
+        const thread = await this.client.getCommentThread(Number(page.id), String(root.id));
+        for (const entry of thread) if (!all.has(String(entry.id))) all.set(String(entry.id), entry);
+      }
+      return normalizeCommentForest([...all.values()].map((entry) => ({
+        id: String(entry.id),
+        ...(entry.parent_id !== undefined && entry.parent_id !== null ? {parentId: String(entry.parent_id)} : {}),
+        ...(entry.thread_id !== undefined && entry.thread_id !== null ? {threadId: String(entry.thread_id)} : {}),
+        author: yandexAuthor(entry.author),
+        ...(entry.created_at ? {createdAt: entry.created_at} : {}),
+        body: entry.body ?? (entry.is_deleted ? '[Комментарий удалён]' : ''),
+        ...(entry.inline_text ? {inlineContext: entry.inline_text} : {}),
+        status: entry.is_deleted ? 'deleted' : /resolved/i.test(entry.resolve_status ?? '') ? 'resolved' : 'open',
+      })), 'yfm');
+    } catch (error) {
+      throw sourceInventoryOperationError('comments-read', error, `/pages/${page.id}/comments`);
     }
-    return normalizeCommentForest([...all.values()].map((entry) => ({
-      id: String(entry.id),
-      ...(entry.parent_id !== undefined && entry.parent_id !== null ? {parentId: String(entry.parent_id)} : {}),
-      ...(entry.thread_id !== undefined && entry.thread_id !== null ? {threadId: String(entry.thread_id)} : {}),
-      author: yandexAuthor(entry.author),
-      ...(entry.created_at ? {createdAt: entry.created_at} : {}),
-      body: entry.body ?? (entry.is_deleted ? '[Комментарий удалён]' : ''),
-      ...(entry.inline_text ? {inlineContext: entry.inline_text} : {}),
-      status: entry.is_deleted ? 'deleted' : /resolved/i.test(entry.resolve_status ?? '') ? 'resolved' : 'open',
-    })), 'yfm');
   }
 
   downloadResource(resource: SourceResource, destination: string) {

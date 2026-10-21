@@ -114,6 +114,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         console.log(`  ${report.runId}  ${report.finishedAt ?? report.startedAt}  ${report.status}`);
         console.log(`    ${report.direction} · ${report.scope} · source status ${report.sourceStatus} · ${report.selectedDescendants}/${report.returnedDescendants} descendants selected · ${report.excludedPages} excluded · depth ${report.maximumDepth}`);
         console.log(`    source ${report.pages} pages · ${report.hierarchyGaps} hierarchy gaps · ${report.hierarchyRepairs} repaired · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);
+        if (report.inventoryReusedPages || report.inventoryRecoveryAttempts || report.inventoryRemainingFailures) {
+          console.log(`    inventory ${report.inventoryReusedPages} reused · ${report.inventoryFreshPages} fresh · ${report.inventoryRecoveryAttempts} recovery attempts${report.inventoryRemainingFailures ? ` · ${report.inventoryRemainingFailures} remaining failures` : ''}`);
+        }
         console.log(`    pages ${report.complete} complete · ${report.partial} partial · ${report.failed} failed · ${report.blocked} blocked · ${report.conflicts} conflicts · ${report.notStartedPages} not started`);
         console.log(`    files ${report.resourcesComplete}/${report.resources} complete · ${report.resourcesPartial} partial · ${report.resourcesFailed} failed · ${report.resourcesBlocked} blocked · ${report.resourcesNotStarted} not started${report.resourcesPlanned ? ` · ${report.resourcesPlanned} planned` : ''} · ${issues}`);
         console.log(`    causes ${report.rootErrors} root errors · ${report.dependentPages} dependent pages · ${report.dependentFiles} dependent files · ${report.dependentComments} dependent comment archives`);

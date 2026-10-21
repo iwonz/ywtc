@@ -42,6 +42,11 @@ const reportListSchema = z.object({
     resourcesNotStarted: z.number().nonnegative().optional().default(0),
     resourcesPlanned: z.number().nonnegative(),
     inventoryComplete: z.boolean(),
+    inventoryReusedPages: z.number().nonnegative().optional().default(0),
+    inventoryFreshPages: z.number().nonnegative().optional().default(0),
+    inventoryPendingPages: z.number().nonnegative().optional().default(0),
+    inventoryRecoveryAttempts: z.number().nonnegative().optional().default(0),
+    inventoryRemainingFailures: z.number().nonnegative().optional().default(0),
     degradations: z.number().nonnegative(),
     adaptations: z.number().nonnegative().optional().default(0),
     preservedExternalReferences: z.number().nonnegative().optional().default(0),
@@ -91,6 +96,11 @@ export interface ReportCatalogEntry {
   resourcesNotStarted: number;
   resourcesPlanned: number;
   inventoryComplete: boolean;
+  inventoryReusedPages: number;
+  inventoryFreshPages: number;
+  inventoryPendingPages: number;
+  inventoryRecoveryAttempts: number;
+  inventoryRemainingFailures: number;
   degradations: number;
   adaptations: number;
   preservedExternalReferences: number;
@@ -203,6 +213,11 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     resourcesNotStarted: parsed.summary.resourcesNotStarted,
     resourcesPlanned: parsed.summary.resourcesPlanned,
     inventoryComplete: parsed.summary.inventoryComplete,
+    inventoryReusedPages: parsed.summary.inventoryReusedPages,
+    inventoryFreshPages: parsed.summary.inventoryFreshPages,
+    inventoryPendingPages: parsed.summary.inventoryPendingPages,
+    inventoryRecoveryAttempts: parsed.summary.inventoryRecoveryAttempts,
+    inventoryRemainingFailures: parsed.summary.inventoryRemainingFailures,
     degradations: parsed.summary.degradations,
     adaptations: parsed.summary.adaptations,
     preservedExternalReferences: parsed.summary.preservedExternalReferences,

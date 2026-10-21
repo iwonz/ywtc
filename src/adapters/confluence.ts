@@ -20,6 +20,7 @@ import type {
   UploadedResource,
 } from '../domain.js';
 import {HttpRequestError} from '../http.js';
+import {sourceInventoryOperationError} from '../source-inventory.js';
 import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage} from '../types.js';
 
 const capabilities: AdapterCapabilities = {
@@ -140,13 +141,23 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     return true;
   }
 
-  async getDescendants(page: SourcePage, options: {status: SourceStatus}) {
+  async getDescendants(page: SourcePage, options: {status: SourceStatus; checkpoint?: import('../domain.js').SourcePageCheckpoint}) {
     const descendants = await this.client.getDescendants(page.id);
-    const hydrated = await Promise.all(descendants.map(async (item) => sourcePage(
-      this.profile,
-      this.client,
-      item.body?.storage?.value === undefined ? await this.client.getPage(item.id) : item,
-    )));
+    const hydrated = await Promise.all(descendants.map(async (item) => {
+      const cached = await options.checkpoint?.loadPage(item.id, item.id);
+      if (cached) return cached;
+      const normalized = sourcePage(
+        this.profile,
+        this.client,
+        item.body?.storage?.value === undefined
+          ? await this.client.getPage(item.id).catch((error: unknown) => {
+            throw sourceInventoryOperationError('page-detail', error, `/content/${item.id}`);
+          })
+          : item,
+      );
+      await options.checkpoint?.savePage(normalized);
+      return normalized;
+    }));
     if (options.status === 'current') {
       const unknown = hydrated.filter((item) => item.sourceStatus === undefined);
       if (unknown.length > 0) {
@@ -211,7 +222,10 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   }
 
   async listResources(page: SourcePage): Promise<SourceResource[]> {
-    return (await this.client.listAttachments(page.id)).map((attachment) => ({
+    const attachments = await this.client.listAttachments(page.id).catch((error: unknown) => {
+      throw sourceInventoryOperationError('resources-list', error, `/content/${page.id}/child/attachment`);
+    });
+    return attachments.map((attachment) => ({
       provider: 'confluence' as const,
       id: attachment.id,
       pageId: page.id,
@@ -228,19 +242,23 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   }
 
   async readComments(page: SourcePage): Promise<CommentInventory> {
-    const comments = await this.client.getPageComments(page.id);
-    return normalizeCommentForest(comments.map((comment) => ({
-      id: comment.id,
-      ...(comment.parentCommentId ? {parentId: comment.parentCommentId} : {}),
-      ...(comment.threadId ? {threadId: comment.threadId} : {}),
-      author: commentAuthor(comment.author),
-      ...(comment.createdAt ? {createdAt: comment.createdAt} : {}),
-      body: comment.body?.storage?.value ?? (/deleted/i.test(comment.status ?? '') ? '[Комментарий удалён]' : ''),
-      ...(comment.inlineContext ? {inlineContext: comment.inlineContext} : {}),
-      status: /deleted/i.test(comment.status ?? '')
-        ? 'deleted'
-        : /resolved/i.test(comment.resolutionStatus ?? '') ? 'resolved' : 'open',
-    })), 'confluence-storage');
+    try {
+      const comments = await this.client.getPageComments(page.id);
+      return normalizeCommentForest(comments.map((comment) => ({
+        id: comment.id,
+        ...(comment.parentCommentId ? {parentId: comment.parentCommentId} : {}),
+        ...(comment.threadId ? {threadId: comment.threadId} : {}),
+        author: commentAuthor(comment.author),
+        ...(comment.createdAt ? {createdAt: comment.createdAt} : {}),
+        body: comment.body?.storage?.value ?? (/deleted/i.test(comment.status ?? '') ? '[Комментарий удалён]' : ''),
+        ...(comment.inlineContext ? {inlineContext: comment.inlineContext} : {}),
+        status: /deleted/i.test(comment.status ?? '')
+          ? 'deleted'
+          : /resolved/i.test(comment.resolutionStatus ?? '') ? 'resolved' : 'open',
+      })), 'confluence-storage');
+    } catch (error) {
+      throw sourceInventoryOperationError('comments-read', error, `/content/${page.id}/child/comment`);
+    }
   }
 
   downloadResource(resource: SourceResource, destination: string) {

@@ -62,6 +62,24 @@ export function readyMigrationCommand(command: ParsedMigrationCommand): ReadyMig
   return {...rest, source: command.source, destination: command.destination};
 }
 
+function resumeCommand(command: ReadyMigrationCommand, workdir: string): string {
+  return [
+    'ywtc migrate',
+    `--source ${JSON.stringify(command.source)}`,
+    `--destination ${JSON.stringify(command.destination)}`,
+    `--scope ${command.scope}`,
+    ...(command.sourceStatus === 'all' ? [] : [`--source-status ${command.sourceStatus}`]),
+    ...(command.sourceProfile ? [`--source-profile ${JSON.stringify(command.sourceProfile)}`] : []),
+    ...(command.destinationProfile ? [`--destination-profile ${JSON.stringify(command.destinationProfile)}`] : []),
+    ...(command.format ? [`--format ${command.format}`] : []),
+    ...(command.archive ? ['--archive'] : []),
+    ...(command.dryRun ? ['--dry-run'] : []),
+    ...(command.comments ? [] : ['--no-comments']),
+    ...(command.stateFilename ? [`--state ${JSON.stringify(command.stateFilename)}`] : []),
+    `--workdir ${JSON.stringify(workdir)}`,
+  ].join(' ');
+}
+
 export async function runMigrationCommand(command: ReadyMigrationCommand): Promise<MigrationCommandOutcome> {
   const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
   const initialized = await initializeWorkspace(workspace);
@@ -134,7 +152,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
       console.log(`  Workdir  ${workspace.root}`);
       console.log(`  Reports  ${workspace.reportsDirectory}`);
       if (reportBearingError(error)) await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume   ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope}${command.sourceStatus === 'all' ? '' : ` --source-status ${command.sourceStatus}`} --workdir "${workspace.root}"`);
+      console.log(`  Resume   ${resumeCommand(command, workspace.root)}`);
       return {
         code: signalCode,
         workspaceRoot: workspace.root,
@@ -146,6 +164,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
       console.log('  Status  failed');
       console.log(`  State   ${error.stateFilename}`);
       await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
+      console.log(`  Resume  ${resumeCommand(command, workspace.root)}`);
     }
     throw error;
   } finally {
@@ -163,11 +182,14 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
   console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesBlocked} blocked · ${result.summary.resourcesNotStarted} not started${result.summary.resourcesPlanned ? ` · ${result.summary.resourcesPlanned} planned` : ''} · ${result.summary.bytes} transferred bytes`);
   console.log(`  Causes  ${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
   console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
+  if (result.summary.inventoryReusedPages || result.summary.inventoryRecoveryAttempts || result.summary.inventoryRemainingFailures) {
+    console.log(`  Inventory ${result.summary.inventoryReusedPages ?? 0} reused · ${result.summary.inventoryFreshPages ?? 0} fresh · ${result.summary.inventoryRecoveryAttempts ?? 0} recovery attempts${result.summary.inventoryRemainingFailures ? ` · ${result.summary.inventoryRemainingFailures} remaining failures` : ''}`);
+  }
   console.log(`  Comments ${result.summary.comments} entries · ${result.summary.commentThreads} threads · ${result.summary.commentParticipants} participants · ${result.summary.commentAttachments} files · ${result.summary.commentBytes} bytes`);
   console.log(`  Quality ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.adaptations} adaptations · ${result.summary.normalizations} safe normalizations · ${result.summary.preservedExternalReferences} external references preserved`);
   if (result.output) console.log(`  Output  ${result.output}`);
   if (result.archive) console.log(`  Archive ${result.archive}`);
-  if (result.hasErrors) console.log(`  Resume  ywtc migrate --source "${command.source}" --destination "${command.destination}" --scope ${command.scope}${command.sourceStatus === 'all' ? '' : ` --source-status ${command.sourceStatus}`}`);
+  if (result.hasErrors) console.log(`  Resume  ${resumeCommand(command, workspace.root)}`);
   return {
     code: result.hasErrors ? 1 : 0,
     result,

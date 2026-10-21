@@ -5,6 +5,7 @@ import type {YandexWikiClient} from '../src/clients/yandex-wiki.js';
 import type {ConfluenceConnectionProfile, NetworkLimits, YandexConnectionProfile} from '../src/config.js';
 import {DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../src/domain.js';
 import {HttpRequestError} from '../src/http.js';
+import {SourceInventoryOperationError} from '../src/source-inventory.js';
 import type {ConfluenceApi, ConfluencePage, YandexPageDetails} from '../src/types.js';
 
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 8, burst: 8};
@@ -75,6 +76,42 @@ describe('source page content contracts', () => {
     expect(resources.map((resource) => resource.size)).toEqual([undefined, 1_572_864, 2_048]);
   });
 
+  it.each([
+    ['attachments-list', {
+      getAttachments: async () => { throw new HttpRequestError('gateway timeout', 504, 'GET', '/raw', undefined, 4); },
+      getPageGrids: async () => [],
+    }],
+    ['grids-list', {
+      getAttachments: async () => [],
+      getPageGrids: async () => { throw new HttpRequestError('gateway timeout', 504, 'GET', '/raw', undefined, 4); },
+    }],
+    ['grid-read', {
+      getAttachments: async () => [],
+      getPageGrids: async () => [{id: 'grid-1', title: 'Grid'}],
+      getGrid: async () => { throw new HttpRequestError('gateway timeout', 504, 'GET', '/raw', undefined, 4); },
+    }],
+  ] as const)('classifies Yandex %s failures with safe operation evidence', async (operation, methods) => {
+    const adapter = new YandexAdapter(yandexProfile, methods as unknown as YandexWikiClient);
+    const error = await adapter.listResources({
+      provider: 'yandex-wiki', profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root',
+      locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm', references: [],
+    }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(SourceInventoryOperationError);
+    expect(error).toMatchObject({operation, retryable: true, details: {status: 504, attempts: 4}});
+    expect((error as SourceInventoryOperationError).details.endpoint).not.toContain('/raw');
+  });
+
+  it('classifies Yandex comment inventory failures independently', async () => {
+    const adapter = new YandexAdapter(yandexProfile, {
+      getPageComments: async () => { throw new HttpRequestError('rate limited', 429, 'GET', '/raw', undefined, 4); },
+    } as unknown as YandexWikiClient);
+    const error = await adapter.readComments({
+      provider: 'yandex-wiki', profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root',
+      locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm', references: [],
+    }).catch((cause: unknown) => cause);
+    expect(error).toMatchObject({operation: 'comments-read', retryable: true, details: {status: 429, attempts: 4, endpoint: '/pages/1/comments'}});
+  });
+
   it('selects all Yandex descendants by default and reports current-only exclusions', async () => {
     const calls: Array<'all' | 'actual'> = [];
     const details = new Map<number, YandexPageDetails>([
@@ -99,6 +136,33 @@ describe('source page content contracts', () => {
       excluded: [{id: '3', locator: 'root/obsolete', reason: 'source-status', status: 'obsolete'}],
     });
     expect(calls).toEqual(['all', 'actual']);
+  });
+
+  it('reuses compatible Yandex detail checkpoints and refreshes locator drift', async () => {
+    const requested: number[] = [];
+    const saved: string[] = [];
+    const cached = {
+      provider: 'yandex-wiki' as const, profile: 'wiki', id: '2', canonicalId: 'wiki:yandex-wiki:2', title: 'Cached',
+      locator: 'root/cached', url: 'https://wiki.example/root/cached', parentId: '1', ancestorIds: ['1'],
+      rawContent: 'cached', rawFormat: 'yfm' as const, references: [],
+    };
+    const client = {
+      getDescendants: async () => [{id: 2, slug: 'root/cached'}, {id: 3, slug: 'root/changed'}],
+      getPageById: async (id: number) => {
+        requested.push(id);
+        return {id, slug: 'root/current', title: 'Current', page_type: 'page' as const, content: 'fresh', breadcrumbs: [{id: 1, slug: 'root', title: 'Root'}]};
+      },
+    } as unknown as YandexWikiClient;
+    const checkpoint = {
+      loadPage: async (id: string, locator?: string) => id === '2' && locator === cached.locator ? cached : undefined,
+      savePage: async (value: {id: string}) => { saved.push(value.id); },
+    };
+    const adapter = new YandexAdapter(yandexProfile, client);
+    const sourceRoot = {provider: 'yandex-wiki' as const, profile: 'wiki', id: '1', canonicalId: 'wiki:yandex-wiki:1', title: 'Root', locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm' as const, references: []};
+    const result = await adapter.getDescendants(sourceRoot, {status: 'all', checkpoint});
+    expect(requested).toEqual([3]);
+    expect(saved).toEqual(['3']);
+    expect(result.pages).toEqual(expect.arrayContaining([expect.objectContaining({id: '2', title: 'Cached'}), expect.objectContaining({id: '3', locator: 'root/current'})]));
   });
 
   it('preserves structured evidence when selected Yandex details cannot be loaded', async () => {
@@ -277,6 +341,28 @@ describe('source page content contracts', () => {
     });
     expect(updatedParent).toBe('9');
     expect(moved.parentId).toBe('9');
+  });
+
+  it('reuses compatible Confluence descendant checkpoints', async () => {
+    let detailReads = 0;
+    const cached = {
+      provider: 'confluence' as const, profile: 'conf', id: '2', canonicalId: 'conf:confluence:2', title: 'Cached',
+      locator: '2', url: 'https://conf.example/confluence/pages/2', parentId: '1', ancestorIds: ['1'], space: 'DOC',
+      sourceStatus: 'current' as const, rawContent: '<p>Cached</p>', rawFormat: 'confluence-storage' as const, references: [],
+    };
+    const client = {
+      getDescendants: async () => [{id: '2', type: 'page', status: 'current', title: 'Cached', space: {key: 'DOC'}, ancestors: [{id: '1'}]}],
+      getPage: async () => { detailReads += 1; throw new Error('should not read'); },
+      pageWebUrl: () => cached.url,
+    } as unknown as ConfluenceApi;
+    const adapter = new ConfluenceAdapter(confluenceProfile, client);
+    const sourceRoot = {provider: 'confluence' as const, profile: 'conf', id: '1', canonicalId: 'conf:confluence:1', title: 'Root', locator: '1', url: 'https://conf.example/confluence/pages/1', rawContent: '', rawFormat: 'confluence-storage' as const, references: []};
+    const result = await adapter.getDescendants(sourceRoot, {
+      status: 'all',
+      checkpoint: {loadPage: async () => cached, savePage: async () => undefined},
+    });
+    expect(detailReads).toBe(0);
+    expect(result.pages).toEqual([expect.objectContaining({id: '2', title: 'Cached'})]);
   });
 
   it('passes the confirmed page version and classifies optimistic revision conflicts', async () => {

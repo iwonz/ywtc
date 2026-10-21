@@ -17,6 +17,7 @@ import type {
   UploadedResource,
 } from '../src/domain.js';
 import {DestinationRevisionConflictError} from '../src/domain.js';
+import {HttpRequestError} from '../src/http.js';
 import {createLogger} from '../src/logger.js';
 import {MigrationRunError, Migrator} from '../src/migrator.js';
 import type {RemoteLocator} from '../src/locators.js';
@@ -49,6 +50,8 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
   let commentCreates = 0;
   let commentUpdates = 0;
   let commentReadError: Error | undefined;
+  let commentReadFailures = 0;
+  let persistentCommentReadFailure = false;
   let page: DestinationPage | undefined;
   let archiveComment: DestinationComment | undefined;
   let commentRevisionConflicts = 0;
@@ -70,7 +73,11 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
     listResources: async () => [resource],
     readComments: async () => {
       commentReads += 1;
-      if (commentReadError) throw commentReadError;
+      if (commentReadFailures > 0) {
+        commentReadFailures -= 1;
+        throw commentReadError;
+      }
+      if (persistentCommentReadFailure && commentReadError) throw commentReadError;
       return inventory();
     },
     downloadResource: async (_item: SourceResource, destination: string) => {
@@ -139,7 +146,12 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
     source,
     destination,
     changeComment(value: string) { commentText = value; },
-    failCommentRead(error = new Error('comment API unavailable')) { commentReadError = error; },
+    failCommentRead(error = new Error('comment API unavailable')) { commentReadError = error; persistentCommentReadFailure = true; },
+    failCommentReads(count: number, error = new HttpRequestError('comments gateway timed out', 504, 'GET', '/pages/1/comments', undefined, 4)) {
+      commentReadFailures = count;
+      commentReadError = error;
+      persistentCommentReadFailure = false;
+    },
     manuallyEditComment() { if (archiveComment) archiveComment = {...archiveComment, body: `${archiveComment.body} manual`, fingerprint: digest(`${archiveComment.body} manual`)}; },
     setCommentRevisionConflicts(count: number) { commentRevisionConflicts = count; },
     counts: () => ({commentReads, commentCreates, commentUpdates, uploads: uploaded.size}),
@@ -238,6 +250,39 @@ describe('comment migration pipeline', () => {
     const result = await new Migrator(config, createLogger([]), factory).run(options);
     expect(result.status).toBe('partial');
     expect(result.summary).toMatchObject({partial: 1, errors: 1, commentStatuses: {failed: 1}});
+    expect(adapters.page()?.content).toContain('Page body');
+  });
+
+  it('selectively recovers transient comment inventory without rereading page resources', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.failCommentReads(1);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const result = await new Migrator(config, createLogger([]), factory, {}, {
+      delaysMs: [0, 0, 0], sleep: async () => undefined,
+    }).run(options);
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      summary: {comments: 2, inventoryRecoveryAttempts: 1, inventoryRemainingFailures: 0},
+    });
+    expect(adapters.counts()).toMatchObject({commentReads: 2, commentCreates: 1});
+  });
+
+  it('keeps exhausted retryable comment inventory non-blocking and resumable', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.failCommentReads(4);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const result = await new Migrator(config, createLogger([]), factory, {}, {
+      delaysMs: [0, 0, 0], sleep: async () => undefined,
+    }).run(options);
+
+    expect(result).toMatchObject({
+      status: 'partial',
+      summary: {complete: 0, partial: 1, inventoryRecoveryAttempts: 3, inventoryRemainingFailures: 1},
+    });
+    expect(adapters.counts()).toMatchObject({commentReads: 4, commentCreates: 0});
     expect(adapters.page()?.content).toContain('Page body');
   });
 

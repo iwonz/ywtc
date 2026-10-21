@@ -6,6 +6,7 @@ import type {
   PageGraphEdge,
   PageReference,
   SourceAdapter,
+  SourcePageCheckpoint,
   SourcePage,
   SourceSelection,
   SourceStatus,
@@ -68,8 +69,9 @@ export async function discoverPageGraph(input: {
   sourceStatus?: SourceStatus;
   signal?: AbortSignal;
   onProgress?: (progress: DiscoveryProgress) => void;
+  checkpoint?: SourcePageCheckpoint;
 }): Promise<PageGraph> {
-  const {adapter, root, scope, signal, onProgress} = input;
+  const {adapter, root, scope, signal, onProgress, checkpoint} = input;
   const requestedStatus = input.sourceStatus ?? 'all';
   const supportsSourceStatus = adapter.supportsSourceStatus?.(scope, requestedStatus) ?? requestedStatus === 'all';
   if (!supportsSourceStatus) {
@@ -81,7 +83,7 @@ export async function discoverPageGraph(input: {
   let discovery = emptyDiscovery(requestedStatus);
 
   if (scope === 'subtree') {
-    const descendantResult = await adapter.getDescendants(root, {status: requestedStatus});
+    const descendantResult = await adapter.getDescendants(root, {status: requestedStatus, ...(checkpoint ? {checkpoint} : {})});
     discovery = Array.isArray(descendantResult)
       ? {...emptyDiscovery(requestedStatus), pages: descendantResult, returned: descendantResult.length}
       : descendantResult;
@@ -115,11 +117,13 @@ export async function discoverPageGraph(input: {
           }
         }
         try {
-          const resolved = await adapter.resolveReference(page, reference);
+          const cached = reference.pageId ? await checkpoint?.loadPage(reference.pageId) : undefined;
+          const resolved = cached ?? await adapter.resolveReference(page, reference);
           if (!resolved) {
             edges.push({from: page.canonicalId, raw: reference.raw, status: 'broken'});
             continue;
           }
+          if (!cached) await checkpoint?.savePage(resolved);
           if (requestedStatus === 'current') {
             if (resolved.sourceStatus === undefined) throw new Error(`${adapter.kind} did not expose status for linked page ${resolved.id}`);
             if (resolved.sourceStatus !== 'current') {

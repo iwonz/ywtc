@@ -29,6 +29,15 @@ describe('HTTP retry and log safety', () => {
     expect(scope.isDone()).toBe(true);
   });
 
+  it('exposes the bounded request attempt count for typed inventory diagnostics', async () => {
+    nock('https://retry.example.test')
+      .get('/exhausted').times(3).reply(504, {message: 'temporary'});
+    const client = new RetryingHttpClient({baseURL: 'https://retry.example.test', timeoutMs: 5_000, maxRetries: 2});
+    const error = await client.request({method: 'GET', url: '/exhausted'}).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect(error).toMatchObject({status: 504, attempts: 3, url: '/exhausted'});
+  });
+
   it.each([
     [401, /authentication rejected/],
     [403, /request forbidden/],
