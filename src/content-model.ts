@@ -865,6 +865,13 @@ function semanticText(value: string): string {
     .trim();
 }
 
+const semanticBlockSelector = [
+  'address', 'article', 'aside', 'blockquote', 'dd', 'details', 'dialog', 'div', 'dl', 'dt',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'header', 'hr', 'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody',
+  'td', 'tfoot', 'th', 'thead', 'tr', 'ul',
+].join(',');
+
 interface SemanticContent {
   text: string;
   headings: string[];
@@ -886,6 +893,15 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
   const html = renderedPreviewHtml(body, provider);
   const $ = load(html, null, false);
   $('script,style').remove();
+  type SemanticSelection = ReturnType<typeof $>;
+  const blockText = (selection: SemanticSelection): string => {
+    const root = selection.clone();
+    root.find('br').replaceWith(' ');
+    root.find(semanticBlockSelector).each((_index, block) => {
+      $(block).before(' ').after(' ');
+    });
+    return semanticText(root.text());
+  };
   $('h1,h2,h3,h4,h5,h6,p,div,span').each((_index, element) => {
     const node = $(element);
     if (!semanticText(node.text()) && node.find('img,table,pre,code,a[href],[id],a[name]').length === 0 && !node.is('[id],a[name]')) node.remove();
@@ -895,7 +911,7 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     return Boolean(semanticText(item.text())) || item.find('img,a[href],table,pre,code,[id],a[name]').length > 0;
   };
   const textValues = (selector: string): string[] => $(selector).toArray()
-    .map((element) => semanticText($(element).text()))
+    .map((element) => blockText($(element)))
     .filter(Boolean);
   const macroNames: string[] = [];
   if (provider === 'confluence') {
@@ -914,7 +930,7 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     const cells = item.children('.ywtc-layout-cell').toArray().map((cell) => {
       const value = $(cell);
       const signature = [
-        semanticText(value.text()),
+        blockText(value),
         `links=${value.find('a[href]').length}`,
         `images=${value.find('img').length}`,
         `tables=${value.find('table').length}`,
@@ -928,20 +944,20 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
   }));
   const links = $('a[href]').toArray().map((element) => ({
     href: $(element).attr('href') ?? '',
-    label: semanticText($(element).text()),
+    label: blockText($(element)),
   }));
   const meaningfulRows = $('tr').toArray().filter((row) => $(row).children('th,td').toArray().some((cell) => meaningful(cell)));
   const meaningfulLists = $('ul,ol').toArray().filter((list) => $(list).find('li').toArray().some((item) => meaningful(item)));
   const meaningfulDetails = $('details').toArray().filter((item) => meaningful(item));
   const meaningfulAsides = $('aside').toArray().filter((item) => meaningful(item));
   return {
-    text: semanticText($.root().text()),
+    text: blockText($.root()),
     headings: $('h1,h2,h3,h4,h5,h6').toArray()
-      .map((element) => `${element.tagName}:${semanticText($(element).text())}`)
+      .map((element) => `${element.tagName}:${blockText($(element))}`)
       .filter((value) => !/:$/.test(value)),
-    listItems: $('li').toArray().filter((element) => meaningful(element)).map((element) => semanticText($(element).text())),
-    tableCells: $('th,td').toArray().filter((element) => meaningful(element)).map((element) => `${element.tagName}:${semanticText($(element).text())}`),
-    code: [...textValues('pre'), ...$('code').toArray().filter((element) => $(element).parents('pre').length === 0).map((element) => semanticText($(element).text())).filter(Boolean)],
+    listItems: $('li').toArray().filter((element) => meaningful(element)).map((element) => blockText($(element))),
+    tableCells: $('th,td').toArray().filter((element) => meaningful(element)).map((element) => `${element.tagName}:${blockText($(element))}`),
+    code: [...textValues('pre'), ...$('code').toArray().filter((element) => $(element).parents('pre').length === 0).map((element) => blockText($(element))).filter(Boolean)],
     links: links.filter(({href}) => !href.startsWith('#')).map(({href, label}) => `${href}|${label}`).sort(),
     anchorLinks: links.filter(({href, label}) => href.startsWith('#') && Boolean(label)).map(({label}) => label).sort(),
     images: $('img').toArray().map((element) => $(element).attr('src') ?? '').sort(),
@@ -988,6 +1004,13 @@ export interface ContentVerificationResult {
   status: 'complete' | 'partial' | 'failed';
   differences: string[];
   adaptations: string[];
+}
+
+export class DestinationContentVerificationError extends Error {
+  constructor(readonly result: ContentVerificationResult) {
+    super(result.differences.join('; '));
+    this.name = 'DestinationContentVerificationError';
+  }
 }
 
 export function verifyDestinationContent(
@@ -1066,7 +1089,7 @@ export function assertDestinationContent(
   page: SourcePage,
 ): ContentVerificationResult {
   const result = verifyDestinationContent(expectedBody, actualBody, provider, page);
-  if (result.status === 'failed') throw new Error(result.differences.join('; '));
+  if (result.status === 'failed') throw new DestinationContentVerificationError(result);
   return result;
 }
 

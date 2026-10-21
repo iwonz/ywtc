@@ -233,6 +233,7 @@ const installedReportDirectory = path.join(temporary, 'installed-report');
 const reportSmoke = `
   import {TransferReport} from ${JSON.stringify(pathToFileURL(installedReportModule).toString())};
   const report = new TransferReport({
+    runId: '00000000-0000-4000-8000-000000000008',
     dryRun: true,
     scope: 'page',
     direction: 'yandex-wiki → html',

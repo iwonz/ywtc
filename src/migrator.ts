@@ -8,6 +8,7 @@ import {secretValues, type AppConfig} from './config.js';
 import {
   appendGridSnapshots,
   assertDestinationContent,
+  DestinationContentVerificationError,
   emptyRendererFallbackReason,
   normalizePageContent,
   normalizedPreviewHtml,
@@ -699,6 +700,7 @@ export class Migrator {
     if (!options.dryRun) await store.save();
     const run = await store.beginRun(options.scope, options.dryRun, sourceStatus, commentsEnabled);
     const report = new TransferReport({
+      runId: run.id,
       secrets: secretValues(this.config),
       dryRun: options.dryRun,
       commentsEnabled,
@@ -1914,6 +1916,7 @@ export class Migrator {
       }
       const state = store.value.pages[page.canonicalId]!;
       const bootstrap = bootstrapBodies.get(page.canonicalId)!;
+      let recoveryExpectedBody = bootstrap.body;
       const bindings = sourceResourceBindings(cachedPage, resources);
       const transferableResources = resources.filter((item) => item.kind !== 'grid');
       const resourceProblems: string[] = [];
@@ -2284,6 +2287,7 @@ export class Migrator {
             report,
           });
           verified = update.page;
+          recoveryExpectedBody = rendered.body;
           if (update.normalized) rendered.normalizations.push('Destination normalized page markup without semantic content changes');
           if (update.updated) {
             report.issue({
@@ -2394,21 +2398,24 @@ export class Migrator {
       } catch (error) {
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         const ownershipConflict = error instanceof DestinationOwnershipConflictError ? error : undefined;
+        const contentVerification = error instanceof DestinationContentVerificationError;
         let failureStatus: PageTransferState['status'] = ownershipConflict ? 'conflict' : 'failed';
         let actual: DestinationPage | undefined;
         if (failureStatus !== 'conflict' && !options.dryRun) {
           try {
             actual = await verifyConfirmedDestinationPage(destination, destinationPage, this.consistencyOptions);
-            assertDestinationContent(bootstrap.body, actual.content, destination.kind, cachedPage);
+            assertDestinationContent(recoveryExpectedBody, actual.content, destination.kind, cachedPage);
             failureStatus = 'partial';
           } catch {
             failureStatus = 'failed';
           }
         }
         report.issue({
-          code: ownershipConflict ? 'destination-ownership-ambiguity' : 'page-transfer-failed',
+          code: ownershipConflict
+            ? 'destination-ownership-ambiguity'
+            : contentVerification ? 'destination-content-verification-failed' : 'page-transfer-failed',
           severity: 'error',
-          phase: 'page',
+          phase: contentVerification ? 'verification' : 'page',
           pageId: page.canonicalId,
           retryable: failureStatus !== 'conflict',
           message,

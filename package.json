@@ -71,12 +71,13 @@
     "@archiver/archiver": "^0.3.0",
     "@clack/prompts": "^1.8.1",
     "@commander-js/extra-typings": "^15.0.0",
-    "@diplodoc/transform": "4.78.6",
+    "@diplodoc/transform": "4.78.9",
     "axios": "1.20.0",
     "cheerio": "1.2.0",
     "commander": "^15.0.0",
     "form-data": "4.0.6",
     "linkify-it": "6.1.0",
+    "markdown-it": "14.3.3",
     "listr2": "^11.2.0",
     "open": "^11.0.4",
     "p-queue": "^10.0.0",
@@ -120,7 +121,7 @@
     "katex": "0.19.0",
     "lodash": "4.18.1",
     "markdown-it": {
-      ".": "13.0.2",
+      ".": "14.3.3",
       "linkify-it": "5.0.2"
     },
     "markdownlint": "0.41.1",

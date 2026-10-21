@@ -32,6 +32,7 @@ function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sou
 describe('transfer report', () => {
   it('deduplicates variable diagnostics through a stable transformation issue code', () => {
     const report = new TransferReport({
+      runId: '00000000-0000-4000-8000-000000000001',
       dryRun: false,
       scope: 'page',
       direction: 'yandex-wiki → confluence',
@@ -52,6 +53,7 @@ describe('transfer report', () => {
   it('reconciles source inventory, exact outcomes, issue context, HTML, JSON, and catalog counts', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-report-'));
     const report = new TransferReport({
+      runId: '00000000-0000-4000-8000-000000000002',
       secrets: ['top-secret', 'admin@example.com'],
       dryRun: false,
       scope: 'subtree',
@@ -116,6 +118,8 @@ describe('transfer report', () => {
     const json = JSON.parse(await readFile(paths.json, 'utf8')) as TransferReportData;
     const html = await readFile(paths.html, 'utf8');
 
+    expect(json.runId).toBe('00000000-0000-4000-8000-000000000002');
+    expect(path.basename(path.dirname(paths.html))).toBe(json.runId);
     expect(json).not.toHaveProperty('version');
     expect(json.excludedPages).toEqual([expect.objectContaining({
       sourceCanonicalId: 'wiki:4', sourceTitle: 'Obsolete', projectedParentId: 'wiki:1', metadataComplete: true,
@@ -163,6 +167,7 @@ describe('transfer report', () => {
 
     const catalog = await listReports(directory);
     expect(catalog.reports[0]).toMatchObject({
+      runId: json.runId,
       pages: 3, complete: 1, partial: 1, failed: 1, blocked: 0, conflicts: 0,
       sourceStatus: 'current', returnedDescendants: 4, selectedDescendants: 2, excludedPages: 1, hierarchyGaps: 1, hierarchyRepairs: 1,
       resources: 3, resourcesComplete: 1, resourcesFailed: 1, resourcesNotStarted: 1, resourcesPlanned: 0,
@@ -174,6 +179,7 @@ describe('transfer report', () => {
 
   it('retains linked-scope traversal outcomes independently from content-link metrics', () => {
     const report = new TransferReport({
+      runId: '00000000-0000-4000-8000-000000000003',
       dryRun: true,
       scope: 'linked',
       direction: 'confluence → markdown',
@@ -196,6 +202,7 @@ describe('transfer report', () => {
 
   it('reserves planned for dry-run and converts untouched live work to not-started', () => {
     const make = (dryRun: boolean) => new TransferReport({
+      runId: dryRun ? '00000000-0000-4000-8000-000000000004' : '00000000-0000-4000-8000-000000000005',
       dryRun,
       scope: 'page',
       direction: 'yandex-wiki → confluence',
@@ -226,6 +233,7 @@ describe('transfer report', () => {
   it('keeps root errors separate from causal dependency blocks across JSON, HTML, and catalog', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-causal-report-'));
     const report = new TransferReport({
+      runId: '00000000-0000-4000-8000-000000000006',
       dryRun: false,
       scope: 'subtree',
       direction: 'yandex-wiki → confluence',

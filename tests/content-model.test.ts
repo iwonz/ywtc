@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {
   appendGridSnapshots,
   assertDestinationContent,
+  DestinationContentVerificationError,
   emptyRendererFallbackReason,
   extractPageReferences,
   legacyTransferPlaceholder,
@@ -401,6 +402,19 @@ describe('normalized content pipeline', () => {
     expect(verifyDestinationContent(expected, '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell><p>Left</p></ac:layout-cell><ac:layout-cell></ac:layout-cell></ac:layout-section></ac:layout>', 'confluence', page).status).toBe('failed');
   });
 
+  it('normalizes provider whitespace only at semantic block boundaries', () => {
+    const page = source('Body');
+    const expected = '<h2>Title</h2>\n<p>image.png</p>\n<p>🚫 Blocked</p><table><tbody><tr><td><p>Cell</p><p>Detail</p></td></tr></tbody></table>';
+    const providerSerialized = '<h2>Title</h2><p>image.png</p><p>🚫 Blocked</p><table><tbody><tr><td><p>Cell</p><p>Detail</p></td></tr></tbody></table>';
+    expect(verifyDestinationContent(expected, providerSerialized, 'confluence', page))
+      .toEqual({status: 'complete', differences: [], adaptations: []});
+
+    expect(verifyDestinationContent('<p>foo<strong>bar</strong></p>', '<p>foo <strong>bar</strong></p>', 'confluence', page).status)
+      .toBe('failed');
+    expect(verifyDestinationContent('<p>alpha</p><p>beta</p>', '<p>alphabeta</p>', 'confluence', page).status)
+      .toBe('failed');
+  });
+
   it('renders supported YFM tree directives natively and as static navigation', async () => {
     const page = {...source('{% tree depth="2" sort="asc" sort_by="title" %}'), depth: 0};
     const child = {...source('Child body'), id: '2', canonicalId: 'source:2', title: 'Child', projectedParentId: page.canonicalId, depth: 1};
@@ -437,6 +451,13 @@ describe('normalized content pipeline', () => {
     expect(() => assertDestinationContent(fallback.body, fallback.body, 'confluence', page)).not.toThrow();
     expect(() => assertDestinationContent(fallback.body, '', 'confluence', page)).toThrow(/empty destination content/);
     expect(() => assertDestinationContent(fallback.body, '<p>Full source</p>', 'confluence', page)).toThrow(/differs/);
+    try {
+      assertDestinationContent(fallback.body, '<p>Full source</p>', 'confluence', page);
+      throw new Error('Expected destination verification to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(DestinationContentVerificationError);
+      expect((error as DestinationContentVerificationError).result).toMatchObject({status: 'failed'});
+    }
     expect(() => assertDestinationContent(
       fallback.body,
       legacyTransferPlaceholder('confluence', page),

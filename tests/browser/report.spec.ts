@@ -19,6 +19,7 @@ let reportUrl: string;
 test.beforeAll(async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-report-browser-'));
   const report = new TransferReport({
+    runId: '00000000-0000-4000-8000-000000000007',
     dryRun: false, scope: 'subtree', sourceStatus: 'current', direction: 'yandex-wiki → confluence',
     source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Knowledge base', url: 'https://wiki.example.com/root'},
     destination: {provider: 'confluence', profile: 'docs', id: '10', url: 'https://docs.example.com/pages/10'},

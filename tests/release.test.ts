@@ -135,7 +135,8 @@ describe('release validation', () => {
     const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {
       dependencies?: Record<string, string>;
     };
-    expect(packageJson.dependencies?.['@diplodoc/transform']).toBe('4.78.6');
+    expect(packageJson.dependencies?.['@diplodoc/transform']).toBe('4.78.9');
+    expect(packageJson.dependencies?.['markdown-it']).toBe('14.3.3');
     expect(packageJson.dependencies).not.toHaveProperty('dotenv');
   });
 

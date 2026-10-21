@@ -67,6 +67,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let createTitleConflicts = 0;
   let ambiguousCreate = false;
   let stripLinksOnRead = false;
+  let stripLinksOnNextUpdatedRead = false;
   let downloads = 0;
   let sourceResolutions = 0;
   let destinationResolutions = 0;
@@ -166,13 +167,17 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
         pages.set(verified.id, verified);
         current = verified;
       }
-      if (stripLinksOnRead && verified.content) {
+      const stripOnce = stripLinksOnNextUpdatedRead && updated > 0;
+      if ((stripLinksOnRead || stripOnce) && verified.content) {
+        if (stripOnce) stripLinksOnNextUpdatedRead = false;
         const body = verified.content
           .replace(/<ac:link\b[^>]*>[\s\S]*?<\/ac:link>/gi, 'Manual')
           .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1');
         verified = page(verified.title, body, verified.id, verified.parentId ?? container.id);
-        pages.set(verified.id, verified);
-        current = verified;
+        if (stripLinksOnRead) {
+          pages.set(verified.id, verified);
+          current = verified;
+        }
       }
       return verified;
     },
@@ -209,6 +214,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setCreateTitleConflicts: (value: number) => { createTitleConflicts = value; },
     setAmbiguousCreate: () => { ambiguousCreate = true; },
     setStripLinksOnRead: (value: boolean) => { stripLinksOnRead = value; },
+    setStripLinksOnNextUpdatedRead: () => { stripLinksOnNextUpdatedRead = true; },
     setDestinationPreflightError: (error: Error) => { destinationPreflightError = error; },
     setLegacyPlaceholder: () => {
       current = page(current!.title, legacyTransferPlaceholder('confluence', fixtureRoot), current!.id);
@@ -338,6 +344,9 @@ describe('source-derived remote page safety', () => {
 
     const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
     const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
+    const firstReport = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(state.runs.at(-1)?.id).toBe(firstReport.runId);
+    expect(path.basename(path.dirname(first.reportPaths.html))).toBe(firstReport.runId);
     expect(state.pages[root.canonicalId]?.resources[resource.id]?.status).toBe('failed');
 
     adapters.setFailUpload(false);
@@ -404,7 +413,26 @@ describe('source-derived remote page safety', () => {
     expect(adapters.snapshot()).toMatchObject({created: 1, updated: 2});
     expect(adapters.snapshot().current?.content).toContain('Important body');
     const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
-    expect(report.issues).toContainEqual(expect.objectContaining({code: 'page-transfer-failed', message: expect.stringContaining('request forbidden')}));
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'page-transfer-failed', category: 'provider-api', message: expect.stringContaining('request forbidden'),
+    }));
+  });
+
+  it('recovers late verification against the final rendered body rather than bootstrap references', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setStripLinksOnNextUpdatedRead();
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, logger, factory).run(options);
+    expect(result).toMatchObject({status: 'partial', hasErrors: true, summary: {partial: 1, failed: 0}});
+    expect(adapters.snapshot().current?.content).toContain('ri:attachment');
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'destination-content-verification-failed',
+      phase: 'verification',
+      category: 'verification',
+    }));
   });
 
   it('accepts provider markup normalization between bootstrap creation and final rendering', async () => {

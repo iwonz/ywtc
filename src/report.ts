@@ -1,4 +1,4 @@
-import {createHash, randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -276,12 +276,11 @@ export class TransferReport {
   private readonly issueCollector = new IssueCollector();
   private readonly secrets: string[];
 
-  constructor(input: Omit<TransferReportData, 'runId' | 'startedAt' | 'status' | 'sourceStatus' | 'commentsEnabled' | 'selection' | 'pages' | 'excludedPages' | 'edges' | 'hierarchyRepairs' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'> & {sourceStatus?: SourceStatus; commentsEnabled?: boolean; secrets?: string[]}) {
+  constructor(input: Omit<TransferReportData, 'startedAt' | 'status' | 'sourceStatus' | 'commentsEnabled' | 'selection' | 'pages' | 'excludedPages' | 'edges' | 'hierarchyRepairs' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'> & {sourceStatus?: SourceStatus; commentsEnabled?: boolean; secrets?: string[]}) {
     const {secrets = [], ...reportInput} = input;
     this.secrets = [...secrets];
     const sourceStatus = reportInput.sourceStatus ?? 'all';
     this.data = {
-      runId: randomUUID(),
       startedAt: new Date().toISOString(),
       status: 'running',
       sourceStatus,
