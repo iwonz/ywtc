@@ -65,6 +65,87 @@ describe('transactional filesystem export', () => {
     await expect(readFile(path.join(output, '.ywtc-export.json'))).rejects.toThrow();
   });
 
+  it('patches only selected pages in an existing managed export during retry', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-retry-'));
+    const output = path.join(temporary, 'site');
+    const resourceFreeRoot = {...root, rawContent: '# Root\n\n[Child](/child)', references: root.references.filter((reference) => reference.kind === 'page')};
+    const retryGraph = {...graph, pages: [resourceFreeRoot, child]};
+    const resources = new Map<string, SourceResource[]>([[resourceFreeRoot.canonicalId, []], [child.canonicalId, []]]);
+    const exporter = new FilesystemExporter({} as SourceAdapter, 1);
+    await exporter.export({
+      graph: retryGraph, directory: output, format: 'markdown', identity: 'retry-id', archive: false, dryRun: false,
+      cacheDirectory: temporary, resourcesByPage: resources,
+    });
+    const rootBefore = await readFile(path.join(output, 'index.md'), 'utf8');
+    const childPath = (JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8')) as {pages: Array<{sourceCanonicalId: string; path: string}>})
+      .pages.find((page) => page.sourceCanonicalId === child.canonicalId)!.path;
+    const updatedChild = {...child, rawContent: 'Retried child body'};
+    const loadedPages: string[] = [];
+    const result = await exporter.export({
+      graph: {...retryGraph, pages: [resourceFreeRoot, updatedChild]},
+      directory: output,
+      format: 'markdown',
+      identity: 'retry-id',
+      archive: false,
+      dryRun: false,
+      cacheDirectory: temporary,
+      resourcesByPage: resources,
+      retryPageIds: new Set([child.canonicalId]),
+      loadPage: async (page) => {
+        loadedPages.push(page.canonicalId);
+        return page;
+      },
+    });
+    expect(result.mode).toBe('patched');
+    expect(loadedPages).toEqual([child.canonicalId]);
+    expect(await readFile(path.join(output, 'index.md'), 'utf8')).toBe(rootBefore);
+    expect(await readFile(path.join(output, childPath), 'utf8')).toContain('Retried child body');
+    expect(result.manifest.pages).toHaveLength(2);
+  });
+
+  it('reuses verified files that are outside a targeted resource retry', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-resource-retry-'));
+    const output = path.join(temporary, 'site');
+    const resourceFreeRoot = {...root, rawContent: '# Root\n\n[Child](/child)', references: root.references.filter((reference) => reference.kind === 'page')};
+    const childWithFiles = {
+      ...child,
+      rawContent: '[Good](good.pdf) [Bad](bad.pdf)',
+      references: [
+        {raw: 'good.pdf', href: 'good.pdf', kind: 'attachment' as const},
+        {raw: 'bad.pdf', href: 'bad.pdf', kind: 'attachment' as const},
+      ],
+    };
+    const retryGraph = {...graph, pages: [resourceFreeRoot, childWithFiles]};
+    const childResources: SourceResource[] = [
+      {provider: 'yandex-wiki', id: 'good', pageId: child.id, name: 'good.pdf', kind: 'attachment'},
+      {provider: 'yandex-wiki', id: 'bad', pageId: child.id, name: 'bad.pdf', kind: 'attachment'},
+    ];
+    const resources = new Map<string, SourceResource[]>([[resourceFreeRoot.canonicalId, []], [child.canonicalId, childResources]]);
+    const downloads = new Map<string, number>();
+    const source = {
+      downloadResource: async (item: SourceResource, destination: string) => {
+        downloads.set(item.id, (downloads.get(item.id) ?? 0) + 1);
+        await writeFile(destination, item.id);
+        return {path: destination, size: item.id.length, sha256: createHash('sha256').update(item.id).digest('hex')};
+      },
+    } as SourceAdapter;
+    const exporter = new FilesystemExporter(source, 1);
+    await exporter.export({
+      graph: retryGraph, directory: output, format: 'markdown', identity: 'resource-retry', archive: false, dryRun: false,
+      cacheDirectory: temporary, resourcesByPage: resources,
+    });
+    const retried = await exporter.export({
+      graph: retryGraph, directory: output, format: 'markdown', identity: 'resource-retry', archive: false, dryRun: false,
+      cacheDirectory: temporary, resourcesByPage: resources, retryPageIds: new Set([child.canonicalId]),
+      retryResourceIds: new Map([[child.canonicalId, new Set(['bad'])]]),
+    });
+
+    expect(retried.mode).toBe('patched');
+    expect(Object.fromEntries(downloads)).toEqual({good: 1, bad: 2});
+    expect(retried.manifest.pages.find((page) => page.sourceCanonicalId === child.canonicalId)?.resources)
+      .toEqual(expect.arrayContaining([expect.objectContaining({sourceId: 'good'}), expect.objectContaining({sourceId: 'bad'})]));
+  });
+
   it('allows an existing empty destination directory', async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-empty-'));
     const output = path.join(temporary, 'site');

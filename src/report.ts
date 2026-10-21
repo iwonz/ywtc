@@ -25,6 +25,7 @@ import {
   type TransferReportPage,
   type TransferReportSummary,
 } from './report-contract.js';
+import {buildRetryPlan} from './retry-plan.js';
 import type {RunStatus} from './state.js';
 
 export type {
@@ -313,6 +314,35 @@ export class TransferReport {
     };
   }
 
+  seedRetryBaseline(baseline: TransferReportData, attemptedPageIds: ReadonlySet<string>): void {
+    this.data.selection = structuredClone(baseline.selection);
+    this.data.excludedPages = structuredClone(baseline.excludedPages);
+    this.data.edges = structuredClone(baseline.edges);
+    this.data.pages = structuredClone(baseline.pages).map((page) => ({
+      ...page,
+      attemptedInRun: false,
+      outcomeRunId: page.outcomeRunId ?? baseline.runId,
+      resourceItems: page.resourceItems.map((resource) => ({
+        ...resource,
+        attemptedInRun: false,
+        outcomeRunId: resource.outcomeRunId ?? baseline.runId,
+      })),
+      comments: {
+        ...page.comments,
+        attemptedInRun: false,
+        outcomeRunId: page.comments.outcomeRunId ?? baseline.runId,
+      },
+    }));
+    for (const issue of baseline.issues) {
+      if (issue.pageId && attemptedPageIds.has(issue.pageId)) continue;
+      const {
+        occurrences, action: _action, pageTitle: _pageTitle, pageAnchor: _pageAnchor,
+        resourceName: _resourceName, commentLabel: _commentLabel, ...input
+      } = issue;
+      for (let index = 0; index < Math.max(1, occurrences); index += 1) this.issue(input);
+    }
+  }
+
   registerPages(pages: DiscoveredPage[]): void {
     for (const page of pages) {
       if (this.data.pages.some((item) => item.sourceCanonicalId === page.canonicalId)) continue;
@@ -342,7 +372,18 @@ export class TransferReport {
         normalizations: [],
         adaptations: [],
         preservedExternalReferences: 0,
-        comments: {status: this.data.commentsEnabled ? 'planned' : 'skipped', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0},
+        attemptedInRun: true,
+        outcomeRunId: this.data.runId,
+        comments: {
+          status: this.data.commentsEnabled ? 'planned' : 'skipped',
+          threads: 0,
+          comments: 0,
+          participants: 0,
+          attachments: 0,
+          bytes: 0,
+          attemptedInRun: true,
+          outcomeRunId: this.data.runId,
+        },
       });
     }
     if (this.data.selection.excluded.length > 0) this.data.excludedPages = reportExcludedPages(this.data.selection, this.data);
@@ -355,6 +396,14 @@ export class TransferReport {
   }
 
   addPage(page: TransferReportPage, previews?: PreviewPair, collectIssues = true): void {
+    page.attemptedInRun ??= true;
+    page.outcomeRunId ??= this.data.runId;
+    for (const resource of page.resourceItems) {
+      resource.attemptedInRun ??= true;
+      resource.outcomeRunId ??= this.data.runId;
+    }
+    page.comments.attemptedInRun ??= true;
+    page.comments.outcomeRunId ??= this.data.runId;
     page.warnings = [...new Set(page.warnings)];
     page.normalizations = [...new Set(page.normalizations ?? [])];
     page.adaptations = [...new Set(page.adaptations ?? [])];
@@ -567,6 +616,11 @@ export class TransferReport {
     const resourceOutcomes = Object.values(resourceStatusCounts).reduce((total, value) => total + value, 0);
     if (pageOutcomes !== this.data.summary.pages || resourceOutcomes !== this.data.summary.resources) {
       throw new Error('Report outcome invariant failed: source inventory does not reconcile with exclusive outcomes');
+    }
+    if (this.data.retry && !this.data.dryRun) {
+      const remaining = buildRetryPlan(this.data);
+      this.data.retry.remainingRetryable = remaining.remainingRetryable;
+      this.data.retry.remainingTerminal = remaining.remainingTerminal;
     }
   }
 

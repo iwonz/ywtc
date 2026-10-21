@@ -5,6 +5,7 @@ import {resolveDestinationLocator, resolveSourceLocator} from './locators.js';
 import {createLogger} from './logger.js';
 import type {TransferResult} from './migrator.js';
 import type {MigrationReportPaths} from './report.js';
+import type {RetryExecution} from './retry-plan.js';
 import {initializeWorkspace, resolveWorkspace, resolveWorkspacePath} from './workspace.js';
 
 export type ParsedMigrationCommand = Extract<CliCommand, {command: 'migrate'}>;
@@ -62,7 +63,12 @@ export function readyMigrationCommand(command: ParsedMigrationCommand): ReadyMig
   return {...rest, source: command.source, destination: command.destination};
 }
 
-function resumeCommand(command: ReadyMigrationCommand, workdir: string): string {
+function shellRetryCommand(rootRunId: string, workdir: string): string {
+  return `ywtc retry ${rootRunId} --workdir ${JSON.stringify(workdir)}`;
+}
+
+function resumeCommand(command: ReadyMigrationCommand, workdir: string, retry?: RetryExecution): string {
+  if (retry) return shellRetryCommand(retry.rootRunId, workdir);
   return [
     'ywtc migrate',
     `--source ${JSON.stringify(command.source)}`,
@@ -80,7 +86,7 @@ function resumeCommand(command: ReadyMigrationCommand, workdir: string): string 
   ].join(' ');
 }
 
-export async function runMigrationCommand(command: ReadyMigrationCommand): Promise<MigrationCommandOutcome> {
+export async function runMigrationCommand(command: ReadyMigrationCommand, retry?: RetryExecution): Promise<MigrationCommandOutcome> {
   const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
   const initialized = await initializeWorkspace(workspace);
   const config = readWorkspaceConfig(workspace.configFile);
@@ -104,7 +110,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
   const terminate = () => { signalCode = 143; controller.abort(new Error('Interrupted by SIGTERM')); };
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', terminate);
-  heading('ywtc transfer');
+  heading(retry ? 'ywtc targeted retry' : 'ywtc transfer');
   console.log(`  Workdir      ${workspace.root} ${paint(90, `(${workspace.source})`)}`);
   console.log(`  Source       ${command.source} ${paint(90, `[${source.profile.name}]`)}`);
   console.log(`  Destination  ${command.destination}${destination.type === 'remote' ? ` ${paint(90, `[${destination.profile.name}]`)}` : ` ${paint(90, `[${destination.format}]`)}`}`);
@@ -112,6 +118,13 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
   console.log(`  Source state ${command.sourceStatus}`);
   console.log(`  Comments     ${command.comments ? 'enabled' : 'disabled'}`);
   console.log(`  Mode         ${command.dryRun ? paint(33, 'dry-run · read-only') : paint(35, 'live')}`);
+  if (retry) {
+    console.log(`  Retry root   ${retry.rootRunId}`);
+    console.log(`  Previous run ${retry.parentRunId}`);
+    console.log(`  Attempt      ${retry.attempt}`);
+    console.log(`  Selected     ${retry.plan.retryPageIds.length} pages · ${Object.values(retry.plan.selectedResourceIds).flat().length} files · ${retry.plan.selectedCommentPageIds.length} comment archives`);
+    console.log(`  Context      ${retry.plan.contextPageIds.length} ancestor pages`);
+  }
   if (initialized.created.length > 0) console.log(`  Initialized  ${initialized.created.join(', ')}`);
 
   let result: TransferResult | undefined;
@@ -134,6 +147,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
           reportsDirectory: workspace.reportsDirectory,
           signal: controller.signal,
           ...(stateFilename ? {stateFilename} : {}),
+          ...(retry ? {retry} : {}),
           onStatus: (message) => { task.output = message; },
         });
       },
@@ -152,7 +166,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
       console.log(`  Workdir  ${workspace.root}`);
       console.log(`  Reports  ${workspace.reportsDirectory}`);
       if (reportBearingError(error)) await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume   ${resumeCommand(command, workspace.root)}`);
+      console.log(`  Resume   ${resumeCommand(command, workspace.root, retry)}`);
       return {
         code: signalCode,
         workspaceRoot: workspace.root,
@@ -164,7 +178,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
       console.log('  Status  failed');
       console.log(`  State   ${error.stateFilename}`);
       await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume  ${resumeCommand(command, workspace.root)}`);
+      console.log(`  Resume  ${resumeCommand(command, workspace.root, retry)}`);
     }
     throw error;
   } finally {
@@ -189,9 +203,20 @@ export async function runMigrationCommand(command: ReadyMigrationCommand): Promi
   console.log(`  Quality ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.adaptations} adaptations · ${result.summary.normalizations} safe normalizations · ${result.summary.preservedExternalReferences} external references preserved`);
   if (result.output) console.log(`  Output  ${result.output}`);
   if (result.archive) console.log(`  Archive ${result.archive}`);
-  if (result.hasErrors) console.log(`  Resume  ${resumeCommand(command, workspace.root)}`);
+  let retryIncomplete = false;
+  if (retry) {
+    const remainingRetryable = result.retry?.remainingRetryable ?? result.summary.retryableFailures;
+    const remainingTerminal = result.retry?.remainingTerminal ?? Math.max(0,
+      result.summary.partial + result.summary.failed + result.summary.blocked + result.summary.conflicts - remainingRetryable,
+    );
+    console.log(`  Retry root    ${retry.rootRunId}`);
+    console.log(`  Previous run  ${retry.parentRunId}`);
+    console.log(`  Remaining     ${remainingRetryable} retryable · ${remainingTerminal} terminal`);
+    retryIncomplete = remainingRetryable > 0 || remainingTerminal > 0;
+  }
+  if (result.hasErrors || retryIncomplete) console.log(`  ${retry ? 'Next' : 'Resume'}  ${resumeCommand(command, workspace.root, retry)}`);
   return {
-    code: result.hasErrors ? 1 : 0,
+    code: result.hasErrors || retryIncomplete ? 1 : 0,
     result,
     reportPaths: result.reportPaths,
     workspaceRoot: workspace.root,

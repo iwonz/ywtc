@@ -21,6 +21,8 @@ import {HttpRequestError} from '../src/http.js';
 import {createLogger} from '../src/logger.js';
 import {MigrationRunError, Migrator} from '../src/migrator.js';
 import type {RemoteLocator} from '../src/locators.js';
+import type {TransferReportData} from '../src/report.js';
+import {buildRetryPlan} from '../src/retry-plan.js';
 
 const limits = {readConcurrency: 2, writeConcurrency: 1, downloadConcurrency: 1, uploadConcurrency: 1, requestsPerSecond: 20, burst: 20};
 const sourceProfile: YandexConnectionProfile = {
@@ -284,6 +286,35 @@ describe('comment migration pipeline', () => {
     });
     expect(adapters.counts()).toMatchObject({commentReads: 4, commentCreates: 0});
     expect(adapters.page()?.content).toContain('Page body');
+  });
+
+  it('retries only a failed comment archive from its prior run', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.failCommentReads(4);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, createLogger([]), factory, {}, {
+      delaysMs: [0, 0, 0], sleep: async () => undefined,
+    });
+    const first = await migrator.run(options);
+    const baseline = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+    const plan = buildRetryPlan(baseline);
+    expect(plan.pages['source:yandex-wiki:1']).toMatchObject({retryPage: false, resourceIds: [], retryComments: true});
+
+    const retried = await migrator.run({...options, retry: {
+      rootRunId: baseline.runId,
+      parentRunId: baseline.runId,
+      attempt: 1,
+      baseline,
+      plan,
+    }});
+    expect(retried).toMatchObject({status: 'completed', summary: {complete: 1, comments: 2, commentStatuses: {complete: 1}}});
+    expect(adapters.counts()).toMatchObject({commentReads: 5, commentCreates: 1});
+    const report = JSON.parse(await readFile(retried.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.pages[0]).toMatchObject({
+      attemptedInRun: true,
+      comments: {status: 'complete', attemptedInRun: true, outcomeRunId: report.runId},
+    });
   });
 
   it('attaches a full Markdown archive when destination rejects the inline size', async () => {

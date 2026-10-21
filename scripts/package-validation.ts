@@ -84,6 +84,17 @@ for (const option of [
 ]) {
   if (!migrateHelp.stdout.includes(option)) throw new Error(`Installed ywtc migrate help is missing ${option}`);
 }
+const retryHelp = await execFileAsync(executable, ['retry', '--help'], {encoding: 'utf8'});
+for (const option of ['-w, --workdir', '-n, --dry-run', '-o, --open-report', '-j, --concurrency']) {
+  if (!retryHelp.stdout.includes(option)) throw new Error(`Installed ywtc retry help is missing ${option}`);
+}
+try {
+  await execFileAsync(executable, ['retry', 'last'], {encoding: 'utf8'});
+  throw new Error('Installed ywtc retry unexpectedly accepted the non-canonical selector "last"');
+} catch (error) {
+  const stderr = (error as {stderr?: string}).stderr ?? '';
+  if (!stderr.includes('canonical Run ID')) throw new Error(`Installed ywtc retry ID diagnosis is not actionable: ${stderr}`);
+}
 const updateHelp = await execFileAsync(executable, ['update', '--help'], {encoding: 'utf8'});
 for (const option of ['-i, --install', '-c, --via']) {
   if (!updateHelp.stdout.includes(option)) throw new Error(`Installed ywtc update help is missing ${option}`);
@@ -131,6 +142,40 @@ await Promise.all([
   access(path.join(workspace, '.ywtc-workspace.json')).then(() => { throw new Error('init created a workspace marker'); }, () => undefined),
   access(path.join(workspace, '.env')).then(() => { throw new Error('init created an .env file'); }, () => undefined),
 ]);
+
+const completedRunId = '11111111-1111-4111-8111-111111111111';
+const completedState = path.join(workspace, '.states', 'completed.json');
+const completedReportDirectory = path.join(workspace, '.states', 'reports', completedRunId);
+await mkdir(completedReportDirectory, {recursive: true});
+await writeFile(completedState, '{}\n', {mode: 0o600});
+await writeFile(path.join(completedReportDirectory, 'index.html'), '<!doctype html><title>completed</title>', {mode: 0o600});
+await writeFile(path.join(completedReportDirectory, 'report.json'), `${JSON.stringify({
+  runId: completedRunId,
+  startedAt: '2026-10-21T10:00:00.000Z',
+  finishedAt: '2026-10-21T10:01:00.000Z',
+  status: 'completed',
+  dryRun: false,
+  commentsEnabled: false,
+  scope: 'page',
+  sourceStatus: 'all',
+  direction: 'yandex-wiki → confluence',
+  source: {provider: 'yandex-wiki', profile: 'yandex', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+  destination: {provider: 'confluence', profile: 'confluence', id: '2', url: 'https://confluence.example/pages/2'},
+  invocation: {
+    source: {locator: 'https://wiki.example/root', profile: 'yandex'},
+    destination: {type: 'remote', locator: 'https://confluence.example/pages/2', profile: 'confluence'},
+    scope: 'page', sourceStatus: 'all', comments: false, archive: false,
+    state: {mode: 'automatic', path: completedState},
+  },
+  state: {id: 'completed', path: completedState, mode: 'automatic', source: 'existing'},
+  pages: [], excludedPages: [], edges: [], hierarchyRepairs: [], warnings: [], errors: [], issues: [], outputs: [],
+  summary: {inventoryComplete: true, inventoryRemainingFailures: 0, complete: 0, partial: 0, failed: 0, blocked: 0, conflicts: 0, notStartedPages: 0},
+}, null, 2)}\n`, {mode: 0o600});
+const reportsBeforeNoActionRetry = await readdir(path.join(workspace, '.states', 'reports'));
+const noActionRetry = await execFileAsync(executable, ['retry', completedRunId, '--workdir', workspace], {encoding: 'utf8'});
+if (!noActionRetry.stdout.includes('Migration is already complete')) throw new Error('Installed ywtc retry did not recognize a completed lineage locally');
+const reportsAfterNoActionRetry = await readdir(path.join(workspace, '.states', 'reports'));
+if (reportsAfterNoActionRetry.length !== reportsBeforeNoActionRetry.length) throw new Error('No-action retry created an unexpected report');
 
 const missingWorkspace = path.join(temporary, 'missing-workspace');
 try {

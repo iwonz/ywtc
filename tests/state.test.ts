@@ -33,7 +33,15 @@ describe('transfer state', () => {
     const filename = path.join(directory, 'state.json');
     const store = new StateStore(filename);
     await store.load(identity);
-    const run = await store.beginRun('linked', false, 'current', true);
+    const run = await store.beginRun('linked', false, 'current', true, {
+      retryRootRunId: '11111111-1111-4111-8111-111111111111',
+      retryParentRunId: '22222222-2222-4222-8222-222222222222',
+      retryAttempt: 2,
+      retrySelectedPages: 3,
+      retrySelectedResources: 1,
+      retrySelectedComments: 2,
+      retryContextPages: 4,
+    });
     await store.setRunComments(run.id, {threads: 1, comments: 2, attachments: 1});
     await store.setRunSelection(run.id, {
       requestedStatus: 'current', effectiveStatus: 'current', returnedDescendants: 9, selectedDescendants: 2,
@@ -73,7 +81,12 @@ describe('transfer state', () => {
     const resumed = new StateStore(filename);
     const state = await resumed.load(identity);
     expect(state.runs.find((item) => item.id === run.id)?.status).toBe('interrupted');
-    expect(state.runs.find((item) => item.id === run.id)).toMatchObject({sourceStatus: 'current', returnedDescendants: 9, selectedDescendants: 2, excludedPages: 1, maximumDepth: 2, commentsEnabled: true, commentThreads: 1, comments: 2, commentAttachments: 1});
+    expect(state.runs.find((item) => item.id === run.id)).toMatchObject({
+      operation: 'retry', sourceStatus: 'current', returnedDescendants: 9, selectedDescendants: 2,
+      excludedPages: 1, maximumDepth: 2, commentsEnabled: true, commentThreads: 1, comments: 2,
+      commentAttachments: 1, retryAttempt: 2, retrySelectedPages: 3, retrySelectedResources: 1,
+      retrySelectedComments: 2, retryContextPages: 4,
+    });
     expect(state.pages['wiki:10']).toMatchObject({status: 'discovered', destinationFingerprint: 'page-fingerprint', destinationVersion: '8'});
     expect(state.pages['wiki:10']?.comments).toMatchObject({status: 'complete', destinationId: 'comment-1', destinationVersion: '3', comments: 2});
     expect(state.pages['wiki:11']).toMatchObject({

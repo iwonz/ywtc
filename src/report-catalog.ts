@@ -17,6 +17,12 @@ const reportListSchema = z.object({
   scope: z.enum(['page', 'subtree', 'linked']),
   sourceStatus: z.enum(['all', 'current']).optional().default('all'),
   direction: z.string(),
+  retry: z.object({
+    rootRunId: z.string().regex(runIdPattern), parentRunId: z.string().regex(runIdPattern), attempt: z.number().int().positive(),
+    selectedPages: z.number().nonnegative(), selectedResources: z.number().nonnegative(), selectedComments: z.number().nonnegative(),
+    contextPages: z.number().nonnegative(), carriedForward: z.number().nonnegative(), remainingRetryable: z.number().nonnegative(),
+    remainingTerminal: z.number().nonnegative(), preview: z.boolean(),
+  }).optional(),
   warnings: z.array(z.string()),
   errors: z.array(z.string()),
   summary: z.object({
@@ -120,6 +126,7 @@ export interface ReportCatalogEntry {
   html: string;
   json: string;
   url: string;
+  retry?: z.infer<typeof reportListSchema>['retry'];
 }
 
 export interface ReportCatalogResult {
@@ -237,6 +244,7 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     html,
     json,
     url: pathToFileURL(html).href,
+    ...(parsed.retry ? {retry: parsed.retry} : {}),
   };
 }
 

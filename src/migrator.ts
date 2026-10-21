@@ -61,6 +61,7 @@ import {
   type TransferReportSummary,
 } from './report.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
+import type {RetryExecution} from './retry-plan.js';
 import {
   SourceInventoryOperationError,
   SourceInventoryStore,
@@ -97,6 +98,7 @@ export interface TransferOptions {
   reportsDirectory: string;
   signal?: AbortSignal;
   onStatus?: (message: string) => void;
+  retry?: RetryExecution;
 }
 
 export interface TransferResult {
@@ -108,6 +110,7 @@ export interface TransferResult {
   stateBackupFilename?: string;
   output?: string;
   archive?: string;
+  retry?: {remainingRetryable: number; remainingTerminal: number};
   summary: TransferReportSummary;
 }
 
@@ -186,6 +189,129 @@ function sourceFingerprint(page: SourcePage): string {
     ? `${page.contentAvailability.status}:${page.contentAvailability.sourceType}:${page.contentAvailability.reason}`
     : 'available';
   return sha256(`${page.title}\0${page.rawContent}\0${page.version ?? ''}\0${availability}`);
+}
+
+function sourceResourceFingerprint(resource: SourceResource): string {
+  return sha256(JSON.stringify({
+    id: resource.id,
+    name: resource.name,
+    preferredName: resource.preferredName,
+    referenceAliases: resource.referenceAliases,
+    size: resource.size,
+    mimeType: resource.mimeType,
+    downloadUrl: resource.downloadUrl,
+    metadata: resource.metadata,
+  }));
+}
+
+function sourceResourceState(resource: SourceResource): Pick<ResourceTransferState, 'sourceId' | 'sourceName' | 'sourceFingerprint'> {
+  return {sourceId: resource.id, sourceName: resource.name, sourceFingerprint: sourceResourceFingerprint(resource)};
+}
+
+function retryableSourceRead(error: unknown): boolean {
+  return error instanceof HttpRequestError
+    && (error.status === undefined || error.status === 429 || error.status >= 500);
+}
+
+function reportSourcePage(
+  report: RetryExecution['baseline'],
+  page: TransferReportPage,
+): PageGraph['pages'][number] {
+  let locator = page.sourceId;
+  if (report.source.provider === 'yandex-wiki') {
+    try {
+      locator = new URL(page.sourceUrl).pathname.replace(/^\/+|\/+$/g, '');
+    } catch {
+      locator = page.sourceUrl;
+    }
+  }
+  return {
+    provider: report.source.provider,
+    profile: report.source.profile,
+    id: page.sourceId,
+    canonicalId: page.sourceCanonicalId,
+    title: page.sourceTitle,
+    locator,
+    url: page.sourceUrl,
+    rawContent: '',
+    rawFormat: report.source.provider === 'yandex-wiki' ? 'yfm' : 'confluence-storage',
+    references: [],
+    depth: page.depth,
+    ...(page.projectedParentId ? {projectedParentId: page.projectedParentId} : {}),
+  };
+}
+
+async function targetedRetryGraph(
+  source: SourceAdapter,
+  root: SourcePage,
+  retry: RetryExecution,
+  concurrency: number,
+  signal?: AbortSignal,
+): Promise<PageGraph> {
+  const executionIds = new Set([...retry.plan.retryPageIds, ...retry.plan.contextPageIds]);
+  const baselinePages = retry.baseline.pages
+    .filter((page) => executionIds.has(page.sourceCanonicalId))
+    .sort((left, right) => left.depth - right.depth || left.sourceCanonicalId.localeCompare(right.sourceCanonicalId));
+  const hydrated = new Map<string, PageGraph['pages'][number]>();
+  const failures: Array<{
+    page: PageGraph['pages'][number];
+    code: string;
+    message: string;
+    retryable: boolean;
+  }> = [];
+  const queue = new PQueue({concurrency: Math.max(1, concurrency)});
+  await Promise.all(baselinePages.map((baseline) => queue.add(async () => {
+    if (signal?.aborted) throw signal.reason ?? new Error('Targeted retry discovery cancelled');
+    const stub = reportSourcePage(retry.baseline, baseline);
+    try {
+      const current = baseline.sourceId === root.id ? root : await source.getPage(baseline.sourceId);
+      if (current.canonicalId !== baseline.sourceCanonicalId) {
+        throw new Error(`Source immutable ID mismatch for ${baseline.sourceTitle}: expected ${baseline.sourceCanonicalId}, received ${current.canonicalId}`);
+      }
+      hydrated.set(baseline.sourceCanonicalId, {
+        ...current,
+        depth: baseline.depth,
+        ...(baseline.projectedParentId ? {projectedParentId: baseline.projectedParentId} : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({
+        page: stub,
+        code: 'source-retry-page-read-failed',
+        message,
+        retryable: retryableSourceRead(error),
+      });
+    }
+  })));
+  const selection = retry.baseline.selection ?? {
+    requestedStatus: retry.baseline.sourceStatus,
+    effectiveStatus: retry.baseline.sourceStatus,
+    returnedDescendants: retry.baseline.summary.returnedDescendants,
+    selectedDescendants: retry.baseline.summary.selectedDescendants,
+    excluded: [],
+    maximumDepth: retry.baseline.summary.maximumDepth,
+    hierarchyGaps: [],
+    notes: [],
+  };
+  if (failures.length > 0) {
+    const pages = baselinePages.map((page) => hydrated.get(page.sourceCanonicalId) ?? failures.find((failure) => failure.page.canonicalId === page.sourceCanonicalId)!.page);
+    throw new IncompleteSourceDiscoveryError(
+      `Targeted retry could not read ${failures.length} of ${baselinePages.length} required source page(s)`,
+      pages,
+      selection,
+      failures,
+    );
+  }
+  const pages = baselinePages.map((page) => hydrated.get(page.sourceCanonicalId)!);
+  const rootPage = retry.baseline.pages.find((page) => page.sourceId === retry.baseline.source.rootId)
+    ?? retry.baseline.pages.find((page) => page.depth === 0);
+  return {
+    rootId: rootPage?.sourceCanonicalId ?? root.canonicalId,
+    pages,
+    edges: structuredClone(retry.baseline.edges),
+    warnings: [],
+    selection: structuredClone(selection),
+  };
 }
 
 function cachedPagePath(cacheDirectory: string, canonicalId: string): string {
@@ -612,6 +738,32 @@ function reportPage(input: {
   };
 }
 
+function retryObjectProvenance(
+  page: TransferReportPage,
+  retry: RetryExecution | undefined,
+  runId: string,
+): TransferReportPage {
+  if (!retry) return page;
+  const plan = retry.plan.pages[page.sourceCanonicalId];
+  if (!plan) return page;
+  const baseline = retry.baseline.pages.find((candidate) => candidate.sourceCanonicalId === page.sourceCanonicalId);
+  const targetedResources = new Set(plan.resourceIds);
+  page.attemptedInRun = true;
+  page.outcomeRunId = runId;
+  for (const resource of page.resourceItems) {
+    const attempted = plan.retryPage || targetedResources.has(resource.sourceId);
+    resource.attemptedInRun = attempted;
+    resource.outcomeRunId = attempted
+      ? runId
+      : baseline?.resourceItems.find((candidate) => candidate.sourceId === resource.sourceId)?.outcomeRunId ?? retry.parentRunId;
+  }
+  page.comments.attemptedInRun = plan.retryComments;
+  page.comments.outcomeRunId = plan.retryComments
+    ? runId
+    : baseline?.comments.outcomeRunId ?? retry.parentRunId;
+  return page;
+}
+
 function blockedResourceStates(
   resources: SourceResource[],
   previous: Record<string, ResourceTransferState>,
@@ -623,8 +775,7 @@ function blockedResourceStates(
       const existing = previous[resource.id];
       return [resource.id, {
         ...(existing ?? {}),
-        sourceId: resource.id,
-        sourceName: resource.name,
+        ...sourceResourceState(resource),
         destinationName: existing?.destinationName ?? preferredDestinationName(resource),
         ...(existing?.size !== undefined ? {size: existing.size} : resource.size !== undefined ? {size: resource.size} : {}),
         status: 'blocked' as const,
@@ -750,8 +901,28 @@ export class Migrator {
     const store = new StateStore(stateLocation.filename);
     await store.load(identity, {fresh: options.fresh ?? false, dryRun: options.dryRun});
     try {
+    if (options.retry) {
+      const lineage = store.value.runs
+        .filter((candidate) => !candidate.dryRun
+          && candidate.status !== 'running'
+          && (candidate.id === options.retry!.rootRunId || candidate.retryRootRunId === options.retry!.rootRunId))
+        .sort((left, right) => Date.parse(right.finishedAt ?? right.startedAt) - Date.parse(left.finishedAt ?? left.startedAt));
+      const latest = lineage[0];
+      if (!latest) throw new Error(`Retry lineage ${options.retry.rootRunId} is not present in state ${stateLocation.filename}.`);
+      if (latest.id !== options.retry.parentRunId) {
+        throw new Error(`Retry lineage advanced to ${latest.id} after the plan was built. Run "ywtc retry ${options.retry.rootRunId}" again.`);
+      }
+    }
     if (!options.dryRun) await store.save();
-    const run = await store.beginRun(options.scope, options.dryRun, sourceStatus, commentsEnabled);
+    const run = await store.beginRun(options.scope, options.dryRun, sourceStatus, commentsEnabled, options.retry ? {
+      retryRootRunId: options.retry.rootRunId,
+      retryParentRunId: options.retry.parentRunId,
+      retryAttempt: options.retry.attempt,
+      retrySelectedPages: options.retry.plan.retryPageIds.length,
+      retrySelectedResources: Object.values(options.retry.plan.selectedResourceIds).flat().length,
+      retrySelectedComments: options.retry.plan.selectedCommentPageIds.length,
+      retryContextPages: options.retry.plan.contextPageIds.length,
+    } : undefined);
     const report = new TransferReport({
       runId: run.id,
       secrets: secretValues(this.config),
@@ -764,6 +935,17 @@ export class Migrator {
       destination: options.destination.type === 'directory'
         ? {provider: 'filesystem', id: options.destination.path, format: options.destination.format}
         : {provider: destination!.kind, profile: destination!.profile.name, id: container!.id, url: container!.url},
+      invocation: {
+        source: {locator: options.source.value, profile: options.source.profile.name},
+        destination: options.destination.type === 'directory'
+          ? {type: 'directory', path: options.destination.path, format: options.destination.format}
+          : {type: 'remote', locator: options.destination.value, profile: options.destination.profile.name},
+        scope: options.scope,
+        sourceStatus,
+        comments: commentsEnabled,
+        archive: options.archive,
+        state: {mode: stateLocation.mode, path: stateLocation.filename},
+      },
       state: {
         id: stateLocation.id,
         path: stateLocation.filename,
@@ -771,7 +953,21 @@ export class Migrator {
         source: store.loadInfo.source,
         ...(store.loadInfo.backupFilename ? {backupPath: store.loadInfo.backupFilename} : {}),
       },
+      ...(options.retry ? {retry: {
+        rootRunId: options.retry.rootRunId,
+        parentRunId: options.retry.parentRunId,
+        attempt: options.retry.attempt,
+        selectedPages: options.retry.plan.retryPageIds.length,
+        selectedResources: Object.values(options.retry.plan.selectedResourceIds).flat().length,
+        selectedComments: options.retry.plan.selectedCommentPageIds.length,
+        contextPages: options.retry.plan.contextPageIds.length,
+        carriedForward: options.retry.plan.carriedForward,
+        remainingRetryable: options.retry.plan.remainingRetryable,
+        remainingTerminal: options.retry.plan.remainingTerminal,
+        preview: options.dryRun,
+      }} : {}),
     });
+    if (options.retry) report.seedRetryBaseline(options.retry.baseline, new Set(options.retry.plan.retryPageIds));
     const sourceInventoryStore = await SourceInventoryStore.open({
       cacheDirectory: options.cacheDirectory,
       stateId: stateLocation.id,
@@ -795,15 +991,17 @@ export class Migrator {
       status(`Discovering ${options.scope} scope from ${root.title}`);
       for (let attempt = 0; ; attempt += 1) {
         try {
-          graph = await discoverPageGraph({
-            adapter: source,
-            root,
-            scope: options.scope,
-            sourceStatus,
-            ...(options.signal ? {signal: options.signal} : {}),
-            checkpoint: sourceInventoryStore,
-            onProgress: (progress) => status(`Discovery: ${progress.pages} pages, ${progress.edges} links${progress.active ? ` · ${progress.active}` : ''}`),
-          });
+          graph = options.retry && !options.retry.plan.discoveryIncomplete && options.destination.type === 'remote'
+            ? await targetedRetryGraph(source, root, options.retry, options.concurrency, options.signal)
+            : await discoverPageGraph({
+              adapter: source,
+              root,
+              scope: options.scope,
+              sourceStatus,
+              ...(options.signal ? {signal: options.signal} : {}),
+              checkpoint: sourceInventoryStore,
+              onProgress: (progress) => status(`Discovery: ${progress.pages} pages, ${progress.edges} links${progress.active ? ` · ${progress.active}` : ''}`),
+            });
           break;
         } catch (error) {
           const retryable = error instanceof IncompleteSourceDiscoveryError
@@ -833,9 +1031,59 @@ export class Migrator {
         throw new Error('The destination page belongs to the selected source graph. Choose a destination outside the transferred graph.');
       }
       status(`Source tree: root ${root.title} · ${graph.selection.returnedDescendants} descendants returned · ${graph.selection.selectedDescendants} selected · ${graph.selection.excluded.length} excluded · depth ${graph.selection.maximumDepth}`);
+      await store.setGraph(graph.rootId, graph.edges);
+      if (options.retry) {
+        if (options.retry.plan.discoveryIncomplete) {
+          const baselineIds = new Set(options.retry.baseline.pages.map((page) => page.sourceCanonicalId));
+          const selectedIds = new Set(options.retry.plan.retryPageIds);
+          for (const page of graph.pages) {
+            if (baselineIds.has(page.canonicalId)) continue;
+            selectedIds.add(page.canonicalId);
+            options.retry.plan.pages[page.canonicalId] = {
+              pageId: page.canonicalId,
+              decision: 'retry',
+              retryPage: true,
+              resourceIds: [],
+              retryComments: commentsEnabled,
+              reasons: ['discovery-completed'],
+            };
+          }
+          const pagesById = new Map(graph.pages.map((page) => [page.canonicalId, page]));
+          const contextIds = new Set(options.retry.plan.contextPageIds);
+          for (const selectedId of selectedIds) {
+            let current = pagesById.get(selectedId);
+            const seen = new Set<string>();
+            while (current?.projectedParentId && !seen.has(current.projectedParentId)) {
+              const parentId = current.projectedParentId;
+              seen.add(parentId);
+              if (!selectedIds.has(parentId)) contextIds.add(parentId);
+              current = pagesById.get(parentId);
+            }
+          }
+          options.retry.plan.retryPageIds = [...selectedIds];
+          options.retry.plan.contextPageIds = [...contextIds];
+          options.retry.plan.remainingRetryable = selectedIds.size;
+          if (report.data.retry) {
+            report.data.retry.selectedPages = selectedIds.size;
+            report.data.retry.contextPages = contextIds.size;
+          }
+          await store.setRunRetrySelection(run.id, {
+            pages: selectedIds.size,
+            resources: Object.values(options.retry.plan.selectedResourceIds).flat().length,
+            comments: options.retry.plan.selectedCommentPageIds.length,
+            contextPages: contextIds.size,
+          });
+        }
+        if (options.destination.type === 'remote') {
+          const executionIds = new Set([...options.retry.plan.retryPageIds, ...options.retry.plan.contextPageIds]);
+          const missing = [...executionIds].filter((id) => !graph.pages.some((page) => page.canonicalId === id));
+          if (missing.length > 0) throw new Error(`Targeted retry cannot resolve ${missing.length} baseline page(s) in the current source graph: ${missing.join(', ')}`);
+          graph = {...graph, pages: graph.pages.filter((page) => executionIds.has(page.canonicalId))};
+        }
+        status(`Targeted retry: ${options.retry.plan.retryPageIds.length} actionable pages · ${options.retry.plan.contextPageIds.length} context pages`);
+      }
       status(`Caching source content for ${graph.pages.length} pages`);
       sourceFingerprints = await cacheDiscoveredPages(options.cacheDirectory, graph);
-      await store.setGraph(graph.rootId, graph.edges);
     } catch (error) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
@@ -853,9 +1101,11 @@ export class Migrator {
         const failures = new Map(error.failures.map((failure) => [failure.page.canonicalId, failure]));
         for (const page of error.pages) {
           const failure = failures.get(page.canonicalId);
+          if (options.retry && !failure && options.retry.plan.contextPageIds.includes(page.canonicalId)) continue;
           report.updatePage(page.canonicalId, {
             status: failure ? 'failed' : 'not-started',
             inventoryStatus: failure ? 'failed' : 'pending',
+            ...(options.retry ? {attemptedInRun: true, outcomeRunId: report.data.runId} : {}),
             ...(failure ? {error: failure.message} : {}),
             comments: {
               status: commentsEnabled ? 'not-started' : 'skipped',
@@ -904,6 +1154,8 @@ export class Migrator {
     let reusedInventoryCount = 0;
     let freshInventoryCount = 0;
     const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
+    const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
+    const retrySelectedIds = new Set(options.retry?.plan.retryPageIds ?? []);
     status(`Inspecting content and resources for ${graph.pages.length} pages`);
 
     const readComments = async (page: PageInventoryResult): Promise<CommentInventory> => {
@@ -929,7 +1181,9 @@ export class Migrator {
       try {
         if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
         const sourcePage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
-        const checkpoint = await sourceInventoryStore.loadComplete(sourcePage);
+        const checkpoint = retrySelectedIds.has(page.canonicalId)
+          ? undefined
+          : await sourceInventoryStore.loadComplete(sourcePage);
         let result: PageInventoryResult;
         if (checkpoint) {
           result = {
@@ -958,7 +1212,7 @@ export class Migrator {
           result = {page, sourcePage, resources, document, reused: false};
         }
 
-        if (commentsEnabled && (!result.comments || result.comments.status === 'failed')) {
+        if (commentsEnabled && !retryContextIds.has(page.canonicalId) && (!result.comments || result.comments.status === 'failed')) {
           result.comments = await readComments(result);
         }
         try {
@@ -1049,6 +1303,7 @@ export class Migrator {
           message: `${page.title}: ${warning}`,
         });
       }
+      if (retryContextIds.has(page.canonicalId)) continue;
       report.addPage(reportPage({
         page,
         status: 'planned',
@@ -1095,9 +1350,37 @@ export class Migrator {
       const message = `Source inventory incomplete: ${retained}/${graph.pages.length} pages checkpointed; ${inventoryFailures.size} required failure(s) remain after ${inventoryRecoveryAttempts} recovery attempt(s); destination mutations: 0.${first?.error ? ` First failure: ${inventoryFailureMessage(first.page, first.error)}.` : ''} Repeat the same migration to resume the retained checkpoints.`;
       throw new MigrationRunError(message, reportPaths, stateLocation.filename);
     }
+    if (options.retry) {
+      for (const pageId of options.retry.plan.retryPageIds) {
+        const pagePlan = options.retry.plan.pages[pageId];
+        if (!pagePlan) continue;
+        const selected = new Set(pagePlan.resourceIds);
+        const previous = store.value.pages[pageId]?.resources ?? {};
+        for (const resource of (resourcesByPage.get(pageId) ?? []).filter((candidate) => candidate.kind !== 'grid')) {
+          const prior = previous[resource.id];
+          const changed = !prior || (prior.sourceFingerprint
+            ? prior.sourceFingerprint !== sourceResourceFingerprint(resource)
+            : prior.sourceName !== resource.name
+              || (prior.size !== undefined && resource.size !== undefined && prior.size !== resource.size));
+          if (changed) selected.add(resource.id);
+        }
+        pagePlan.resourceIds = [...selected];
+        if (selected.size > 0) options.retry.plan.selectedResourceIds[pageId] = [...selected];
+        else delete options.retry.plan.selectedResourceIds[pageId];
+      }
+      const selectedResources = Object.values(options.retry.plan.selectedResourceIds).flat().length;
+      if (report.data.retry) report.data.retry.selectedResources = selectedResources;
+      await store.setRunRetrySelection(run.id, {
+        pages: options.retry.plan.retryPageIds.length,
+        resources: selectedResources,
+        comments: options.retry.plan.selectedCommentPageIds.length,
+        contextPages: options.retry.plan.contextPageIds.length,
+      });
+    }
     await sourceInventoryStore.markReady();
     if (!options.dryRun) {
       for (const page of graph.pages) {
+        if (retryContextIds.has(page.canonicalId)) continue;
         if (store.value.pages[page.canonicalId]) continue;
         const commentInventory = commentsByPage.get(page.canonicalId);
         const commentState: CommentTransferState | undefined = !commentsEnabled
@@ -1120,8 +1403,7 @@ export class Migrator {
         const resourceStates = Object.fromEntries((resourcesByPage.get(page.canonicalId) ?? [])
           .filter((resource) => resource.kind !== 'grid')
           .map((resource) => [resource.id, {
-            sourceId: resource.id,
-            sourceName: resource.name,
+            ...sourceResourceState(resource),
             destinationName: preferredDestinationName(resource),
             ...(resource.size !== undefined ? {size: resource.size} : {}),
             ...(resource.mimeType ? {mimeType: resource.mimeType} : {}),
@@ -1195,6 +1477,10 @@ export class Migrator {
         ...(store.loadInfo.backupFilename ? {stateBackupFilename: store.loadInfo.backupFilename} : {}),
         ...(output ? {output} : {}),
         ...(archive ? {archive} : {}),
+        ...(report.data.retry ? {retry: {
+          remainingRetryable: report.data.retry.remainingRetryable,
+          remainingTerminal: report.data.retry.remainingTerminal,
+        }} : {}),
         summary: report.data.summary,
       };
     } catch (error) {
@@ -1227,6 +1513,22 @@ export class Migrator {
     commentsByPage: Map<string, CommentInventory>,
   ): Promise<FilesystemExportResult> {
     const exporter = new FilesystemExporter(source, options.concurrency);
+    const retryResourceIds = new Map<string, ReadonlySet<string>>();
+    if (options.retry) {
+      for (const pageId of options.retry.plan.retryPageIds) {
+        const selected = new Set(options.retry.plan.selectedResourceIds[pageId] ?? []);
+        const previous = store.value.pages[pageId]?.resources ?? {};
+        for (const resource of (resourcesByPage.get(pageId) ?? []).filter((candidate) => candidate.kind !== 'grid')) {
+          const prior = previous[resource.id];
+          const changed = !prior || (prior.sourceFingerprint
+            ? prior.sourceFingerprint !== sourceResourceFingerprint(resource)
+            : prior.sourceName !== resource.name
+              || (prior.size !== undefined && resource.size !== undefined && prior.size !== resource.size));
+          if (changed) selected.add(resource.id);
+        }
+        retryResourceIds.set(pageId, selected);
+      }
+    }
     const totalResources = [...resourcesByPage.values()].reduce(
       (total, resources) => total + resources.filter((resource) => resource.kind !== 'grid').length,
       0,
@@ -1249,10 +1551,15 @@ export class Migrator {
       resourcesByPage,
       commentsByPage,
       commentsEnabled: options.comments ?? true,
+      ...(options.retry ? {retryPageIds: new Set(options.retry.plan.retryPageIds)} : {}),
+      ...(options.retry ? {retryResourceIds} : {}),
       loadPage: (page) => loadCachedPage(options.cacheDirectory, page.canonicalId),
       loadDocument: (page) => loadCachedDocument(options.cacheDirectory, page.canonicalId),
     });
-    for (const page of graph.pages) {
+    const reportPages = options.retry && (result.mode === 'patched' || options.dryRun)
+      ? graph.pages.filter((page) => options.retry!.plan.retryPageIds.includes(page.canonicalId))
+      : graph.pages;
+    for (const page of reportPages) {
       const document = await loadCachedDocument(options.cacheDirectory, page.canonicalId);
       const manifestPage = result.manifest.pages.find((item) => item.sourceCanonicalId === page.canonicalId);
       const previous = store.value.pages[page.canonicalId];
@@ -1262,8 +1569,7 @@ export class Migrator {
         const sourceResource = transferableResources[index];
         const sourceId = sourceResource?.id ?? String(index);
         return [sourceId, {
-        sourceId,
-        sourceName: sourceResource?.name ?? resource.name,
+        ...(sourceResource ? sourceResourceState(sourceResource) : {sourceId, sourceName: resource.name}),
         destinationId: resource.path,
         destinationName: resource.name,
         destinationUrl: pathToFileURL(path.join(destination.path, resource.path)).toString(),
@@ -1738,6 +2044,41 @@ export class Migrator {
   }): Promise<void> {
     const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage} = input;
     const destinationPages = new Map<string, DestinationPage>();
+    const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
+    const promotedContextIds = new Set<string>();
+    const promoteRetryContext = async (pageId: string, reason: string): Promise<void> => {
+      if (!options.retry || promotedContextIds.has(pageId)) return;
+      promotedContextIds.add(pageId);
+      const pagePlan = options.retry.plan.pages[pageId];
+      if (pagePlan) {
+        pagePlan.decision = 'retry';
+        pagePlan.retryPage = true;
+        pagePlan.retryComments = options.comments ?? true;
+        pagePlan.reasons.push(reason);
+      }
+      if (!options.retry.plan.retryPageIds.includes(pageId)) options.retry.plan.retryPageIds.push(pageId);
+      if ((options.comments ?? true) && !options.retry.plan.selectedCommentPageIds.includes(pageId)) {
+        options.retry.plan.selectedCommentPageIds.push(pageId);
+      }
+      options.retry.plan.contextPageIds = options.retry.plan.contextPageIds.filter((candidate) => candidate !== pageId);
+      options.retry.plan.remainingRetryable = options.retry.plan.retryPageIds.length;
+      if (report.data.retry) {
+        report.data.retry.selectedPages = options.retry.plan.retryPageIds.length;
+        report.data.retry.selectedComments = options.retry.plan.selectedCommentPageIds.length;
+        report.data.retry.contextPages = options.retry.plan.contextPageIds.length;
+      }
+      await store.setRunRetrySelection(report.data.runId, {
+        pages: options.retry.plan.retryPageIds.length,
+        resources: Object.values(options.retry.plan.selectedResourceIds).flat().length,
+        comments: options.retry.plan.selectedCommentPageIds.length,
+        contextPages: options.retry.plan.contextPageIds.length,
+      });
+    };
+    if (options.retry) {
+      for (const statePage of Object.values(store.value.pages)) {
+        if (statePage.destinationId) destinationPages.set(statePage.sourceCanonicalId, destinationFromState(statePage, destination));
+      }
+    }
     const mappedOwners = new Map<string, string[]>();
     for (const page of Object.values(store.value.pages)) {
       const destinationId = page.destinationId;
@@ -1756,6 +2097,13 @@ export class Migrator {
       blockedByCode: string;
     }>();
     const sourcePages = new Map(graph.pages.map((page) => [page.canonicalId, page]));
+    if (options.retry) {
+      for (const baselinePage of options.retry.baseline.pages) {
+        if (!sourcePages.has(baselinePage.sourceCanonicalId)) {
+          sourcePages.set(baselinePage.sourceCanonicalId, reportSourcePage(options.retry.baseline, baselinePage));
+        }
+      }
+    }
     const bootstrapBodies = new Map<string, RenderedDocument>();
     const totalResources = [...resourcesByPage.values()].reduce(
       (total, resources) => total + resources.filter((resource) => resource.kind !== 'grid').length,
@@ -1841,6 +2189,25 @@ export class Migrator {
         progress.staged += 1;
         updateProgress(message);
         continue;
+      }
+      if (retryContextIds.has(page.canonicalId) && saved?.destinationId) {
+        try {
+          const confirmed = await verifyConfirmedDestinationPage(destination, destinationFromState(saved, destination), this.consistencyOptions);
+          if (confirmed.parentId === parent.id) {
+            destinationPages.set(page.canonicalId, confirmed);
+            progress.staged += 1;
+            updateProgress(`verified context ${page.title}`);
+            continue;
+          }
+          await promoteRetryContext(page.canonicalId, 'context-parent-recovery');
+          options.onStatus?.(`Promoted context page for hierarchy recovery: ${page.title}`);
+        } catch (error) {
+          if (!(error instanceof ConfirmedDestinationMissingError)) throw error;
+          await promoteRetryContext(page.canonicalId, 'context-mapping-recovery');
+          options.onStatus?.(`Promoted missing context page for recovery: ${page.title}`);
+        }
+      } else if (retryContextIds.has(page.canonicalId)) {
+        await promoteRetryContext(page.canonicalId, 'context-mapping-recovery');
       }
       try {
         const ownershipConflict = ownershipConflicts.get(page.canonicalId);
@@ -2095,7 +2462,8 @@ export class Migrator {
     }
 
     const contentQueue = new PQueue({concurrency: options.concurrency});
-    const contentTasks = graph.pages.map((page) => contentQueue.add(async () => {
+    const contentPages = graph.pages.filter((page) => !retryContextIds.has(page.canonicalId) || promotedContextIds.has(page.canonicalId));
+    const contentTasks = contentPages.map((page) => contentQueue.add(async () => {
       if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
       const destinationPage = destinationPages.get(page.canonicalId);
       const document = await loadCachedDocument(options.cacheDirectory, page.canonicalId);
@@ -2135,6 +2503,8 @@ export class Migrator {
       let recoveryExpectedBody = bootstrap.body;
       const bindings = sourceResourceBindings(cachedPage, resources);
       const transferableResources = resources.filter((item) => item.kind !== 'grid');
+      const retryPagePlan = options.retry?.plan.pages[page.canonicalId];
+      const targetedResourceIds = new Set(retryPagePlan?.resourceIds ?? []);
       const resourceProblems: string[] = [];
       const failedResourceIds = new Set<string>();
       const recordResourceFailure = async (resource: SourceResource, detail: string): Promise<void> => {
@@ -2153,8 +2523,7 @@ export class Migrator {
         }
         const previous = state.resources[resource.id];
         state.resources[resource.id] = {
-          sourceId: resource.id,
-          sourceName: resource.name,
+          ...sourceResourceState(resource),
           ...(previous?.destinationId ? {destinationId: previous.destinationId} : {}),
           destinationName: previous?.destinationName ?? preferredDestinationName(resource),
           ...(previous?.sha256 ? {sha256: previous.sha256} : {}),
@@ -2196,6 +2565,13 @@ export class Migrator {
         };
         for (const resource of transferableResources) {
           const existing = state.resources[resource.id];
+          if (options.retry && !retryPagePlan?.retryPage && !targetedResourceIds.has(resource.id) && existing?.status === 'complete' && existing.destinationId) {
+            const mapped = remoteResources.find((item) => item.id === existing.destinationId);
+            if (mapped) {
+              setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: mapped});
+              continue;
+            }
+          }
           if (options.dryRun) {
             const destinationName = nameAllocator.allocate(resource, existing?.status === 'complete' ? existing.destinationName : undefined);
             setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: {
@@ -2210,7 +2586,13 @@ export class Migrator {
           try {
             const filename = containedCachePath(options.cacheDirectory, existing?.cachePath)
               ?? cachePath(options.cacheDirectory, page, resource);
-            const cached = await verifiedCacheFile(filename, existing?.sha256 ? {
+            const changedSource = existing?.sourceFingerprint
+              ? existing.sourceFingerprint !== sourceResourceFingerprint(resource)
+              : existing !== undefined && (
+                existing.sourceName !== resource.name
+                || (existing.size !== undefined && resource.size !== undefined && existing.size !== resource.size)
+              );
+            const cached = changedSource ? undefined : await verifiedCacheFile(filename, existing?.sha256 ? {
               sha256: existing.sha256,
               ...(existing.size !== undefined ? {size: existing.size} : {}),
               ...(existing.mimeType ? {mimeType: existing.mimeType} : {}),
@@ -2223,8 +2605,7 @@ export class Migrator {
             if (mappedRemote && await remoteMatches(mappedRemote, downloaded, true)) {
               setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: mappedRemote});
               state.resources[resource.id] = {
-                sourceId: resource.id,
-                sourceName: resource.name,
+                ...sourceResourceState(resource),
                 destinationId: mappedRemote.id,
                 destinationName: mappedRemote.name,
                 ...(mappedRemote.url ? {destinationUrl: mappedRemote.url} : {}),
@@ -2247,8 +2628,7 @@ export class Migrator {
             if (reconciled && await remoteMatches(reconciled, downloaded)) {
               setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: reconciled});
               state.resources[resource.id] = {
-                sourceId: resource.id,
-                sourceName: resource.name,
+                ...sourceResourceState(resource),
                 destinationId: reconciled.id,
                 destinationName: reconciled.name,
                 ...(reconciled.url ? {destinationUrl: reconciled.url} : {}),
@@ -2269,8 +2649,7 @@ export class Migrator {
               existing?.status === 'complete' && !nameAllocator.isOccupied(existing.destinationName) ? existing.destinationName : undefined,
             );
             state.resources[resource.id] = {
-              sourceId: resource.id,
-              sourceName: resource.name,
+              ...sourceResourceState(resource),
               destinationName,
               sha256: downloaded.sha256,
               size: downloaded.size,
@@ -2320,8 +2699,7 @@ export class Migrator {
             if (!remoteResources.some((item) => item.id === result.id)) remoteResources.push(result);
             setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: result});
             state.resources[resource.id] = {
-              sourceId: resource.id,
-              sourceName: resource.name,
+              ...sourceResourceState(resource),
               destinationId: result.id,
               destinationName: result.name,
               ...(result.url ? {destinationUrl: result.url} : {}),
@@ -2520,7 +2898,10 @@ export class Migrator {
           verificationDegradations = verification.status === 'partial' ? verification.differences : [];
         }
         const commentInventory = commentsByPage.get(page.canonicalId);
-        const commentState = (options.comments ?? true)
+        const reuseCommentState = Boolean(options.retry && !retryPagePlan?.retryComments && state.comments);
+        const commentState = reuseCommentState
+          ? state.comments!
+          : (options.comments ?? true)
           ? await this.transferRemoteComments({
             source,
             destination,
@@ -2546,7 +2927,7 @@ export class Migrator {
             bytes: 0,
             updatedAt: new Date().toISOString(),
           };
-        if (options.comments ?? true) {
+        if ((options.comments ?? true) && !reuseCommentState) {
           progress.comments += 1;
           updateProgress(`comments ${commentState.status} → ${page.title}`);
         }
@@ -2594,7 +2975,7 @@ export class Migrator {
             ? [{name: resource.name, error: resourceState.lastError ?? 'Resource was not transferred'}]
             : [];
         });
-        report.addPage(reportPage({
+        report.addPage(retryObjectProvenance(reportPage({
           page,
           destination: verified,
           status: finalState.status,
@@ -2610,7 +2991,7 @@ export class Migrator {
           commentsEnabled: options.comments ?? true,
           ...(commentInventory ? {commentInventory} : {}),
           commentState,
-        }), {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(verified.content ?? rendered.body, destination.kind)});
+        }), options.retry, report.data.runId), {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(verified.content ?? rendered.body, destination.kind)});
       } catch (error) {
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         const ownershipConflict = error instanceof DestinationOwnershipConflictError ? error : undefined;
@@ -2652,7 +3033,7 @@ export class Migrator {
             : [];
         });
         report.addPage(
-          reportPage({
+          retryObjectProvenance(reportPage({
             page,
             destination: actual ?? destinationPage,
             status: failureStatus,
@@ -2666,7 +3047,7 @@ export class Migrator {
             ...(commentsByPage.get(page.canonicalId) ? {commentInventory: commentsByPage.get(page.canonicalId)} : {}),
             ...(state.comments ? {commentState: state.comments} : {}),
             ...(ownershipConflict ? {conflictEvidence: {reason: ownershipConflict.reason, candidateIds: ownershipConflict.candidateIds}} : {}),
-          }),
+          }), options.retry, report.data.runId),
           actual?.content ? {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(actual.content, destination.kind)} : undefined,
         );
       } finally {

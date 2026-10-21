@@ -2,7 +2,7 @@ import {Command, Option} from '@commander-js/extra-typings';
 import type {ExportFormat, SourceStatus, TransferScope} from './domain.js';
 import {packageVersion} from './version.js';
 
-export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'reports' | 'update';
+export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'update';
 
 export type CliCommand =
   | {command: 'help'; topic?: CliHelpTopic}
@@ -41,7 +41,10 @@ export type CliCommand =
   }
   | {command: 'reports-list'; workdir?: string}
   | {command: 'reports-open'; runId?: string; workdir?: string}
+  | {command: 'retry'; runId: string; workdir?: string; dryRun: boolean; openReport: boolean; concurrency?: number}
   | {command: 'update'; install: boolean; via?: 'npm' | 'brew'};
+
+const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function nonEmpty(value: string | undefined, option: string): string | undefined {
   if (value === undefined) return undefined;
@@ -157,6 +160,24 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       });
     });
 
+  program.command('retry')
+    .description('Retry only actionable incomplete objects from a prior live migration')
+    .argument('<run-id>', 'canonical Run ID from "ywtc reports list"')
+    .option('-w, --workdir <path>', 'workspace containing the report and state')
+    .option('-n, --dry-run', 'plan the targeted retry without destination writes', false)
+    .option('-o, --open-report', 'open the generated retry report in the system browser', false)
+    .option('-j, --concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
+    .action((runIdValue: string, options) => {
+      const runId = nonEmpty(runIdValue, 'run-id')!;
+      if (!runIdPattern.test(runId)) throw new Error('retry requires a canonical Run ID shown by "ywtc reports list".');
+      const workdir = nonEmpty(options.workdir, '--workdir');
+      onCommand({
+        command: 'retry', runId, dryRun: options.dryRun, openReport: options.openReport,
+        ...(workdir ? {workdir} : {}),
+        ...(options.concurrency !== undefined ? {concurrency: options.concurrency} : {}),
+      });
+    });
+
   const reports = program.command('reports').description('List and open local migration reports');
   reports.command('list')
     .description('List valid reports from newest to oldest')
@@ -193,7 +214,7 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const helpIndex = argv.findIndex((value) => ['--help', '-h'].includes(value));
   if (helpIndex >= 0) {
     const topic = argv[0];
-    return ['init', 'doctor', 'migrate', 'reports', 'update'].includes(topic ?? '')
+    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'update'].includes(topic ?? '')
       ? {command: 'help', topic: topic as CliHelpTopic}
       : {command: 'help'};
   }

@@ -2,7 +2,9 @@
 
 ## Purpose
 Define portable, transactional, and loss-aware Markdown/HTML exports for page graphs and their attachments.
+
 ## Requirements
+
 ### Requirement: Portable filesystem destinations
 The system SHALL export a selected source graph to either Markdown or static HTML when `--destination` is a directory and `--format markdown|html` is supplied, and SHALL describe the result with one strict unversioned manifest.
 
@@ -117,3 +119,22 @@ Filesystem export SHALL preserve normalized page layouts as responsive HTML and 
 #### Scenario: Empty page is exported
 - **WHEN** a selected source page is semantically empty
 - **THEN** its file SHALL contain only the normal page wrapper or empty document body and SHALL NOT contain a source-content fallback
+
+### Requirement: Targeted managed export retry
+A filesystem retry SHALL preserve the transactional export boundary while reusing verified files from a matching managed export and regenerating actionable page payloads plus affected global artifacts.
+
+#### Scenario: Complete managed export exists
+- **WHEN** retry targets Markdown or HTML and the destination has a matching current ywtc manifest
+- **THEN** ywtc SHALL construct adjacent staging from that managed baseline, replace selected pages and resources, regenerate affected navigation and manifest data, verify the complete tree, and atomically promote it
+
+#### Scenario: Managed baseline is unavailable
+- **WHEN** no complete matching export can safely supply carried-forward files
+- **THEN** ywtc SHALL announce a full export rebuild, reuse compatible source cache where possible, and SHALL publish only a completely verified staging tree
+
+#### Scenario: Destination is unmanaged
+- **WHEN** retry finds a non-empty filesystem destination without a matching current ywtc manifest
+- **THEN** it SHALL refuse replacement before modifying that destination
+
+#### Scenario: Archive policy is enabled
+- **WHEN** a targeted export retry changes the managed output and its restored request enables archive creation
+- **THEN** ywtc SHALL stream a new non-overwriting ZIP from the final verified tree and SHALL leave earlier archives untouched

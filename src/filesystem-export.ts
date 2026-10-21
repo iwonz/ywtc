@@ -1,6 +1,6 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {createWriteStream} from 'node:fs';
-import {access, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile} from 'node:fs/promises';
+import {access, cp, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import {ZipArchive} from '@archiver/archiver';
@@ -10,7 +10,7 @@ import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticH
 import {commentAttachmentUses, createCommentArchiveZip, renderCommentArchive} from './comments.js';
 import type {CommentInventory, ExportFormat, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
 import type {CommentTransferStatus} from './state.js';
-import {DestinationNameAllocator} from './resource-reconciliation.js';
+import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
 import {acquireExclusiveLease} from './exclusive-lease.js';
 
 export interface ExportManifestPage {
@@ -19,7 +19,7 @@ export interface ExportManifestPage {
   title: string;
   path: string;
   parentId?: string;
-  resources: Array<{name: string; path: string; size?: number; sha256?: string}>;
+  resources: Array<{sourceId?: string; name: string; path: string; size?: number; sha256?: string}>;
   degraded: boolean;
   warnings: string[];
   adaptations: string[];
@@ -54,6 +54,7 @@ const manifestPageSchema = z.object({
   path: z.string(),
   parentId: z.string().optional(),
   resources: z.array(z.object({
+    sourceId: z.string().optional(),
     name: z.string(),
     path: z.string(),
     size: z.number().nonnegative().optional(),
@@ -88,6 +89,7 @@ const exportManifestSchema = z.object({
 
 export interface FilesystemExportResult {
   directory: string;
+  mode: 'planned' | 'patched' | 'rebuilt';
   archive?: string;
   backup?: string;
   manifest: ExportManifest;
@@ -125,13 +127,43 @@ async function exists(filename: string): Promise<boolean> {
   try { await access(filename); return true; } catch { return false; }
 }
 
-async function managedManifest(directory: string, identity: string): Promise<boolean> {
+async function readManagedManifest(directory: string, identity: string): Promise<ExportManifest | undefined> {
   try {
     const parsed = exportManifestSchema.safeParse(JSON.parse(await readFile(path.join(directory, '.ywtc-export.json'), 'utf8')));
-    return parsed.success && parsed.data.identity === identity;
+    return parsed.success && parsed.data.identity === identity
+      ? parsed.data as unknown as ExportManifest
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+async function managedManifest(directory: string, identity: string): Promise<boolean> {
+  return Boolean(await readManagedManifest(directory, identity));
+}
+
+function manifestMatchesGraph(
+  manifest: ExportManifest,
+  graph: PageGraph,
+  pagePaths: ReadonlyMap<string, string>,
+): boolean {
+  if (manifest.pages.length !== graph.pages.length) return false;
+  const pages = new Map(manifest.pages.map((page) => [page.sourceCanonicalId, page]));
+  return graph.pages.every((page) => {
+    const previous = pages.get(page.canonicalId);
+    return previous?.title === page.title
+      && previous.path === pagePaths.get(page.canonicalId)
+      && previous.parentId === page.projectedParentId;
+  });
+}
+
+function containedPath(root: string, candidate: string): string | undefined {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(root, candidate);
+  const relative = path.relative(resolvedRoot, resolved);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+    ? resolved
+    : undefined;
 }
 
 function timestamp(): string {
@@ -193,6 +225,8 @@ export class FilesystemExporter {
     resourcesByPage?: Map<string, SourceResource[]>;
     commentsByPage?: Map<string, CommentInventory>;
     commentsEnabled?: boolean;
+    retryPageIds?: ReadonlySet<string>;
+    retryResourceIds?: ReadonlyMap<string, ReadonlySet<string>>;
     loadPage?: (page: SourcePage) => Promise<SourcePage>;
     loadDocument?: (page: SourcePage) => Promise<ReturnType<typeof normalizePageContent>>;
   }): Promise<FilesystemExportResult> {
@@ -229,7 +263,7 @@ export class FilesystemExporter {
           ...(input.commentsByPage?.get(page.canonicalId)?.fingerprint ? {fingerprint: input.commentsByPage.get(page.canonicalId)!.fingerprint} : {}),
         },
       }));
-      return {directory: input.directory, manifest, warnings, errors};
+      return {directory: input.directory, mode: 'planned', manifest, warnings, errors};
     }
 
     const lease = await acquireExclusiveLease(`${input.directory}.ywtc.lock`, 'ywtc filesystem export', input.directory);
@@ -237,16 +271,39 @@ export class FilesystemExporter {
     const parent = path.dirname(input.directory);
     const staging = path.join(parent, `.${path.basename(input.directory)}.ywtc-staging-${randomUUID().slice(0, 8)}`);
     await mkdir(parent, {recursive: true, mode: 0o700});
-    await mkdir(staging, {recursive: false, mode: 0o700});
+    const previousManifest = input.retryPageIds && await exists(input.directory)
+      ? await readManagedManifest(input.directory, input.identity)
+      : undefined;
+    const patchExisting = previousManifest?.format === input.format
+      && previousManifest.rootId === input.graph.rootId
+      && manifestMatchesGraph(previousManifest, input.graph, pagePaths);
+    if (patchExisting) {
+      await cp(input.directory, staging, {recursive: true, errorOnExist: true});
+      manifest.pages = structuredClone(previousManifest.pages);
+      for (const previous of previousManifest.pages) {
+        if (pagePaths.has(previous.sourceCanonicalId)) pagePaths.set(previous.sourceCanonicalId, previous.path);
+      }
+      input.onItem?.(`reusing managed export; ${input.retryPageIds!.size} page payload(s) selected`);
+    } else {
+      await mkdir(staging, {recursive: false, mode: 0o700});
+      if (input.retryPageIds) input.onItem?.('managed export unavailable; rebuilding the complete site safely');
+    }
     let backup: string | undefined;
     try {
       const sourcePages = new Map(input.graph.pages.map((page) => [page.canonicalId, page]));
+      const pagesToProcess = patchExisting
+        ? input.graph.pages.filter((page) => input.retryPageIds!.has(page.canonicalId))
+        : input.graph.pages;
+      if (patchExisting) {
+        const selected = input.retryPageIds!;
+        manifest.pages = manifest.pages.filter((page) => !selected.has(page.sourceCanonicalId));
+      }
       const queue = new PQueue({concurrency: this.concurrency});
       const resourceMapByPage = new Map<string, Map<string, RenderResourceBinding>>();
       const resourcesByPage = new Map<string, SourceResource[]>();
       const commentBodies = new Map<string, string>();
 
-      await Promise.all(input.graph.pages.map((page) => queue.add(async () => {
+      await Promise.all(pagesToProcess.map((page) => queue.add(async () => {
         if (input.signal?.aborted) throw input.signal.reason ?? new Error('Export cancelled');
         const resources = input.resourcesByPage?.get(page.canonicalId) ?? await this.source.listResources(page);
         resourcesByPage.set(page.canonicalId, resources);
@@ -254,7 +311,31 @@ export class FilesystemExporter {
         const nameAllocator = new DestinationNameAllocator();
         const manifestResources: ExportManifestPage['resources'] = [];
         const downloadedByResource = new Map<string, {path: string; size: number; sha256: string}>();
-        for (const resource of resources.filter((item) => item.kind !== 'grid')) {
+        const transferableResources = resources.filter((item) => item.kind !== 'grid');
+        const previousPage = previousManifest?.pages.find((candidate) => candidate.sourceCanonicalId === page.canonicalId);
+        const targetedResourceIds = input.retryResourceIds?.get(page.canonicalId);
+        for (const [resourceIndex, resource] of transferableResources.entries()) {
+          const previousResource = previousPage?.resources.find((candidate) => candidate.sourceId === resource.id)
+            ?? previousPage?.resources.find((candidate) => !candidate.sourceId && candidate.name === preferredDestinationName(resource))
+            ?? (previousPage?.resources.length === transferableResources.length ? previousPage.resources[resourceIndex] : undefined);
+          const previousPath = previousResource && containedPath(staging, previousResource.path);
+          const reusable = patchExisting
+            && !targetedResourceIds?.has(resource.id)
+            && previousResource
+            && previousPath
+            ? await verifiedCacheFile(previousPath, previousResource.sha256 ? {
+              sha256: previousResource.sha256,
+              ...(previousResource.size !== undefined ? {size: previousResource.size} : {}),
+            } : undefined)
+            : undefined;
+          if (reusable) {
+            setSourceResourceBinding(pageResources, page, resources, resource, {
+              kind: 'file', path: previousResource!.path, name: previousResource!.name,
+            });
+            manifestResources.push({...previousResource!, sourceId: resource.id, size: reusable.size, sha256: reusable.sha256});
+            downloadedByResource.set(resource.id, reusable);
+            continue;
+          }
           const name = nameAllocator.allocate(resource);
           const relative = `attachments/${stableSegment(page)}/${name}`;
           const destination = path.join(staging, relative);
@@ -262,7 +343,7 @@ export class FilesystemExporter {
           const downloaded = await this.source.downloadResource(resource, destination);
           downloadedByResource.set(resource.id, downloaded);
           setSourceResourceBinding(pageResources, page, resources, resource, {kind: 'file', path: relative, name});
-          manifestResources.push({name, path: relative, size: downloaded.size, sha256: downloaded.sha256});
+          manifestResources.push({sourceId: resource.id, name, path: relative, size: downloaded.size, sha256: downloaded.sha256});
           input.onItem?.(`attachment ${name}`);
         }
         resourceMapByPage.set(page.canonicalId, pageResources);
@@ -354,7 +435,7 @@ export class FilesystemExporter {
         }).join('')}</ul>`;
         return renderItems('__root__');
       };
-      for (const page of input.graph.pages) {
+      for (const page of pagesToProcess) {
         const fullPage = input.loadPage ? await input.loadPage(page) : page;
         const relative = pagePaths.get(page.canonicalId)!;
         const resources = resourcesByPage.get(page.canonicalId) ?? [];
@@ -416,7 +497,15 @@ export class FilesystemExporter {
         throw error;
       }
       const archive = input.archive ? await createArchive(input.directory) : undefined;
-      return {directory: input.directory, ...(archive ? {archive} : {}), ...(backup ? {backup} : {}), manifest, warnings, errors};
+      return {
+        directory: input.directory,
+        mode: patchExisting ? 'patched' : 'rebuilt',
+        ...(archive ? {archive} : {}),
+        ...(backup ? {backup} : {}),
+        manifest,
+        warnings,
+        errors,
+      };
     } catch (error) {
       await rm(staging, {recursive: true, force: true});
       throw error;

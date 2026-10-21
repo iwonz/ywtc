@@ -24,6 +24,8 @@ export interface TransferReportResource {
   blockedByPageId?: string;
   blockedByCode?: string;
   blockedReason?: string;
+  attemptedInRun?: boolean;
+  outcomeRunId?: string;
 }
 
 export interface TransferReportCommentItem {
@@ -77,6 +79,8 @@ export interface TransferReportPage {
   blockedByPageId?: string;
   blockedByCode?: string;
   blockedReason?: string;
+  attemptedInRun?: boolean;
+  outcomeRunId?: string;
   comments: {
     status: CommentTransferStatus;
     threads: number;
@@ -96,7 +100,35 @@ export interface TransferReportPage {
     blockedByPageId?: string;
     blockedByCode?: string;
     blockedReason?: string;
+    attemptedInRun?: boolean;
+    outcomeRunId?: string;
   };
+}
+
+export interface TransferInvocation {
+  source: {locator: string; profile: string};
+  destination:
+    | {type: 'remote'; locator: string; profile: string}
+    | {type: 'directory'; path: string; format: 'markdown' | 'html'};
+  scope: TransferScope;
+  sourceStatus: SourceStatus;
+  comments: boolean;
+  archive: boolean;
+  state: {mode: 'automatic' | 'explicit'; path: string};
+}
+
+interface TransferRetryMetadata {
+  rootRunId: string;
+  parentRunId: string;
+  attempt: number;
+  selectedPages: number;
+  selectedResources: number;
+  selectedComments: number;
+  contextPages: number;
+  carriedForward: number;
+  remainingRetryable: number;
+  remainingTerminal: number;
+  preview: boolean;
 }
 
 export interface TransferReportExcludedPage {
@@ -216,6 +248,8 @@ export interface TransferReportData {
   direction: string;
   source: {provider: ProviderKind; profile: string; rootId: string; title: string; url: string};
   destination: {provider: ProviderKind | 'filesystem'; profile?: string; id: string; url?: string; format?: string};
+  invocation?: TransferInvocation;
+  retry?: TransferRetryMetadata;
   state: {id: string; path: string; mode: 'automatic' | 'explicit'; source: StateLoadSource; backupPath?: string};
   pages: TransferReportPage[];
   excludedPages: TransferReportExcludedPage[];

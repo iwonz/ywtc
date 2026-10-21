@@ -72,6 +72,12 @@ describe('CLI and named profiles', () => {
     expect(parseCliArguments(['reports', 'open', '11111111-1111-4111-8111-111111111111'])).toEqual({
       command: 'reports-open', runId: '11111111-1111-4111-8111-111111111111',
     });
+    expect(parseCliArguments([
+      'retry', '11111111-1111-4111-8111-111111111111', '-w', './workspace', '-n', '-o', '-j', '3',
+    ])).toEqual({
+      command: 'retry', runId: '11111111-1111-4111-8111-111111111111', workdir: './workspace',
+      dryRun: true, openReport: true, concurrency: 3,
+    });
   });
 
   it('maps every documented short option to its long migration or update option', () => {
@@ -102,6 +108,8 @@ describe('CLI and named profiles', () => {
     });
     expect(() => parseCliArguments(['doctor', '--source', 'a'])).toThrow(/both --source and --destination/);
     expect(() => parseCliArguments(['migrate', '--source', 'a', '--destination', 'https://example.com', '--format', 'html'])).toThrow(/remote HTTP/);
+    expect(() => parseCliArguments(['retry', 'last'])).toThrow(/canonical Run ID/);
+    expect(() => parseCliArguments(['retry', '11111111-1111-4111-8111-111111111111', '--source', 'a'])).toThrow(/unknown option '--source'/);
     expect(cliHelp('migrate')).toContain('--scope');
     expect(cliHelp('migrate')).toContain('--source-status');
     expect(cliHelp('doctor')).toContain('--source-status');
@@ -111,6 +119,7 @@ describe('CLI and named profiles', () => {
     expect(cliHelp('reports')).toContain('list');
     expect(cliHelp('reports')).toContain('open');
     expect(cliHelp('reports')).toContain('last');
+    expect(cliHelp('retry')).toContain('canonical Run ID');
     expect(cliHelp('migrate')).toContain('configured CWD');
   });
 

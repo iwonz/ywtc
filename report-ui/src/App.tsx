@@ -724,6 +724,22 @@ function ReportOverview({report, locale, theme, setLocale, setTheme, t}: {
       </Stack>
       <Box className="overview-summary"><SummaryTable report={report} t={t} /></Box>
       <Box component="dl" className="run-details">
+        {report.retry && <>
+          <Box component="div" className="run-detail"><Text component="dt">{t('retryAttempt')}</Text><Text component="dd">#{report.retry.attempt}</Text></Box>
+          <Box component="div" className="run-detail"><Text component="dt">{t('retryRoot')}</Text><Text component="dd" className="metadata-code">{report.retry.rootRunId}</Text></Box>
+          <Box component="div" className="run-detail"><Text component="dt">{t('previousRun')}</Text><Text component="dd" className="metadata-code">{report.retry.parentRunId}</Text></Box>
+          <Box component="div" className="run-detail"><Text component="dt">{t('retrySelection')}</Text><Text component="dd">{countText([
+            [report.retry.selectedPages, t('pages').toLocaleLowerCase()],
+            [report.retry.selectedResources, t('files').toLocaleLowerCase()],
+            [report.retry.selectedComments, t('comments').toLocaleLowerCase()],
+            [report.retry.contextPages, t('contextPages')],
+            [report.retry.carriedForward, t('carriedForward')],
+          ]) ?? t('notAvailable')}</Text></Box>
+          {(report.retry.remainingRetryable > 0 || report.retry.remainingTerminal > 0) && <Box component="div" className="run-detail"><Text component="dt">{t('remaining')}</Text><Text component="dd">{countText([
+            [report.retry.remainingRetryable, t('retryable')],
+            [report.retry.remainingTerminal, t('terminal')],
+          ])}</Text></Box>}
+        </>}
         <Box component="div" className="run-detail"><Text component="dt">{t('runId')}</Text><Text component="dd" className="metadata-code">{report.runId}</Text></Box>
         <Box component="div" className="run-detail"><Text component="dt">{t('state')}</Text><Text component="dd" className="metadata-code">{report.state.path}</Text></Box>
         <Box component="div" className="run-detail"><Text component="dt">{t('source')}</Text><Box component="dd"><MetadataLink href={report.source.url} fallback={report.source.title || t('notAvailable')} /></Box></Box>

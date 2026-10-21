@@ -43,6 +43,7 @@ export interface TransferIdentity {
 export interface ResourceTransferState extends BlockingCause {
   sourceId: string;
   sourceName: string;
+  sourceFingerprint?: string;
   destinationId?: string;
   destinationName: string;
   destinationUrl?: string;
@@ -141,6 +142,14 @@ export interface StateRun {
   commentThreads?: number;
   comments?: number;
   commentAttachments?: number;
+  operation?: 'migrate' | 'retry';
+  retryRootRunId?: string;
+  retryParentRunId?: string;
+  retryAttempt?: number;
+  retrySelectedPages?: number;
+  retrySelectedResources?: number;
+  retrySelectedComments?: number;
+  retryContextPages?: number;
 }
 
 export interface TransferState {
@@ -242,6 +251,7 @@ const transferIdentitySchema = z.object({
 const resourceStateSchema = z.object({
   sourceId: z.string(),
   sourceName: z.string(),
+  sourceFingerprint: z.string().optional(),
   destinationId: z.string().optional(),
   destinationName: z.string(),
   destinationUrl: z.string().optional(),
@@ -352,6 +362,14 @@ const runSchema = z.object({
   commentThreads: z.number().int().nonnegative().optional(),
   comments: z.number().int().nonnegative().optional(),
   commentAttachments: z.number().int().nonnegative().optional(),
+  operation: z.enum(['migrate', 'retry']).optional(),
+  retryRootRunId: z.string().optional(),
+  retryParentRunId: z.string().optional(),
+  retryAttempt: z.number().int().positive().optional(),
+  retrySelectedPages: z.number().int().nonnegative().optional(),
+  retrySelectedResources: z.number().int().nonnegative().optional(),
+  retrySelectedComments: z.number().int().nonnegative().optional(),
+  retryContextPages: z.number().int().nonnegative().optional(),
 }).strict();
 
 const transferStateSchema = z.object({
@@ -460,7 +478,13 @@ export class StateStore {
     return this.info;
   }
 
-  async beginRun(scope: StateRun['scope'], dryRun: boolean, sourceStatus: SourceStatus = 'all', commentsEnabled = true): Promise<StateRun> {
+  async beginRun(
+    scope: StateRun['scope'],
+    dryRun: boolean,
+    sourceStatus: SourceStatus = 'all',
+    commentsEnabled = true,
+    retry?: Pick<StateRun, 'retryRootRunId' | 'retryParentRunId' | 'retryAttempt' | 'retrySelectedPages' | 'retrySelectedResources' | 'retrySelectedComments' | 'retryContextPages'>,
+  ): Promise<StateRun> {
     const run: StateRun = {
       id: randomUUID(),
       startedAt: new Date().toISOString(),
@@ -479,6 +503,8 @@ export class StateStore {
       commentThreads: 0,
       comments: 0,
       commentAttachments: 0,
+      operation: retry ? 'retry' : 'migrate',
+      ...retry,
     };
     this.value.runs.push(run);
     if (!dryRun) await this.save();
@@ -491,6 +517,21 @@ export class StateStore {
     run.commentThreads = counts.threads;
     run.comments = counts.comments;
     run.commentAttachments = counts.attachments;
+    if (!this.readOnly) await this.save();
+  }
+
+  async setRunRetrySelection(runId: string, counts: {
+    pages: number;
+    resources: number;
+    comments: number;
+    contextPages: number;
+  }): Promise<void> {
+    const run = this.value.runs.find((candidate) => candidate.id === runId);
+    if (!run) throw new Error(`State run ${runId} was not initialized`);
+    run.retrySelectedPages = counts.pages;
+    run.retrySelectedResources = counts.resources;
+    run.retrySelectedComments = counts.comments;
+    run.retryContextPages = counts.contextPages;
     if (!this.readOnly) await this.save();
   }
 

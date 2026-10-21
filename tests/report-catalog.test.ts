@@ -14,7 +14,7 @@ import {
 const older = '11111111-1111-4111-8111-111111111111';
 const newer = '22222222-2222-4222-8222-222222222222';
 
-async function reportBundle(root: string, runId: string, finishedAt: string): Promise<void> {
+async function reportBundle(root: string, runId: string, finishedAt: string, retry?: Record<string, unknown>): Promise<void> {
   const directory = path.join(root, runId);
   await mkdir(directory, {recursive: true});
   await writeFile(path.join(directory, 'index.html'), '<!doctype html><title>report</title>');
@@ -27,6 +27,7 @@ async function reportBundle(root: string, runId: string, finishedAt: string): Pr
     scope: 'subtree',
     sourceStatus: 'current',
     direction: 'yandex-wiki → confluence',
+    ...(retry ? {retry} : {}),
     warnings: ['warning'],
     errors: ['error'],
     summary: {
@@ -54,6 +55,26 @@ describe('report catalog', () => {
     expect(catalog.reports[0]?.url).toMatch(/^file:/);
     expect(catalog.warnings).toEqual([expect.stringContaining('Skipped report broken')]);
     expect(catalog.warnings[0]).not.toContain('\n');
+  });
+
+  it('exposes retry lineage and selection metadata in the report catalog', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ywtc-report-retry-catalog-'));
+    await reportBundle(root, newer, '2026-10-15T12:00:00.000Z', {
+      rootRunId: older,
+      parentRunId: older,
+      attempt: 1,
+      selectedPages: 2,
+      selectedResources: 1,
+      selectedComments: 3,
+      contextPages: 4,
+      carriedForward: 8,
+      remainingRetryable: 1,
+      remainingTerminal: 2,
+      preview: false,
+    });
+    await expect(listReports(root)).resolves.toMatchObject({
+      reports: [{runId: newer, retry: {rootRunId: older, parentRunId: older, attempt: 1, selectedPages: 2}}],
+    });
   });
 
   it('selects latest or explicit reports and rejects traversal and missing IDs', async () => {

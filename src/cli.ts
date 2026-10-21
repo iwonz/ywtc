@@ -97,6 +97,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (!result.installed && result.updateAvailable) console.log(`  Command  ${result.command}`);
     return 0;
   }
+  if (command.command === 'retry') {
+    const {runRetryCommand} = await import('./retry-command.js');
+    return runRetryCommand(command);
+  }
   if (command.command === 'reports-list' || command.command === 'reports-open') {
     const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
     const {listReports, openSelectedReport} = await import('./report-catalog.js');
@@ -112,6 +116,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       for (const report of catalog.reports) {
         const issues = `${report.errors} errors · ${report.warnings} warnings · ${report.degradations} degradations · ${report.adaptations ?? 0} adaptations`;
         console.log(`  ${report.runId}  ${report.finishedAt ?? report.startedAt}  ${report.status}`);
+        if (report.retry) console.log(`    retry ${report.retry.attempt} · root ${report.retry.rootRunId} · parent ${report.retry.parentRunId}`);
         console.log(`    ${report.direction} · ${report.scope} · source status ${report.sourceStatus} · ${report.selectedDescendants}/${report.returnedDescendants} descendants selected · ${report.excludedPages} excluded · depth ${report.maximumDepth}`);
         console.log(`    source ${report.pages} pages · ${report.hierarchyGaps} hierarchy gaps · ${report.hierarchyRepairs} repaired · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);
         if (report.inventoryReusedPages || report.inventoryRecoveryAttempts || report.inventoryRemainingFailures) {

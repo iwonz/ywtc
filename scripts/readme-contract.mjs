@@ -20,7 +20,7 @@ const requiredExampleLabels = [
   '# Перенести структурное поддерево',
   '# Перенести рекурсивно связанные страницы',
   '# Создать автономный HTML и ZIP',
-  '# Открыть последний корректный отчёт',
+  '# Повторить только исправимые проблемы выбранной миграции',
 ];
 
 function h2Section(readme, heading) {
@@ -48,7 +48,7 @@ export function validateReadmeContract(readme) {
   for (const label of requiredExampleLabels) {
     if (!cli.includes(label)) findings.push(`CLI examples are missing: ${label.slice(2)}`);
   }
-  const labelledExamples = cli.match(/^# (?:Перенести|Создать|Открыть)/gm) ?? [];
+  const labelledExamples = cli.match(/^# (?:Перенести|Создать|Открыть|Повторить)/gm) ?? [];
   if (labelledExamples.length !== requiredExampleLabels.length) {
     findings.push(`CLI must contain exactly ${requiredExampleLabels.length} labelled common examples`);
   }

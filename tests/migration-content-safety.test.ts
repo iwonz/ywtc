@@ -13,6 +13,7 @@ import {ConfluenceResponseError} from '../src/clients/confluence-response.js';
 import type {RemoteLocator} from '../src/locators.js';
 import {MigrationRunError, Migrator} from '../src/migrator.js';
 import type {TransferReportData} from '../src/report.js';
+import {buildRetryPlan} from '../src/retry-plan.js';
 import type {TransferState} from '../src/state.js';
 
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 50, burst: 50};
@@ -53,6 +54,7 @@ function sha(value: string): string {
 }
 
 function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root, includeRootResource = true) {
+  let sourceResource = {...resource};
   let created = 0;
   let updated = 0;
   let reparented = 0;
@@ -102,7 +104,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
         resourceFailures.set(page.id, remaining - 1);
         throw new HttpRequestError('provider gateway timed out after bounded retries', 504, 'GET', `/pages/${page.id}/attachments`, undefined, 4);
       }
-      return page.id === fixtureRoot.id && includeRootResource ? [resource] : [];
+      return page.id === fixtureRoot.id && includeRootResource ? [sourceResource] : [];
     },
     readComments: async () => ({
       status: 'empty' as const, threads: [], comments: 0, participants: 0, attachments: 0,
@@ -237,6 +239,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     },
     setCurrentMissing: () => { missingIds.add(current!.id); },
     setAllCurrentMissing: () => { for (const id of pages.keys()) missingIds.add(id); },
+    changeResourceDownloadUrl: (downloadUrl: string) => { sourceResource = {...sourceResource, downloadUrl}; },
     snapshot: () => ({
       created, updated, reparented, downloads, sourceResolutions, destinationResolutions, current, pages: [...pages.values()],
       resourceReads: Object.fromEntries(resourceReads),
@@ -368,6 +371,112 @@ describe('source-derived remote page safety', () => {
     });
     expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 1});
     expect(adapters.snapshot().current?.content).toContain('ri:attachment');
+  });
+
+  it('retries a failed resource through the targeted run chain without recreating the page', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setFailUpload(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+
+    const first = await migrator.run(options);
+    const baseline = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+    const plan = buildRetryPlan(baseline);
+    expect(plan.pages[root.canonicalId]).toMatchObject({retryPage: false, resourceIds: [resource.id]});
+
+    adapters.setFailUpload(false);
+    const retried = await migrator.run({...options, retry: {
+      rootRunId: baseline.runId,
+      parentRunId: baseline.runId,
+      attempt: 1,
+      baseline,
+      plan,
+    }});
+    expect(retried).toMatchObject({
+      status: 'completed', hasErrors: false,
+      summary: {pages: 1, complete: 1, resources: 1, resourcesComplete: 1, resourcesFailed: 0},
+    });
+    expect(adapters.snapshot()).toMatchObject({
+      created: 1,
+      downloads: 1,
+      uploaded: 1,
+      resourceReads: {[root.id]: 2},
+    });
+    const report = JSON.parse(await readFile(retried.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.retry).toMatchObject({
+      rootRunId: baseline.runId, parentRunId: baseline.runId, attempt: 1,
+      selectedPages: 1, selectedResources: 1, remainingRetryable: 0,
+    });
+    expect(report.pages[0]).toMatchObject({
+      attemptedInRun: true, outcomeRunId: report.runId,
+      resourceItems: [{status: 'complete', attemptedInRun: true, outcomeRunId: report.runId}],
+      comments: {status: 'skipped', attemptedInRun: false, outcomeRunId: baseline.runId},
+    });
+  });
+
+  it('refreshes a targeted resource when its source metadata changed after the baseline run', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setFailUpload(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+    const first = await migrator.run(options);
+    const baseline = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+
+    adapters.changeResourceDownloadUrl('/download/manual-revised.pdf');
+    adapters.setFailUpload(false);
+    const retried = await migrator.run({...options, retry: {
+      rootRunId: baseline.runId,
+      parentRunId: baseline.runId,
+      attempt: 1,
+      baseline,
+      plan: buildRetryPlan(baseline),
+    }});
+
+    expect(retried.status).toBe('completed');
+    expect(adapters.snapshot()).toMatchObject({downloads: 2, uploaded: 1});
+  });
+
+  it('does not reread or rewrite successful sibling payloads during a targeted retry', async () => {
+    const {config, options} = await setup();
+    const linkedRoot = {
+      ...root,
+      rawContent: '# Root\n\n[Child](/root/child)\n\n[Manual](manual.pdf)',
+      references: [{raw: '/root/child', href: '/root/child', kind: 'page' as const}, ...root.references],
+    };
+    const adapters = fixture([child], linkedRoot);
+    adapters.setFailUpload(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+    const subtree = {...options, scope: 'subtree' as const};
+    const first = await migrator.run(subtree);
+    const baseline = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+    const plan = buildRetryPlan(baseline);
+    expect(plan.retryPageIds).toEqual([root.canonicalId]);
+    const before = adapters.snapshot();
+
+    adapters.setFailUpload(false);
+    adapters.source.getDescendants = async () => { throw new Error('successful subtree must not be rediscovered'); };
+    const retried = await migrator.run({...subtree, retry: {
+      rootRunId: baseline.runId,
+      parentRunId: baseline.runId,
+      attempt: 1,
+      baseline,
+      plan,
+    }});
+    const after = adapters.snapshot();
+    expect(after.created).toBe(before.created);
+    expect(after.updated).toBe(before.updated + 1);
+    expect(after.resourceReads[child.id]).toBe(before.resourceReads[child.id]);
+    const report = JSON.parse(await readFile(retried.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(report.pages.find((page) => page.sourceCanonicalId === child.canonicalId)).toMatchObject({
+      status: 'complete', attemptedInRun: false, outcomeRunId: baseline.runId,
+    });
+    expect(report.pages.find((page) => page.sourceCanonicalId === root.canonicalId)).toMatchObject({
+      status: 'complete', attemptedInRun: true, outcomeRunId: report.runId,
+    });
+    expect(after.pages.find((page) => page.title === root.title)?.content).toContain('ri:content-title="Child"');
   });
 
   it('leaves verified bootstrap content when final refinement fails', async () => {

@@ -138,6 +138,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `ywtc doctor [options]` | Проверить workspace; с source и destination — выполнить read-only preflight |
 | `ywtc migrate -i` | Выбрать параметры, выполнить dry-run и при допустимом результате явно перейти к live |
 | `ywtc migrate -s <locator> -d <locator\|directory> [options]` | Неинтерактивный перенос или экспорт |
+| `ywtc retry <run-id> [options]` | Повторить только исправимые незавершённые объекты последней live-итерации цепочки |
 | `ywtc reports list [-w <path>]` | Показать локальные отчёты от новых к старым |
 | `ywtc reports open [run-id\|last] [-w <path>]` | Открыть выбранный или последний корректный отчёт |
 | `ywtc update [-i] [-c npm\|brew]` | Проверить или установить обновление безопасным для текущего канала способом |
@@ -147,7 +148,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | Полная / short | Команды | Значения и назначение |
 | --- | --- | --- |
 | `--interactive`, `-i` | `init`, `migrate` | TTY-мастер; в `migrate` переданные опции становятся редактируемыми defaults |
-| `--workdir`, `-w` | `init`, `doctor`, `migrate`, `reports` | Явный workspace; поддерживается `~/...` |
+| `--workdir`, `-w` | `init`, `doctor`, `migrate`, `retry`, `reports` | Явный workspace; поддерживается `~/...` |
 | `--source`, `-s` | `doctor`, `migrate` | URL, page ID или Yandex slug; обязателен в неинтерактивном `migrate` |
 | `--destination`, `-d` | `doctor`, `migrate` | Родительская страница или каталог; обязателен в неинтерактивном `migrate` |
 | `--source-profile`, `-S` | `doctor`, `migrate` | Имя source-профиля при неоднозначном коротком locator |
@@ -157,10 +158,10 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `--comments`, `-C` / `--no-comments`, `-N` | `doctor`, `migrate` | Комментарии включены по умолчанию; `-N` исключает все comment API calls |
 | `--format`, `-f` | `doctor`, `migrate` | `markdown` или `html`; делает destination файловым |
 | `--archive`, `-a` | `migrate` | Дополнительный ZIP для файлового экспорта |
-| `--dry-run`, `-n` | `migrate` | Полный discovery/render без destination writes |
+| `--dry-run`, `-n` | `migrate`, `retry` | Полный discovery/render или точный retry-план без destination writes |
 | `--fresh`, `-F` | `migrate` | Игнорировать mappings; существующий live-state сохранить как backup |
-| `--open-report`, `-o` | `migrate` | Открыть итоговый HTML; ошибка opener не меняет outcome переноса |
-| `--concurrency`, `-j` | `migrate` | `1..64`; иначе `defaults.concurrency` |
+| `--open-report`, `-o` | `migrate`, `retry` | Открыть итоговый HTML; ошибка opener не меняет outcome переноса |
+| `--concurrency`, `-j` | `migrate`, `retry` | `1..64`; иначе `defaults.concurrency` |
 | `--state`, `-r` | `migrate` | Явный state path внутри workspace |
 | `--install`, `-i` | `update` | Установить найденное обновление |
 | `--via`, `-c` | `update` | `npm` или `brew` |
@@ -199,8 +200,8 @@ ywtc migrate -s https://wiki.example.com/team/start \
 ywtc migrate -s https://wiki.example.com/team/start \
   -d ./exports/knowledge-base -f html -a
 
-# Открыть последний корректный отчёт
-ywtc reports open last
+# Повторить только исправимые проблемы выбранной миграции
+ywtc retry 870f6e43-e7c5-46f4-a858-4d67f4f50be4
 ```
 
 ## Файловый экспорт
@@ -224,11 +225,13 @@ State находится в `<workdir>/.states/<automatic-id>.json`. ID зави
 - `current → all` расширяет тот же state; обратное переключение не удаляет прежние mappings. Удаление в source также не удаляет destination.
 - Snapshot сохраняется после dry-run, ошибки или прерывания и завершается после успешного live-run. `--fresh` начинает новый snapshot, игнорирует mappings и сохраняет прежний state как backup; destination при этом может получить новые объекты.
 
+`ywtc retry <run-id>` восстанавливает исходные параметры из отчёта и продолжает последнюю live-итерацию той же цепочки. Он выбирает retryable `failed`, `not-started`, исправимые `partial`, причинно `blocked` страницы и незавершённую инвентаризацию; успешные объекты не записываются повторно. Предки читаются только как контекст, resource-only и comment-only ошибки повторяются отдельно. `--dry-run` показывает выбор без записи. Если остались только permanent degradation или ownership conflict, команда ничего не меняет и завершается с кодом `1`. Для обновления всего дерева после изменения source используйте обычный `migrate`.
+
 Live-run использует exclusive lock; stale lock восстанавливается. При SIGINT/SIGTERM новые задачи не запускаются, безопасные активные операции завершаются, state и отчёт сохраняются. Коды выхода: `0` — completed, `1` — partial/verification failure, `2` — usage/config/preflight, `130`/`143` — сигнал.
 
 ## Отчёты и статусы
 
-Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и очищенный `report.json`, затем печатает URL и команду открытия. Используйте `--open-report`, `ywtc reports list` или `ywtc reports open [run-id|last]`; без selector `open` также выбирает последний корректный отчёт.
+Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и очищенный `report.json`, затем печатает URL и команду открытия. Используйте `--open-report`, `ywtc reports list` или `ywtc reports open [run-id|last]`; без selector `open` также выбирает последний корректный отчёт. Retry-отчёт показывает root/parent Run ID, номер попытки, выбранные страницы/files/comment archives, read-only context, переиспользованные outcomes и оставшиеся retryable/terminal проблемы.
 
 Автономный отчёт показывает только ненулевые показатели, канонические source/destination, исходную иерархию, исключённые страницы и проблемы. Для неполной инвентаризации он отдельно показывает переиспользованные и свежие checkpoints, recovery-попытки, оставшиеся ошибки и точную API-операцию. Дерево поддерживает поиск и фильтры; детали страницы содержат доступные files, comments, side-by-side comparison и диагностику. RU/EN и system/light/dark переключаются иконками. `report.json` не содержит body страниц, тексты комментариев или preview HTML.
 

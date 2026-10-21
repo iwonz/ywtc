@@ -30,6 +30,59 @@ function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sou
 }
 
 describe('transfer report', () => {
+  it('merges a retry attempt into the full baseline and records object provenance', () => {
+    const baseline = new TransferReport({
+      runId: '10000000-0000-4000-8000-000000000001',
+      dryRun: false,
+      scope: 'subtree',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'existing'},
+    });
+    baseline.addPage(page({sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete'}));
+    baseline.addPage(page({
+      sourceCanonicalId: 'wiki:2', sourceId: '2', sourceTitle: 'Child', status: 'partial',
+      parentId: 'wiki:1', resources: 1,
+      resourceItems: [{sourceId: 'file', sourceName: 'file.pdf', kind: 'attachment', status: 'failed'}],
+    }));
+    baseline.issue({code: 'resource-transfer-failed', severity: 'error', phase: 'resource', pageId: 'wiki:2', resourceId: 'file', retryable: true, message: 'upload failed'});
+    baseline.finish('partial');
+
+    const retry = new TransferReport({
+      runId: '10000000-0000-4000-8000-000000000002',
+      dryRun: false,
+      scope: 'subtree',
+      direction: baseline.data.direction,
+      source: baseline.data.source,
+      destination: baseline.data.destination,
+      state: baseline.data.state,
+      retry: {
+        rootRunId: baseline.data.runId, parentRunId: baseline.data.runId, attempt: 1,
+        selectedPages: 1, selectedResources: 1, selectedComments: 0, contextPages: 1,
+        carriedForward: 1, remainingRetryable: 1, remainingTerminal: 0, preview: false,
+      },
+    });
+    retry.seedRetryBaseline(baseline.data, new Set(['wiki:2']));
+    retry.addPage(page({
+      sourceCanonicalId: 'wiki:2', sourceId: '2', sourceTitle: 'Child', status: 'complete',
+      parentId: 'wiki:1', resources: 1,
+      resourceItems: [{sourceId: 'file', sourceName: 'file.pdf', kind: 'attachment', status: 'complete'}],
+    }));
+    retry.finish('completed');
+
+    expect(retry.data.pages).toEqual([
+      expect.objectContaining({sourceCanonicalId: 'wiki:1', attemptedInRun: false, outcomeRunId: baseline.data.runId}),
+      expect.objectContaining({
+        sourceCanonicalId: 'wiki:2', attemptedInRun: true, outcomeRunId: retry.data.runId,
+        resourceItems: [expect.objectContaining({attemptedInRun: true, outcomeRunId: retry.data.runId})],
+      }),
+    ]);
+    expect(retry.data.issues).toEqual([]);
+    expect(retry.data.summary).toMatchObject({complete: 2, partial: 0, errors: 0});
+    expect(retry.data.retry).toMatchObject({remainingRetryable: 0, remainingTerminal: 0});
+  });
+
   it('deduplicates variable diagnostics through a stable transformation issue code', () => {
     const report = new TransferReport({
       runId: '00000000-0000-4000-8000-000000000001',

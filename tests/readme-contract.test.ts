@@ -18,9 +18,9 @@ describe('README contract', () => {
 
   it('rejects missing or extra common examples', async () => {
     const readme = await readFile('README.md', 'utf8');
-    expect(validateReadmeContract(readme.replace('# Открыть последний корректный отчёт', ''))).toEqual(
+    expect(validateReadmeContract(readme.replace('# Повторить только исправимые проблемы выбранной миграции', ''))).toEqual(
       expect.arrayContaining([
-        'CLI examples are missing: Открыть последний корректный отчёт',
+        'CLI examples are missing: Повторить только исправимые проблемы выбранной миграции',
         'CLI must contain exactly 4 labelled common examples',
       ]),
     );
