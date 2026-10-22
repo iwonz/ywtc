@@ -20,12 +20,8 @@ Repository agents MUST synchronize a clean local `master` with `origin/master` b
 - **WHEN** all implementation tasks and checks succeed
 - **THEN** it MUST update task status, sync delta specifications, archive the change, run strict validation, fetch and compare with `origin/master`, and only then commit and push without force
 
-### Requirement: Static project quality gates
-The project SHALL keep a high/critical production dependency audit, TypeScript typechecking, Biome lint/format checks, Knip unused-code checks, Vitest tests, package verification, build validation, OpenSpec strict validation, graph performance checks, and static HTML browser smoke checks executable through maintained scripts.
-
-#### Scenario: Complete project check
-- **WHEN** a maintainer runs `npm run check`
-- **THEN** all configured security, static, unit, integration, package, performance, browser, build, and specification checks SHALL execute without rewriting tracked files
+### Requirement: Executable project quality gates
+The project SHALL keep a high/critical production dependency audit, TypeScript typechecking, Biome lint checks, Knip unused-code checks, Vitest tests, package verification, build validation, OpenSpec strict validation, graph performance checks, and static HTML browser smoke checks executable through maintained scripts.
 
 #### Scenario: A maintainer checks the repository
 - **WHEN** `npm run check` is executed in a clean supported environment
@@ -58,7 +54,7 @@ The README SHALL be concise, provider-neutral, task-oriented, and complete enoug
 
 #### Scenario: Common command variants are needed
 - **WHEN** an operator needs a frequent workflow beyond the minimum
-- **THEN** the CLI section SHALL show four concise examples covering a remote subtree transfer, linked scope, static export, and report opening
+- **THEN** the CLI section SHALL show four concise examples covering a remote subtree transfer, linked scope, static export, and targeted retry
 - **AND** each example SHALL omit options supplied by defaults or automatic profile resolution
 
 #### Scenario: Migration coverage is reviewed
@@ -103,15 +99,20 @@ The public `@iwonz/ywtc` package SHALL include the universal `ywtc` binary, an e
 - **THEN** it SHALL install that archive into an isolated prefix and successfully run `ywtc --version`, `ywtc --help`, and workspace initialization without relying on source-only files or creating `.env` and marker files
 
 ### Requirement: Conventional Commit enforcement
-The project SHALL validate every maintainer and automation commit subject against Conventional Commits and reject generic or work-in-progress subjects.
+The project SHALL validate every full maintainer and automation commit message against Conventional Commits and reject generic or work-in-progress subjects.
 
 #### Scenario: Commit range validation
 - **WHEN** CI evaluates a pull request or push
-- **THEN** Commitlint SHALL check every new commit in the relevant range, including bot commits
+- **THEN** Commitlint SHALL check every new commit in the relevant range, including bot commits, with the configured header and body rules
 
 #### Scenario: Generic subject
 - **WHEN** a subject is empty, generic, temporary, or marked WIP
 - **THEN** commit validation SHALL fail with a corrective Conventional Commit example
+
+#### Scenario: Commit is prepared and pushed
+- **WHEN** an agent prepares a commit after the quality gate
+- **THEN** it SHALL validate the complete proposed message, including body line lengths, before committing and validate the actual new commit range before pushing
+- **AND** a failed commit check SHALL NOT be bypassed by an empty follow-up commit or a narrower unreviewed range
 
 ### Requirement: Maintained GitHub Actions runtimes
 The release workflow SHALL use supported major versions of its JavaScript actions and SHALL avoid action runtimes GitHub marks deprecated.
@@ -134,13 +135,8 @@ The README header SHALL accurately depict Yandex Wiki and Confluence as sources 
 - **WHEN** the header image is unavailable or interpreted by assistive technology
 - **THEN** its alternative text SHALL identify the two source providers, the `ywtc` pipeline, and all four destination types
 
-### Requirement: Guided setup documentation and packaging
+### Requirement: Guided setup package contract
 The public package and README SHALL expose interactive initialization and interactive migration as the shortest guided setup while retaining ordinary commands for automation.
-
-#### Scenario: Minimum guided setup
-- **WHEN** a first-time operator follows the quick start
-- **THEN** it SHALL contain installation, `ywtc init --interactive`, and `ywtc migrate --interactive` as one copyable sequence
-- **AND** interactive migration SHALL default to dry-run and require an explicit live choice
 
 #### Scenario: Automation setup
 - **WHEN** an operator does not have an interactive terminal or manages configuration separately
@@ -202,30 +198,39 @@ Package and project checks SHALL exercise the public comment flags, provider con
 - **WHEN** the npm package is packed
 - **THEN** source fixtures, cached comment bodies, generated ZIPs, reports, tokens, email addresses, and runtime state SHALL be excluded
 
-### Requirement: Transfer outcome documentation
-The README SHALL define provider-neutral page and file outcomes in one compact applicability-aware table and SHALL separately define normalization, adaptation, degradation, warning, and error quality dimensions.
+### Requirement: Deterministic transfer status reference
+The README SHALL explain every current reported status in object-specific tables with numbered assignment conditions, applicability, and an operator action, while keeping outcome, quality, retryability, and exit code distinct.
 
-#### Scenario: Page status is inspected
+#### Scenario: Operator inspects an object status
 - **WHEN** an operator reads `Отчёты и статусы`
-- **THEN** one applicability-aware status table SHALL define `complete`, `partial`, `failed`, `blocked`, `conflict`, `planned`, and `not-started` and state the next action
-- **AND** it SHALL define `conflict` as proven ambiguous ownership or identity rather than an ordinary destination revision, manual content change, title collision, or generic provider error
+- **THEN** tables SHALL cover pages, files, comment archives, Grid snapshots, mentions, runs, excluded pages, and traversal edges using their current vocabularies
+- **AND** each status SHALL have a dedicated conditions column containing a numbered list of deterministic assignment branches and a next action
 
-#### Scenario: File status is inspected
-- **WHEN** the operator reads the same status table
-- **THEN** it SHALL identify which outcomes apply to files and comment archives without duplicating their shared definitions
-- **AND** it SHALL explain that `planned` is exclusive to dry-run while `blocked` identifies an unmet page dependency
+#### Scenario: Incomplete status is interpreted
+- **WHEN** a page, file, or archive is failed, blocked, or not-started
+- **THEN** documentation SHALL explain whether the current operation lacks verification or a dependency, and SHALL NOT imply that previous or bootstrap destination data is absent
 
-#### Scenario: Quality classification is inspected
-- **WHEN** an operator compares complete pages containing normalizations or adaptations with partial pages
-- **THEN** documentation SHALL explain that normalizations and adaptations preserve information while degradations identify absent or unverified information and affect completeness
+#### Scenario: Intermediate or reserved value is inspected
+- **WHEN** a status exists only during processing or is accepted by the current type but has no automatic producer
+- **THEN** documentation SHALL explicitly identify that scope and SHALL NOT invent reachable assignment conditions
+- **AND** planned SHALL be described as dry-run-only in finalized outcomes rather than forbidden during live preparation
 
-#### Scenario: Failure and dependency are compared
-- **WHEN** an operator compares `failed`, `blocked`, `planned`, and `not-started`
-- **THEN** documentation SHALL state that `failed` is an unsuccessful attempted operation, `blocked` is an operation not attempted because an upstream dependency is unavailable, `planned` belongs to dry-run, and `not-started` follows interruption
+#### Scenario: Run status and exit code are inspected
+- **WHEN** an operator compares run status, object outcomes, issues, and command exit code
+- **THEN** documentation SHALL state their current precedence, warning/degradation behavior, signal handling, and retry completion rules without equating partial-page count with a nonzero normal-migration exit code
+
+#### Scenario: Quality and retryability are inspected
+- **WHEN** a complete page has an adaptation, normalization, preserved external reference, or unresolved mention warning
+- **THEN** documentation SHALL distinguish completeness from notification delivery, warnings from degradations, and transient mention retry from terminal unresolved identity
+
+#### Scenario: README status coverage is checked
+- **WHEN** repository validation runs
+- **THEN** it SHALL reject missing or malformed numbered status-condition tables
+- **AND** tests SHALL compare the documented values with current state and domain status unions so an added status requires documentation review
 
 #### Scenario: README structure is checked
-- **WHEN** the status documentation is updated
-- **THEN** the README SHALL keep status definitions only in `Отчёты и статусы` and SHALL retain the specified nine second-level headings
+- **WHEN** the status reference is updated
+- **THEN** status definitions SHALL remain only in `Отчёты и статусы` within the existing nine second-level headings
 
 ### Requirement: Packaged report application
 The project SHALL compile and package the report dashboard as a self-contained generated asset that the installed CLI can inject with per-run data without depending on repository source files.
@@ -306,20 +311,12 @@ The README supported-content table SHALL distinguish exact preservation, safe no
 - **WHEN** a source page has no meaningful content and exists only as a hierarchy container
 - **THEN** the documentation SHALL state that it transfers as a valid empty page rather than a fallback or degradation
 
-### Requirement: Source-authoritative state and report documentation
+### Requirement: Mapped-object authority documentation
 The README SHALL explain mapped-object authority in `State и повторные запуски` and compact outcome interpretation in `Отчёты и статусы`.
 
 #### Scenario: Mapped destination policy is reviewed
 - **WHEN** an operator reads the state section
 - **THEN** it SHALL state that current source content and hierarchy replace differing proven mappings through destination version history while unmapped or ambiguously owned objects remain protected
-
-#### Scenario: Conflict status is reviewed
-- **WHEN** an operator reads the transfer status table
-- **THEN** `conflict` SHALL mean ambiguous ownership or identity rather than an ordinary destination revision or manual content change
-
-#### Scenario: Report interface is reviewed
-- **WHEN** an operator reads the reports section
-- **THEN** it SHALL describe the compact overview, hierarchy diagnostics, per-page problem details and comparison, icon-only language/theme controls, sanitized JSON download, and report-opening commands without duplicating report behavior elsewhere
 
 ### Requirement: Compact report presentation
 The interactive report SHALL prioritize non-zero outcomes, actionable diagnostics, and transfer completeness in a flat document layout while omitting empty metrics and redundant controls.
@@ -459,3 +456,14 @@ The README and project checks SHALL describe and verify the current global menti
 #### Scenario: Reports and package are inspected
 - **WHEN** report JSON, generated HTML, logs, state, or package contents are validated
 - **THEN** they SHALL contain no credentials, authorization values, configured secret tokens, or hidden destination email fields introduced by mention resolution
+
+### Requirement: Canonical maintenance documentation
+Current specifications SHALL describe the current product, README SHALL own operator guidance, AGENTS SHALL own the contributor workflow, and OpenSpec context SHALL summarize stable constraints without duplicating those references.
+
+#### Scenario: Documentation is maintained
+- **WHEN** a change updates a public option, default, status, retry rule, configuration field, or release process
+- **THEN** the maintainer SHALL verify it against the implementing source and update its canonical documentation and affected current specifications together
+
+#### Scenario: Historical requirements are found
+- **WHEN** an active requirement still mandates a completed release, retired configuration, superseded policy, or duplicate scenario
+- **THEN** maintenance SHALL replace or consolidate it with the current general contract while retaining unique coverage and leaving archived changes and changelog history unchanged

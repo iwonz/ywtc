@@ -1,7 +1,7 @@
 # wiki-migration Specification
 
 ## Purpose
-Provide an organization-agnostic, resumable migration library and CLI for moving accessible Yandex Wiki subtrees into operator-selected Confluence Data Center instances without embedding migration-specific data or credentials.
+Provide resumable, provider-neutral transfers between Yandex Wiki and Confluence and Markdown/HTML exports, with verified content preservation and no migration-specific data or credentials.
 
 ## Requirements
 
@@ -35,7 +35,7 @@ The system SHALL create the source root below the selected remote destination, p
 - **WHEN** a selected subtree contains multiple page levels
 - **THEN** every transferred page SHALL retain its corresponding selected parent under the destination root
 
-### Requirement: Content and resource fidelity
+### Requirement: Verified content and resource preservation
 The system SHALL preserve supported headings, paragraphs, lists, quotes, code, tables, grids, notes, cuts, tabs, links, anchors, images, and streamed attachments through the closest safe destination representation.
 
 #### Scenario: Internal references and resources
@@ -44,11 +44,7 @@ The system SHALL preserve supported headings, paragraphs, lists, quotes, code, t
 
 #### Scenario: Unsupported rich content
 - **WHEN** a construct cannot be represented natively
-- **THEN** the system SHALL provide a readable fallback, retain raw source for that page, and record the degradation
-
-#### Scenario: Internal links and attachments
-- **WHEN** a page references another selected page and a downloadable attachment
-- **THEN** the final body SHALL reference the transferred page and copied attachment rather than a stale source-internal resource
+- **THEN** the system SHALL provide a readable destination-safe representation, retain raw source when needed for completeness, and classify verified full preservation as adaptation or absent/unverified information as degradation
 
 #### Scenario: Legacy inline formatting and implicit links
 - **WHEN** source content contains a bare HTTP(S) URL, vendor text color, checklist item, explicit anchor, ordered-list start, or image dimensions
@@ -98,7 +94,7 @@ The system SHALL apply bounded retries, stream large resources, atomically check
 
 #### Scenario: Partial failure
 - **WHEN** one page, resource, render, or verification step fails
-- **THEN** independent work MAY continue, the object and run SHALL be marked partial or failed, and the process SHALL exit non-zero with resume guidance
+- **THEN** independent work MAY continue, object completeness SHALL reflect actual verification, and the run status and exit code SHALL follow current unresolved issues with actionable continuation guidance
 
 #### Scenario: Transient API error
 - **WHEN** an API returns 429, 5xx, Retry-After, or a retriable network error
@@ -209,12 +205,12 @@ The system SHALL create a self-contained provider-neutral HTML report and downlo
 - **WHEN** reports are generated or package files are enumerated
 - **THEN** report directories SHALL remain ignored by Git, excluded from package publication, and free of credentials and authorization headers
 
-### Requirement: Selectable migration scope
+### Requirement: Unified page selection scope
 The system SHALL expose `--scope page|subtree|linked`, default to `subtree`, and freeze the selected set before destination mutation.
 
 #### Scenario: Page scope
 - **WHEN** `--scope page` is selected
-- **THEN** only the resolved root page and its resources SHALL be transferred
+- **THEN** only the resolved root page and its resources SHALL be transferred and descendant pages SHALL NOT be requested or created
 
 #### Scenario: Subtree scope
 - **WHEN** scope is omitted or `--scope subtree` is selected
@@ -223,14 +219,6 @@ The system SHALL expose `--scope page|subtree|linked`, default to `subtree`, and
 #### Scenario: Linked scope
 - **WHEN** `--scope linked` is selected
 - **THEN** the root and every accessible same-boundary page transitively referenced from selected page content or page-reference/include constructs SHALL be transferred without a depth limit
-
-#### Scenario: Default subtree scope
-- **WHEN** the operator starts a transfer without `--scope`
-- **THEN** the system SHALL discover and transfer the accessible source root and structural descendants with their hierarchy preserved
-
-#### Scenario: Single-page scope
-- **WHEN** the operator supplies `--scope page`
-- **THEN** the system SHALL transfer only the exact source page and its resources and SHALL NOT request or create descendant pages
 
 #### Scenario: Link leaves the selected scope
 - **WHEN** a selected page links to an accessible page outside `page` or `subtree` scope
@@ -255,11 +243,11 @@ The system SHALL explain automatic, explicit, existing, new, and fresh state beh
 The system SHALL support Confluence Data Center 7.9 or newer through `/rest/api` with Bearer PAT and Confluence Cloud through REST v2 page/space APIs plus REST v1 multipart attachments with Basic email/API-token authentication.
 
 #### Scenario: Supported Data Center
-- **WHEN** `CONFLUENCE_DEPLOYMENT=data-center` and `CONFLUENCE_AUTH_TYPE=pat`
+- **WHEN** a connection selects `deployment: data-center` and `authType: pat`
 - **THEN** preflight SHALL attempt to obtain server information, reject an identified version below 7.9, and verify the REST/storage capabilities used by migration without imposing an upper version boundary; when server information is not exposed to the user, successful required capability probes SHALL permit the run with an unknown version
 
 #### Scenario: Supported Cloud
-- **WHEN** `CONFLUENCE_DEPLOYMENT=cloud`, `CONFLUENCE_AUTH_TYPE=api-token`, and an email is supplied
+- **WHEN** a connection selects `deployment: cloud`, `authType: api-token`, and a direct email
 - **THEN** the Cloud adapter SHALL use Basic authentication, REST v2 for pages/spaces, REST v1 for attachments, and normalize responses for the common migration pipeline
 
 #### Scenario: Unsupported Confluence profile
@@ -301,7 +289,7 @@ The system SHALL normalize source content into typed structural, page-reference,
 
 #### Scenario: Unaccounted source data
 - **WHEN** content or a resource is neither represented nor recoverably snapshotted
-- **THEN** the page SHALL NOT be marked complete and the run SHALL exit non-zero
+- **THEN** the page SHALL NOT be marked complete, its incomplete representation SHALL be reported explicitly, and the run and command exit SHALL follow current issue severity and retry completion rules
 
 ### Requirement: Graph-safe linked discovery
 The system SHALL discover transitive internal page references for linked scope until a fixed point and SHALL process each canonical page identity at most once.
@@ -339,7 +327,7 @@ The system SHALL persist canonical endpoint identity, graph edges, confirmed des
 
 #### Scenario: Interrupted run
 - **WHEN** SIGINT or SIGTERM occurs
-- **THEN** the system SHALL stop scheduling, flush atomic state/report data, mark the run cancelled or interrupted, and return the conventional signal exit code
+- **THEN** the system SHALL stop scheduling, flush atomic state/report data, mark the active run cancelled, and return the conventional signal exit code; a running state record found on a later open SHALL become interrupted without rewriting its old report
 
 ### Requirement: Source-derived remote page creation
 Every newly created remote page SHALL contain a complete source-derived body or a readable raw-content fallback from its first persisted version and SHALL NOT contain a transfer-progress placeholder.
@@ -357,7 +345,7 @@ The system SHALL process each resource independently and SHALL persist and verif
 
 #### Scenario: Attachment transfer fails
 - **WHEN** downloading, uploading, or verifying one attachment or image fails
-- **THEN** other resources and the page body SHALL continue, the failed reference SHALL use its source URL or a readable fallback, and the page SHALL be partial with retryable resource state
+- **THEN** other resources and the page body SHALL continue, the failed reference SHALL use its source URL or a readable fallback, and the verified page SHALL be partial with a typed resource outcome and retryability derived from the operation evidence, rather than assuming every resource failure is transient
 
 #### Scenario: Final refinement fails
 - **WHEN** a final body update or optional raw-snapshot upload fails after a source-derived bootstrap body was created
@@ -472,7 +460,7 @@ The system SHALL apply bounded consistency retries only to destination page IDs 
 
 #### Scenario: Provider normalizes bootstrap markup
 - **WHEN** the destination rewrites page serialization between verified bootstrap creation and final rendering
-- **THEN** the system SHALL continue only if provider-aware semantic verification finds no meaningful content or structure change, record a safe normalization, and retain conflict protection for any meaningful difference
+- **THEN** the system SHALL record safe serialization differences as normalizations, reconcile meaningful changes using the source-authoritative mapped update policy, and reserve conflict for proven ambiguous immutable ownership or identity
 
 #### Scenario: Raw source snapshot already exists
 - **WHEN** a page requires a raw fallback snapshot and the destination page already contains the deterministic snapshot filename while state lacks a usable attachment mapping
@@ -486,7 +474,7 @@ The system SHALL apply bounded consistency retries only to destination page IDs 
 - **WHEN** a source or destination locator that has never been confirmed returns `404`
 - **THEN** the system SHALL fail that resolution without applying consistency retries or creating a replacement
 
-### Requirement: Explicit content normalizations and degradations
+### Requirement: Explicit information-preserving transformations
 The system SHALL distinguish safe provider normalizations, lossless adaptations, and meaningful information loss without deriving impact from free-form warning text.
 
 #### Scenario: Empty source heading is removed
@@ -496,10 +484,6 @@ The system SHALL distinguish safe provider normalizations, lossless adaptations,
 #### Scenario: Formatting structure is adapted without losing information
 - **WHEN** a destination reshapes a layout, heading, list, tab set, media embed, or formula while retaining its complete ordered payload and references
 - **THEN** verification SHALL record an adaptation and the page SHALL remain complete
-
-#### Scenario: Formatting structure is simplified without losing data
-- **WHEN** a destination changes non-empty formatting while retaining the complete ordered information and references
-- **THEN** verification SHALL record an adaptation rather than degradation and the page SHALL remain complete
 
 #### Scenario: Dynamic table is materialized
 - **WHEN** a dynamic table is rendered as a static destination table
@@ -571,7 +555,7 @@ The report SHALL make blocking errors, retryable failures, degradations, warning
 
 #### Scenario: Operator opens a report with problems
 - **WHEN** the report contains an error, conflict, resource fallback, retryable failure, or degradation
-- **THEN** a needs-attention summary SHALL appear before the page tree with severity, phase, reason, retryability, occurrence count, affected page title, affected resource name when applicable, and navigation to page details
+- **THEN** non-zero problem counts SHALL appear in the unified overview and highlighted hierarchy rows SHALL lead to affected-page details with severity, phase, reason, retryability, occurrence count, and resource identity when applicable
 
 #### Scenario: Operator inspects a page
 - **WHEN** a selected page is expanded in the HTML report
@@ -604,7 +588,7 @@ The system SHALL expose `--source-status all|current` for `migrate` and `doctor`
 - **WHEN** the chosen source, scope, or API cannot determine a requested non-default source status
 - **THEN** preflight SHALL fail before destination mutation with provider- and scope-specific guidance
 
-### Requirement: Complete subtree discovery integrity
+### Requirement: Canonical subtree discovery integrity
 The system SHALL exhaust hierarchy pagination, reconcile mutable locator drift by immutable page ID, validate every selected page detail, and freeze an exact unique rooted tree before any destination mutation.
 
 #### Scenario: Cursor pagination exceeds one page
@@ -621,10 +605,6 @@ The system SHALL exhaust hierarchy pagination, reconcile mutable locator drift b
 
 #### Scenario: Invalid pagination or identity contract
 - **WHEN** a cursor repeats, immutable identity cannot be resolved, or provider details lack required content or hierarchy fields
-- **THEN** discovery SHALL fail as an incomplete source inventory before destination mutation
-
-#### Scenario: Invalid pagination contract
-- **WHEN** a cursor repeats or provider entries cannot be reconciled to one immutable identity
 - **THEN** discovery SHALL fail as an incomplete source inventory before destination mutation
 
 #### Scenario: Detail fetch fails
@@ -707,11 +687,11 @@ State and progress SHALL record comment fingerprints, mappings, history, per-pag
 - **THEN** terminal planning and progress SHALL show exact threads, entries, participants, referenced attachments, known bytes, and completed page archives
 
 ### Requirement: Reconciled comment outcome reporting
-Terminal summaries, state run counters, report JSON/HTML, and the report catalog SHALL derive comment source totals and `complete`, `partial`, `failed`, `conflict`, `stale`, and `skipped` outcomes from one deduplicated record.
+Terminal summaries, state run counters, report JSON/HTML, and the report catalog SHALL derive comment source totals and current comment outcomes from one deduplicated record.
 
 #### Scenario: Mixed outcomes
-- **WHEN** selected pages include verified archives, an API failure, no comments, a user conflict, and comments disabled on another run
-- **THEN** every selected page SHALL reconcile to exactly one comment outcome and issue counts SHALL match across all report surfaces
+- **WHEN** selected pages include verified archives, source-inventory warnings, API failures, confirmed empty discussions, stale prior archives, and disabled comments
+- **THEN** every selected page SHALL reconcile to exactly one comment outcome, intermediate planned work SHALL finalize as dependency-blocked or not-started when applicable, and issue counts SHALL match across all report surfaces
 
 #### Scenario: Actual destination preview
 - **WHEN** an archive comment was created or updated remotely
@@ -775,6 +755,11 @@ The system SHALL distinguish attempted failures, dependency-blocked work, interr
 #### Scenario: Blocked state is resumed
 - **WHEN** the upstream cause is resolved on a repeated run with the same state
 - **THEN** blocked pages and their objects SHALL be retried in top-down order without duplicate destination objects
+
+#### Scenario: Page preparation exists without final processing
+- **WHEN** a live run ends while a selected page remains discovered, planned, or skeleton-created
+- **THEN** its final outcome SHALL be not-started and documentation SHALL state that a previously verified mapping or full bootstrap body may already exist
+- **AND** files and archives still planned SHALL become blocked when their page is failed, conflict, or blocked, and otherwise not-started
 
 ### Requirement: Causal issue accounting
 The system SHALL count root operation errors independently from objects blocked by those errors and SHALL expose the same causal totals in terminal output, state run metadata, report JSON/HTML, and the report catalog.
@@ -1092,7 +1077,7 @@ The system SHALL preserve source-external HTTP(S) references as external referen
 
 #### Scenario: Managed image upload fails
 - **WHEN** a source-managed image cannot be copied and remains linked to its source download URL
-- **THEN** the resource and page SHALL remain partial because a requested managed resource was not transferred
+- **THEN** the resource SHALL be failed for unsuccessful transfer or partial for confirmed upload with unavailable read-back, and the verified page SHALL be partial because the requested managed resource is incomplete
 
 ### Requirement: Serialized live state mutation
 A live transfer SHALL hold one exclusive lease for its selected state while destination mutations and checkpoints are possible.
@@ -1310,7 +1295,7 @@ A rejected final update of a confirmed mapped page SHALL be retried only after t
 - **WHEN** the refreshed retry is also rejected
 - **THEN** the verified bootstrap body SHALL remain available, the page SHALL be partial or failed according to actual body verification, and the issue SHALL identify a provider update rejection with corrective guidance
 
-### Requirement: Provider-null Yandex Grid content
+### Requirement: Independent provider-null Grid content
 The system SHALL accept an explicit null inline body for a valid Yandex Wiki Grid page, distinguish it from a semantically empty ordinary page, and account for the Grid payload independently without aborting subtree discovery.
 
 #### Scenario: Grid data is available through the resource API
@@ -1323,10 +1308,6 @@ The system SHALL accept an explicit null inline body for a valid Yandex Wiki Gri
 
 #### Scenario: Grid data is permanently unavailable through the provider API
 - **WHEN** Yandex Wiki returns a valid Grid page with `content: null` but exposes no recoverable Grid payload or retryable evidence
-- **THEN** the destination SHALL receive a readable explanation and absolute link to the source page, only that page SHALL be partial with a provider-content degradation, and the remaining selected tree SHALL continue
-
-#### Scenario: Grid data is unavailable through the provider API
-- **WHEN** Yandex Wiki returns a valid Grid page with `content: null` but exposes no recoverable Grid payload
 - **THEN** the destination SHALL receive a readable explanation and absolute link to the source page, only that page SHALL be partial with a provider-content degradation, and the remaining selected tree SHALL continue
 
 #### Scenario: Ordinary page has no inline content field
@@ -1396,15 +1377,11 @@ A failed semantic destination comparison SHALL be reported as a verification iss
 - **WHEN** provider access succeeds but the re-read body does not preserve the expected meaningful content
 - **THEN** the issue SHALL have a stable verification code, verification phase and category, affected page identity, and retry guidance
 
-### Requirement: Resumable preflight barrier for large sources
+### Requirement: Structural preflight and independent enrichment barrier
 Migration SHALL require complete selected topology, immutable page identity, ordinary page content, and resource enumeration before mutation, while checkpointing independent enrichment outcomes so recoverable resource payload failures do not block unrelated branches.
 
 #### Scenario: Late transient structural source failure
 - **WHEN** required hierarchy, page identity, ordinary page content, or resource enumeration fails after other selected pages have completed inventory
-- **THEN** destination mutation SHALL remain zero, completed source checkpoints SHALL remain reusable, and the retryable page SHALL be identified independently
-
-#### Scenario: Late transient source failure
-- **WHEN** one required source operation fails after other selected pages have completed inventory
 - **THEN** destination mutation SHALL remain zero, completed source checkpoints SHALL remain reusable, and the retryable page SHALL be identified independently
 
 #### Scenario: Late transient enrichment failure
@@ -1419,17 +1396,9 @@ Migration SHALL require complete selected topology, immutable page identity, ord
 - **WHEN** every selected page has valid topology, ordinary content, resource enumeration, and an explicit outcome for every independent enrichment
 - **THEN** the destination pipeline SHALL begin with the same graph, content, state, and verification guarantees as a single uninterrupted run
 
-#### Scenario: Full inventory becomes available
-- **WHEN** every selected page and required resource collection has a valid current snapshot outcome
-- **THEN** the ordinary destination pipeline SHALL begin with the same graph, content, resource, comment, state, and verification guarantees as a single uninterrupted run
-
 #### Scenario: Required preflight cannot be completed
 - **WHEN** structural or required-content recovery remains exhausted
 - **THEN** terminal and report output SHALL state exact failed operations, inspected and remaining counts, retryability, checkpoint reuse, destination mutation count zero, and the canonical `ywtc retry <run-id>` action
-
-#### Scenario: Preflight cannot be completed
-- **WHEN** required recovery remains exhausted
-- **THEN** the terminal summary and report SHALL state the exact failed operations, inspected and remaining counts, retryability, checkpoint reuse, and a safe continuation action without presenting unmeasured objects as empty
 
 #### Scenario: Only retryable enrichments remain
 - **WHEN** required preflight is complete but one or more independent enrichments remain retryable
@@ -1555,15 +1524,15 @@ Issue totals SHALL distinguish unresolved failures from successful recovery even
 - **THEN** one deduplicated unresolved issue SHALL contribute to the final outcome and retry plan
 
 ### Requirement: Complete Grid outcome reconciliation
-Every discovered Grid resource SHALL have exactly one explicit current outcome included consistently in terminal, state, report, and retry totals.
+Every discovered Grid resource SHALL have exactly one source-snapshot outcome reconciled across terminal, state, report, and retry totals; destination table preservation SHALL be verified through the owning page rather than inferred from the snapshot status.
 
 #### Scenario: Grid data is unavailable
 - **WHEN** a Grid is discovered but its payload cannot be read
-- **THEN** it SHALL be reported as failed, blocked, or unavailable with an actionable source fallback rather than disappearing from the outcome sum
+- **THEN** it SHALL be reported as failed, blocked, or not-started according to its phase and dependency with an actionable source fallback rather than disappearing from the outcome sum
 
 #### Scenario: Grid snapshot is complete
-- **WHEN** all Grid rows, cells, links, and representable values are preserved in a static destination table
-- **THEN** the Grid SHALL be complete with an adaptation notice and no degradation
+- **WHEN** all required Grid rows, columns, cells, links, and representable values are available in its source snapshot
+- **THEN** the Grid snapshot SHALL be complete; only a verified complete destination table SHALL qualify its static representation as adaptation without degradation
 
 ### Requirement: Literal template syntax isolation
 Source text that is not an explicitly supported YFM variable construct SHALL remain literal through vendor transformation and SHALL not be evaluated as an undocumented template expression.
@@ -1645,7 +1614,7 @@ The system SHALL retain stable partial download state and resume from a verified
 
 #### Scenario: Destination rejects resource size
 - **WHEN** a destination rejects an otherwise verified resource because of an attachment-size limit
-- **THEN** the system SHALL retain the verified source cache, preserve a usable source reference in the page, mark the resource and page partial, and report the exact size plus provider action needed
+- **THEN** the system SHALL retain the verified source cache, preserve a usable source reference in the page, mark the resource failed and the verified page partial, record the limit rejection as non-retryable, and report the exact size plus provider action and ordinary migrate rerun needed after that prerequisite changes
 
 ### Requirement: Bounded diagram preprocessing
 Diagram extraction SHALL scan page content in linear bounded work, avoid decoding arbitrary data URIs, and remain responsive to progress and cancellation on very large inline payloads.
@@ -1721,7 +1690,7 @@ The system SHALL verify and account for mentions independently from page, resour
 
 #### Scenario: Mention representation is missing
 - **WHEN** a source mention has no verified destination representation
-- **THEN** ywtc SHALL record `failed`, add a degradation, and mark the owning page partial or failed according to the existing body-verification rules
+- **THEN** body verification SHALL reject a complete result, identify the missing mention representation, and mark the owning page partial or failed according to the existing body-verification rules; documentation SHALL identify the standalone mention `failed` value as reserved until a producer records it
 
 #### Scenario: Transfer progress is shown
 - **WHEN** mention inventory or resolution is active

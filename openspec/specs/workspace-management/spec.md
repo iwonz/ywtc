@@ -5,14 +5,14 @@ Define deterministic workspace selection, safe local configuration, capability d
 
 ## Requirements
 
-### Requirement: Deterministic workdir selection
-Operational CLI commands SHALL select their workdir in the order explicit `--workdir`, the exact current directory when it contains `ywtc.config.yaml`, then `~/.ywtc`, and SHALL resolve `~` and relative paths without writing outside the selected workdir. `init` SHALL use only explicit `--workdir` or `~/.ywtc`.
+### Requirement: Deterministic workspace boundaries
+Operational CLI commands SHALL select their workdir in the order explicit `--workdir`, the exact current directory when it contains `ywtc.config.yaml`, then `~/.ywtc`, and SHALL resolve `~` and relative paths. Configuration, state, cache, backups, and reports SHALL remain inside that workdir; explicit filesystem destinations MAY reside elsewhere. `init` SHALL use only explicit `--workdir` or `~/.ywtc`.
 
 #### Scenario: Explicit workdir
 - **WHEN** an operator supplies `--workdir <path>`
 - **THEN** the CLI SHALL use the normalized absolute path regardless of a current-directory configuration
 
-#### Scenario: Marked current directory
+#### Scenario: Configured current directory
 - **WHEN** an operational command has no explicit workdir and the current directory directly contains `ywtc.config.yaml`
 - **THEN** the CLI SHALL use the current directory without searching its ancestors
 
@@ -40,7 +40,7 @@ The `init` command and migration auto-initialization SHALL create the selected d
 - **THEN** it SHALL initialize the workspace and then stop before API requests with the `ywtc.config.yaml` path and missing field paths if configuration is incomplete
 
 ### Requirement: Workdir-scoped configuration
-The CLI SHALL load named connections, direct credentials, defaults, and network limits exclusively from `<workdir>/ywtc.config.yaml`, validate one strict current format, and validate only profiles required by the selected operation before API requests.
+The CLI SHALL load named connections, direct credentials, defaults, and network limits exclusively from `<workdir>/ywtc.config.yaml`, validate the entire document structure as one strict current format, and require runtime credentials only for profiles selected by the operation before API requests.
 
 #### Scenario: Profile selection by URL
 - **WHEN** a full source or destination URL uniquely matches configured base URLs
@@ -66,7 +66,7 @@ The CLI SHALL load named connections, direct credentials, defaults, and network 
 - **WHEN** migration receives `--state relative/file.json`
 - **THEN** it SHALL resolve the path under the selected workdir and reject traversal outside it
 
-### Requirement: Read-only workspace and capability diagnosis
+### Requirement: Read-only workspace diagnosis
 The `doctor` command SHALL validate the selected workspace and strict current configuration without creating files, and SHALL perform complete read-only source/destination capability preflight when both endpoints are supplied using the same locator, profile, scope, and format rules as migration.
 
 #### Scenario: Missing workspace
@@ -80,10 +80,6 @@ The `doctor` command SHALL validate the selected workspace and strict current co
 #### Scenario: Configuration diagnosis
 - **WHEN** `doctor` is run without `--source` and `--destination`
 - **THEN** it SHALL report workdir and all profile configuration failures without contacting vendor APIs
-
-#### Scenario: Full diagnosis
-- **WHEN** `doctor` receives both `--source` and `--destination`
-- **THEN** it SHALL authenticate, resolve both endpoints, verify direction-specific capabilities without mutations, and report provider, platform, and external API or product version information
 
 #### Scenario: Partial endpoint arguments
 - **WHEN** `doctor` receives only one endpoint

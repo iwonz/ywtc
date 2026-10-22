@@ -1,18 +1,20 @@
 schema: spec-driven
 
 context: |
-  Runtime: Node.js 24, npm 11.5.1 or newer, and strict TypeScript.
+  Runtime: Node.js >=24, npm >=11.5.1, and strict TypeScript; package.json owns executable requirements.
   Product: resumable, provider-neutral transfers between Yandex Wiki and Confluence plus Markdown/HTML exports.
   Authentication: Yandex OAuth or IAM; Confluence Data Center PAT or Cloud email/API token.
-  Safety: dry-run support, no automatic destination deletion, atomic state, explicit degradation, secrets never logged.
+  Configuration: named connections, defaults, policies, and direct secrets live only in ignored ywtc.config.yaml; automatic runtime data lives in the workdir's ignored .states/ and explicit state paths remain inside the workdir.
+  Safety: no automatic source or destination deletion, no destination mutations during dry-run, atomic state, explicit information loss, and redacted secrets.
   Testing: Vitest unit/contract/integration tests plus Playwright browser checks.
+  References: README.md owns operator guidance, openspec/specs/ the current contracts, and AGENTS.md the contributor workflow; archived changes and changelog history remain unchanged.
 
 rules:
   proposal:
     - State explicit non-goals and destructive-operation boundaries.
   design:
-    - Document retry, resume, conflict, and content-degradation behavior.
+    - Document retry, resume, identity ambiguity, and information-preservation behavior; distinguish object outcomes, quality notices, retryability, run status, and exit code.
   specs:
     - Use SHALL/MUST requirements and Given/When/Then scenarios.
   tasks:
-    - Include validation and documentation work.
+    - Include implementation verification and updates to the canonical documentation and affected current specifications.

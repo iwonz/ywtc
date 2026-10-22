@@ -55,7 +55,7 @@ The system SHALL classify prior outcomes as `retry`, `context`, `terminal`, or `
 - **THEN** those dependent objects SHALL be selected in safe top-down order without being counted as independent root failures
 
 #### Scenario: Complete or information-preserving result
-- **WHEN** an object is complete or has only normalization, adaptation, or preserved-external-reference evidence
+- **WHEN** an object is complete without unresolved retryable mention work or has only normalization, adaptation, or preserved-external-reference evidence
 - **THEN** it SHALL be resolved and SHALL NOT be retried
 
 #### Scenario: Terminal problem
@@ -85,7 +85,7 @@ A retry SHALL preserve the latest live selected graph, refresh current source da
 - **WHEN** the baseline stopped with incomplete source discovery
 - **THEN** retry SHALL resume compatible discovery checkpoints until the selected graph is complete and SHALL include newly discovered unprocessed pages
 
-### Requirement: Object-granular idempotent execution
+### Requirement: Object-granular retry execution
 Retry SHALL reuse the ordinary source-authoritative page, resource, comment, verification, and checkpoint behavior while mutating only actionable objects and promoted dependencies.
 
 #### Scenario: One resource failed
@@ -107,10 +107,6 @@ Retry SHALL reuse the ordinary source-authoritative page, resource, comment, ver
 #### Scenario: Retryable enrichment remains unavailable
 - **WHEN** an independently identified Grid payload remains unavailable but a complete page fallback can be rendered
 - **THEN** the retry SHALL preserve that resource as actionable, continue safe unrelated mutations, and leave the owning page partial until a later retry succeeds
-
-#### Scenario: Retry inventory is incomplete
-- **WHEN** any selected object or required dependency cannot be completely inspected
-- **THEN** the retry SHALL stop before every destination mutation and retain reusable successful checkpoints
 
 ### Requirement: Aggregate retry reporting and exit semantics
 Every attempted retry SHALL report the full migration outcome while distinguishing fresh attempts, carried-forward results, remaining actionable work, and terminal problems.

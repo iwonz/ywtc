@@ -22,7 +22,7 @@ The system SHALL atomically checkpoint required page details and normalized cont
 
 #### Scenario: Sensitive runtime content is checkpointed
 - **WHEN** source bodies, resource payloads, or comments are written to an inventory checkpoint
-- **THEN** they SHALL remain under the ignored selected workdir, use owner-only files, and SHALL NOT appear in state, reports, logs, Git, or the npm package
+- **THEN** checkpoint files SHALL remain under the ignored selected workdir with owner-only permissions and SHALL NOT enter Git or the npm package; state, logs, and downloadable report JSON SHALL exclude complete page and comment bodies while local HTML MAY contain explicitly scoped sandboxed previews
 
 ### Requirement: Compatible inventory snapshot continuation
 The system SHALL resume an unfinished source inventory only when canonical migration identity and inventory-affecting options match, while reconciling the current enumerated source set by immutable page identity.
@@ -47,7 +47,7 @@ The system SHALL resume an unfinished source inventory only when canonical migra
 - **WHEN** the operator supplies `--fresh`
 - **THEN** the system SHALL ignore the resumable inventory snapshot and collect a new source inventory without deleting source or destination data
 
-### Requirement: Selective transient inventory recovery
+### Requirement: Selective structural and enrichment recovery
 The system SHALL perform bounded operation-level recovery for retryable discovery and inventory failures after ordinary request retries, without repeating successful page or resource operations.
 
 #### Scenario: Isolated retryable failure recovers
@@ -66,10 +66,6 @@ The system SHALL perform bounded operation-level recovery for retryable discover
 - **WHEN** a Grid was enumerated by immutable ID but its payload remains unavailable after all recovery rounds
 - **THEN** the run SHALL continue with the page's complete core content, a readable source fallback, a retryable resource outcome, and no loss of successful unrelated inventory
 
-#### Scenario: Recovery remains exhausted
-- **WHEN** a required page or resource inventory operation still fails after all recovery rounds
-- **THEN** the run SHALL retain all successful checkpoints, report the exact remaining failures, and stop before every destination mutation
-
 ### Requirement: Source snapshot lifecycle
 The system SHALL retain a source inventory snapshot while a dry-run or failed/interrupted live transfer may be continued and SHALL retire it only after a terminal successful live transfer or explicit fresh collection.
 
@@ -85,7 +81,7 @@ The system SHALL retain a source inventory snapshot while a dry-run or failed/in
 - **WHEN** the live transfer reaches `completed` or `completed-with-warnings`
 - **THEN** the snapshot SHALL no longer be eligible for a later source-authoritative run and that later run SHALL collect current source data
 
-### Requirement: Operation-specific inventory diagnostics
+### Requirement: Operation-specific inventory failure diagnostics
 Every source inventory failure SHALL identify its stable operation, affected page or resource, retryability, safe provider status, attempt count, recovery outcome, and impact on the mutation barrier without exposing credentials or response bodies.
 
 #### Scenario: Resource preflight fails
@@ -99,10 +95,6 @@ Every source inventory failure SHALL identify its stable operation, affected pag
 #### Scenario: Resource enrichment is incomplete
 - **WHEN** a non-blocking Grid payload remains unavailable
 - **THEN** terminal and report output SHALL show topology, page-body, Grid-summary, and Grid-payload outcomes separately and SHALL associate the retryable issue with the Grid resource rather than failing the entire source inventory
-
-#### Scenario: Inventory is incomplete
-- **WHEN** the preflight barrier prevents destination mutation
-- **THEN** terminal output SHALL show inspected and total pages, reused checkpoints, remaining failures, destination mutation count zero, and the exact repeat command or action
 
 ### Requirement: Targeted retry inventory continuation
 A run-correlated retry SHALL reuse compatible verified inventory for carried-forward objects and SHALL refresh current source details only for actionable pages, required dependencies, or incomplete discovery.
