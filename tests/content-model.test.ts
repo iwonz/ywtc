@@ -150,6 +150,30 @@ describe('normalized content pipeline', () => {
     expect(emptyPage.degraded).toBe(false);
   });
 
+  it('keeps ordinary content and a source-linked fallback when one enumerated Grid payload is unavailable', async () => {
+    const page = source('# Root\n\nImportant text');
+    const grid: SourceResource = {
+      provider: 'yandex-wiki', id: 'grid-1', pageId: page.id, name: 'Metrics.grid.json', kind: 'grid', sourceUrl: page.url,
+      metadata: {summary: {id: 'grid-1', title: 'Metrics'}},
+      inventoryFailure: {
+        operation: 'grid-read', code: 'network-inventory-grid-read', retryable: true,
+        status: 504, attempts: 5, endpoint: '/grids/grid-1', message: 'Service unavailable',
+      },
+    };
+    const document = appendGridSnapshots(normalizePageContent(page), [grid]);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const storage = await renderConfluenceStorage(document, page, context, 'DOC');
+    expect(storage.body).toContain('Important text');
+    expect(storage.body).toContain('Metrics.grid.json');
+    expect(storage.body).toContain(page.url);
+    expect(document).toMatchObject({degraded: true, semanticallyEmpty: false, metrics: {tables: 0}});
+    expect(document.metrics.links).toBeGreaterThanOrEqual(1);
+    expect(document.adaptations).toEqual([]);
+    expect(document.warnings).toContainEqual(expect.stringContaining('could not be read'));
+  });
+
   it('keeps unavailable resources as explicit source fallbacks and uses native uploaded attachments', async () => {
     const page = source('![Diagram](diagram.png)\n\n[Download](manual.pdf)');
     const resources: SourceResource[] = [

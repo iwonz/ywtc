@@ -85,11 +85,6 @@ describe('source page content contracts', () => {
       getAttachments: async () => [],
       getPageGrids: async () => { throw new HttpRequestError('gateway timeout', 504, 'GET', '/raw', undefined, 4); },
     }],
-    ['grid-read', {
-      getAttachments: async () => [],
-      getPageGrids: async () => [{id: 'grid-1', title: 'Grid'}],
-      getGrid: async () => { throw new HttpRequestError('gateway timeout', 504, 'GET', '/raw', undefined, 4); },
-    }],
   ] as const)('classifies Yandex %s failures with safe operation evidence', async (operation, methods) => {
     const adapter = new YandexAdapter(yandexProfile, methods as unknown as YandexWikiClient);
     const error = await adapter.listResources({
@@ -99,6 +94,34 @@ describe('source page content contracts', () => {
     expect(error).toBeInstanceOf(SourceInventoryOperationError);
     expect(error).toMatchObject({operation, retryable: true, details: {status: 504, attempts: 4}});
     expect((error as SourceInventoryOperationError).details.endpoint).not.toContain('/raw');
+  });
+
+  it('retains an enumerated Grid when its payload read fails and refreshes only that resource', async () => {
+    let available = false;
+    const client = {
+      getAttachments: async () => [],
+      getPageGrids: async () => [{id: 'grid-1', title: 'Grid'}],
+      getGrid: async () => {
+        if (!available) throw new HttpRequestError('gateway timeout', 504, 'GET', '/raw', undefined, 4);
+        return {title: 'Grid', structure: {columns: [{title: 'Value'}]}, rows: [{row: ['ready']}]};
+      },
+    } as unknown as YandexWikiClient;
+    const page = {
+      provider: 'yandex-wiki' as const, profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Root',
+      locator: 'root', url: 'https://wiki.example/root', rawContent: '', rawFormat: 'yfm' as const, references: [],
+    };
+    const adapter = new YandexAdapter(yandexProfile, client);
+    const resources = await adapter.listResources(page);
+    expect(resources).toEqual([expect.objectContaining({
+      id: 'grid-1', kind: 'grid', sourceUrl: page.url,
+      inventoryFailure: expect.objectContaining({operation: 'grid-read', code: 'network-inventory-grid-read', retryable: true, status: 504, attempts: 4}),
+    })]);
+    expect(resources[0]?.inventoryFailure?.endpoint).not.toContain('/raw');
+
+    available = true;
+    await expect(adapter.refreshResource(page, resources[0]!)).resolves.toMatchObject({
+      id: 'grid-1', kind: 'grid', metadata: {grid: {rows: [{row: ['ready']}]}}
+    });
   });
 
   it('classifies Yandex comment inventory failures independently', async () => {

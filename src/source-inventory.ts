@@ -8,6 +8,7 @@ import type {
   NormalizedDocument,
   SourcePage,
   SourceResource,
+  SourceResourceInventoryFailure,
   SourceStatus,
   TransferScope,
 } from './domain.js';
@@ -75,6 +76,21 @@ export function sourceInventoryIssueCode(error: SourceInventoryOperationError): 
   return `${prefix}-inventory-${error.operation}`;
 }
 
+export function sourceResourceInventoryFailure(error: SourceInventoryOperationError): SourceResourceInventoryFailure {
+  if (error.operation !== 'grid-read') {
+    throw new Error(`Source resource inventory failure does not support ${error.operation}`);
+  }
+  return {
+    operation: error.operation,
+    code: sourceInventoryIssueCode(error),
+    message: error.message,
+    retryable: error.retryable,
+    ...(error.details.status !== undefined ? {status: error.details.status} : {}),
+    ...(error.details.endpoint ? {endpoint: error.details.endpoint} : {}),
+    ...(error.details.attempts !== undefined ? {attempts: error.details.attempts} : {}),
+  };
+}
+
 export interface SourceInventorySnapshotOptions {
   cacheDirectory: string;
   stateId: string;
@@ -134,6 +150,15 @@ const sourceResourceSchema = z.object({
   pageId: z.string().min(1),
   name: z.string(),
   kind: z.enum(['attachment', 'image', 'grid']),
+  inventoryFailure: z.object({
+    operation: z.literal('grid-read'),
+    code: z.string().min(1),
+    message: z.string().min(1),
+    retryable: z.boolean(),
+    status: z.number().int().optional(),
+    endpoint: z.string().optional(),
+    attempts: z.number().int().positive().optional(),
+  }).optional(),
 }).passthrough();
 
 const normalizedDocumentSchema = z.object({

@@ -595,8 +595,10 @@ function gridCell(value: unknown): string {
 }
 
 export function appendGridSnapshots(document: NormalizedDocument, resources: SourceResource[]): NormalizedDocument {
-  const grids = resources.filter((resource) => resource.kind === 'grid' && resource.metadata?.grid);
-  if (grids.length === 0) {
+  const gridResources = resources.filter((resource) => resource.kind === 'grid');
+  const grids = gridResources.filter((resource) => resource.metadata?.grid && !resource.inventoryFailure);
+  const failedGrids = gridResources.filter((resource) => resource.inventoryFailure);
+  if (gridResources.length === 0) {
     if (!document.sourceContentUnavailable) return document;
     const warning = `Yandex Wiki ${document.sourceContentUnavailable.sourceType} content is unavailable through the provider API; the original page link was preserved`;
     const fallbackHtml = `<aside class="ywtc-fallback"><p>${escapeHtml(warning)}.</p><p><a data-ywtc-source-fallback="true" href="${escapeHtml(document.sourceContentUnavailable.sourceUrl)}">Open original page</a></p></aside>`;
@@ -614,23 +616,40 @@ export function appendGridSnapshots(document: NormalizedDocument, resources: Sou
       metrics: {...document.metrics, links: document.metrics.links + 1},
     };
   }
-  const html = grids.map((resource) => {
+  const tablesHtml = grids.map((resource) => {
     const grid = resource.metadata?.grid as {title?: string; structure?: {columns?: Array<{title?: string}>}; rows?: Array<{row?: unknown[]}>} | undefined;
     const columns = grid?.structure?.columns ?? [];
     const rows = grid?.rows ?? [];
     return `<section class="ywtc-grid"><h2>${escapeHtml(grid?.title ?? resource.name)}</h2><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(column.title ?? '')}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((_column, index) => `<td>${escapeHtml(gridCell(row.row?.[index]))}</td>`).join('')}</tr>`).join('')}</tbody></table></section>`;
   }).join('');
+  const fallbackWarnings = failedGrids.map((resource) => `Dynamic table "${resource.name}" could not be read from the provider API; the original page link was preserved`);
+  const fallbackHtml = failedGrids.map((resource, index) => {
+    const message = fallbackWarnings[index]!;
+    const sourceUrl = resource.sourceUrl ?? document.sourceContentUnavailable?.sourceUrl;
+    return `<aside class="ywtc-fallback" data-ywtc-resource-id="${escapeHtml(resource.id)}"><p>${escapeHtml(message)}.</p>${sourceUrl ? `<p><a data-ywtc-source-fallback="true" href="${escapeHtml(sourceUrl)}">Open original page</a></p>` : ''}</aside>`;
+  }).join('');
+  const html = `${tablesHtml}${fallbackHtml}`;
   const htmlNode = document.root.children?.find((node) => node.type === 'html');
   if (htmlNode) htmlNode.value = `${htmlNode.value ?? ''}${html}`;
   else document.root.children?.push({type: 'html', value: html});
   const adaptations = [...document.adaptations, ...grids.map((resource) => `Dynamic table "${resource.name}" was converted to a static table`)];
+  const warnings = [...document.warnings, ...fallbackWarnings];
   const {sourceContentUnavailable: _resolvedSourceContent, ...resolvedDocument} = document;
   return {
     ...resolvedDocument,
+    ...(failedGrids.length > 0 && document.raw.length === 0
+      ? {raw: failedGrids.map((resource, index) => `> ${fallbackWarnings[index]}.\n>\n> [Open original page](${resource.sourceUrl ?? ''})`).join('\n\n')}
+      : {}),
+    warnings,
     adaptations,
-    notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: document.warnings}),
+    notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: warnings}),
+    degraded: warnings.length > 0,
     semanticallyEmpty: false,
-    metrics: {...document.metrics, tables: document.metrics.tables + grids.length},
+    metrics: {
+      ...document.metrics,
+      links: document.metrics.links + failedGrids.filter((resource) => resource.sourceUrl ?? document.sourceContentUnavailable?.sourceUrl).length,
+      tables: document.metrics.tables + grids.length,
+    },
   };
 }
 
@@ -1461,8 +1480,11 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
   }).join('');
   const $ = load(htmlFromDocument(document), null, false);
   const gridStorage = $('.ywtc-grid').toArray().map((element) => $(element).html() ?? '').join('');
+  const gridFallbackStorage = $('aside.ywtc-fallback[data-ywtc-resource-id]').toArray()
+    .map((element) => `<blockquote>${$(element).html() ?? ''}</blockquote>`)
+    .join('');
   return {
-    body: `${normalizedStorage('main[data-root]').html() ?? '<p></p>'}${treeStorage}${gridStorage}`,
+    body: `${normalizedStorage('main[data-root]').html() ?? '<p></p>'}${treeStorage}${gridStorage}${gridFallbackStorage}`,
     warnings: [...document.warnings, ...conversionWarnings],
     normalizations,
     adaptations: [...document.adaptations, ...converted.adaptations],

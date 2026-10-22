@@ -83,6 +83,8 @@ function emptySummary(): TransferReportSummary {
     images: 0,
     tables: 0,
     grids: 0,
+    gridsComplete: 0,
+    gridsFailed: 0,
     codeBlocks: 0,
     cycles: 0,
     normalizations: 0,
@@ -539,7 +541,9 @@ export class TransferReport {
     const traversalStatusCounts = countRecord(edgeStatuses);
     const commentStatusCounts = countRecord(commentStatuses);
     for (const page of this.data.pages) pageStatusCounts[page.status] += 1;
-    const resources = this.data.pages.flatMap((page) => page.resourceItems);
+    const allResources = this.data.pages.flatMap((page) => page.resourceItems);
+    const resources = allResources.filter((resource) => resource.kind !== 'grid');
+    const grids = allResources.filter((resource) => resource.kind === 'grid');
     for (const resource of resources) resourceStatusCounts[resource.status] += 1;
     for (const edge of this.data.edges) traversalStatusCounts[edge.status] += 1;
     for (const page of this.data.pages) commentStatusCounts[page.comments.status] += 1;
@@ -580,6 +584,8 @@ export class TransferReport {
       images: this.data.pages.reduce((total, page) => total + page.images, 0),
       tables: this.data.pages.reduce((total, page) => total + page.tables, 0),
       grids: this.data.pages.reduce((total, page) => total + page.grids, 0),
+      gridsComplete: grids.filter((resource) => resource.status === 'complete').length,
+      gridsFailed: grids.filter((resource) => resource.status === 'failed').length,
       codeBlocks: this.data.pages.reduce((total, page) => total + page.codeBlocks, 0),
       cycles: traversalStatusCounts.cycle,
       normalizations: this.issueCollector.count('normalization'),

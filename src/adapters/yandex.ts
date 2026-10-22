@@ -22,7 +22,7 @@ import type {
 import {DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../domain.js';
 import {normalizeCommentForest} from '../comments.js';
 import {HttpRequestError} from '../http.js';
-import {SourceInventoryOperationError, sourceInventoryIssueCode, sourceInventoryOperationError} from '../source-inventory.js';
+import {SourceInventoryOperationError, sourceInventoryIssueCode, sourceInventoryOperationError, sourceResourceInventoryFailure} from '../source-inventory.js';
 import {normalizeWikiSlug, safeFilename} from '../input.js';
 import type {YandexWikiClient} from '../clients/yandex-wiki.js';
 import type {YandexAttachment, YandexPageDetails, YandexPageIdentity} from '../types.js';
@@ -474,17 +474,40 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
       }),
     ]);
     const attachmentItems = attachments.filter((attachment) => attachment.is_downloadable).map((attachment) => attachmentResource(this.profile, page, attachment));
-    const gridItems = await Promise.all(grids.map(async (summary): Promise<SourceResource> => ({
-      provider: 'yandex-wiki',
-      id: summary.id,
-      pageId: page.id,
-      name: `${safeFilename(summary.title)}.grid.json`,
-      kind: 'grid',
-      metadata: {grid: await this.client.getGrid(summary.id).catch((error: unknown) => {
-        throw sourceInventoryOperationError('grid-read', error, `/grids/${encodeURIComponent(summary.id)}`);
-      })},
-    })));
+    const gridItems = await Promise.all(grids.map(async (summary): Promise<SourceResource> => {
+      const resource: SourceResource = {
+        provider: 'yandex-wiki',
+        id: summary.id,
+        pageId: page.id,
+        name: `${safeFilename(summary.title)}.grid.json`,
+        sourceUrl: page.url,
+        kind: 'grid',
+        metadata: {summary},
+      };
+      try {
+        return await this.refreshResource(page, resource);
+      } catch (error) {
+        const typed = sourceInventoryOperationError('grid-read', error, `/grids/${encodeURIComponent(summary.id)}`);
+        return {...resource, inventoryFailure: sourceResourceInventoryFailure(typed)};
+      }
+    }));
     return [...attachmentItems, ...gridItems];
+  }
+
+  async refreshResource(page: SourcePage, resource: SourceResource): Promise<SourceResource> {
+    if (resource.kind !== 'grid') return resource;
+    try {
+      const grid = await this.client.getGrid(resource.id);
+      const {inventoryFailure: _failure, ...complete} = resource;
+      return {
+        ...complete,
+        pageId: page.id,
+        sourceUrl: page.url,
+        metadata: {...resource.metadata, grid},
+      };
+    } catch (error) {
+      throw sourceInventoryOperationError('grid-read', error, `/grids/${encodeURIComponent(resource.id)}`);
+    }
   }
 
   async readComments(page: SourcePage): Promise<CommentInventory> {

@@ -36,11 +36,15 @@ A retry SHALL form a state-correlated lineage and SHALL continue from the latest
 - **THEN** ywtc SHALL stop before destination mutation and identify the active non-secret operation
 
 ### Requirement: Typed actionable retry selection
-The system SHALL classify prior outcomes as `retry`, `context`, `terminal`, or `resolved` from typed outcome and issue evidence rather than diagnostic text.
+The system SHALL classify prior outcomes as `retry`, `context`, `terminal`, or `resolved` from typed page, resource, comment, discovery, and inventory evidence rather than diagnostic text.
 
 #### Scenario: Retryable incomplete object
 - **WHEN** a page, resource, comment archive, discovery operation, or inventory operation is failed or partial with unresolved retryable evidence
 - **THEN** the object SHALL be selected for retry
+
+#### Scenario: Retryable Grid payload
+- **WHEN** a page is readable with a source fallback but one enumerated Grid payload has an unresolved retryable `grid-read` outcome
+- **THEN** the Grid SHALL be selected as the root actionable resource and its owning page SHALL be selected only for the required final rerender and verification
 
 #### Scenario: Interrupted object
 - **WHEN** a live run left an otherwise selected object `not-started`
@@ -88,9 +92,21 @@ Retry SHALL reuse the ordinary source-authoritative page, resource, comment, ver
 - **WHEN** a page body and other resources are complete but one managed resource is actionable
 - **THEN** ywtc SHALL retry that resource, reuse verified mappings for the others, rerender and verify the owning page, and SHALL NOT duplicate complete resources
 
+#### Scenario: One Grid payload failed
+- **WHEN** a Grid payload is actionable while the page core and sibling resources have reusable checkpoints
+- **THEN** ywtc SHALL reread only that Grid payload, reuse the sibling outcomes, replace its source fallback after success, and verify the owning page without rewriting unrelated pages
+
 #### Scenario: Only comments failed
 - **WHEN** an enabled comment archive is actionable while its page and ordinary resources are complete
 - **THEN** ywtc SHALL retry the comment pipeline without rewriting an equivalent page body
+
+#### Scenario: Required retry inventory is incomplete
+- **WHEN** selected hierarchy, required page content, resource enumeration, or a required dependency cannot be completely inspected
+- **THEN** the retry SHALL stop before every destination mutation and retain reusable successful checkpoints
+
+#### Scenario: Retryable enrichment remains unavailable
+- **WHEN** an independently identified Grid payload remains unavailable but a complete page fallback can be rendered
+- **THEN** the retry SHALL preserve that resource as actionable, continue safe unrelated mutations, and leave the owning page partial until a later retry succeeds
 
 #### Scenario: Retry inventory is incomplete
 - **WHEN** any selected object or required dependency cannot be completely inspected

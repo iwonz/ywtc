@@ -54,8 +54,22 @@ export interface SourceResource {
   size?: number;
   mimeType?: string;
   downloadUrl?: string;
+  /** Canonical provider page or resource URL used when the managed payload is unavailable. */
+  sourceUrl?: string;
   kind: 'attachment' | 'image' | 'grid';
   metadata?: Record<string, unknown>;
+  /** A known resource whose independently fetched payload could not be inspected. */
+  inventoryFailure?: SourceResourceInventoryFailure;
+}
+
+export interface SourceResourceInventoryFailure {
+  operation: 'grid-read';
+  code: string;
+  message: string;
+  retryable: boolean;
+  status?: number;
+  endpoint?: string;
+  attempts?: number;
 }
 
 export interface DestinationContainer {
@@ -247,6 +261,8 @@ export interface SourceAdapter {
   getDescendants(page: SourcePage, options: {status: SourceStatus; checkpoint?: SourcePageCheckpoint}): Promise<DescendantDiscovery>;
   resolveReference(from: SourcePage, reference: PageReference): Promise<SourcePage | undefined>;
   listResources(page: SourcePage): Promise<SourceResource[]>;
+  /** Refresh one already enumerated resource without repeating page-wide resource discovery. */
+  refreshResource?(page: SourcePage, resource: SourceResource): Promise<SourceResource>;
   readComments?(page: SourcePage): Promise<CommentInventory>;
   downloadResource(resource: SourceResource, destination: string): Promise<{path: string; size: number; sha256: string; mimeType?: string}>;
 }

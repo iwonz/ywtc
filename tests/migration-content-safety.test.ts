@@ -14,6 +14,7 @@ import type {RemoteLocator} from '../src/locators.js';
 import {MigrationRunError, Migrator} from '../src/migrator.js';
 import type {TransferReportData} from '../src/report.js';
 import {buildRetryPlan} from '../src/retry-plan.js';
+import {SourceInventoryOperationError} from '../src/source-inventory.js';
 import type {TransferState} from '../src/state.js';
 
 const limits: NetworkLimits = {readConcurrency: 4, writeConcurrency: 2, downloadConcurrency: 2, uploadConcurrency: 2, requestsPerSecond: 50, burst: 50};
@@ -988,6 +989,79 @@ describe('source-derived remote page safety', () => {
     expect(adapters.snapshot()).toMatchObject({created: 2, resourceReads: {'1': 1, '2': 2}});
   });
 
+  it('isolates an exhausted Grid payload and later retries only its resource owner', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture([child], root, false);
+    let gridAvailable = false;
+    let gridRefreshes = 0;
+    let childResourceReads = 0;
+    const failedGrid: SourceResource = {
+      provider: 'yandex-wiki', id: 'grid-1', pageId: root.id, name: 'Metrics.grid.json', kind: 'grid', sourceUrl: root.url,
+      metadata: {summary: {id: 'grid-1', title: 'Metrics'}},
+      inventoryFailure: {
+        operation: 'grid-read', code: 'network-inventory-grid-read', message: 'Service unavailable', retryable: true,
+        status: 504, endpoint: '/grids/grid-1', attempts: 5,
+      },
+    };
+    const source = {
+      ...adapters.source,
+      listResources: async (page: SourcePage) => {
+        if (page.id === child.id) {
+          childResourceReads += 1;
+          return [];
+        }
+        return [failedGrid];
+      },
+      refreshResource: async (_page: SourcePage, item: SourceResource) => {
+        gridRefreshes += 1;
+        if (!gridAvailable) {
+          throw new SourceInventoryOperationError('grid-read', 'Service unavailable', true, {
+            status: 504, endpoint: '/grids/grid-1', attempts: 5,
+          });
+        }
+        const {inventoryFailure: _failure, ...resourceWithoutFailure} = item;
+        return {
+          ...resourceWithoutFailure,
+          metadata: {grid: {title: 'Metrics', structure: {columns: [{title: 'Value'}]}, rows: [{row: ['42']}]}},
+        };
+      },
+    } as SourceAdapter;
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory, {}, {delaysMs: [0, 0, 0], sleep: async () => undefined});
+
+    const first = await migrator.run({...options, scope: 'subtree'});
+    expect(first).toMatchObject({
+      status: 'partial', hasErrors: true,
+      summary: {pages: 2, complete: 1, partial: 1, resources: 0, grids: 1, gridsComplete: 0, gridsFailed: 1, inventoryComplete: true},
+    });
+    expect(adapters.snapshot()).toMatchObject({created: 2});
+    expect(childResourceReads).toBe(1);
+    expect(gridRefreshes).toBe(3);
+    const firstReport = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+    expect(firstReport.pages.find((page) => page.sourceCanonicalId === root.canonicalId)).toMatchObject({
+      status: 'partial', resourceItems: [{sourceId: 'grid-1', kind: 'grid', status: 'failed'}],
+    });
+    expect(firstReport.issues).toContainEqual(expect.objectContaining({
+      code: 'network-inventory-grid-read', pageId: root.canonicalId, resourceId: 'grid-1', retryable: true,
+    }));
+
+    gridAvailable = true;
+    const plan = buildRetryPlan(firstReport);
+    expect(plan).toMatchObject({retryPageIds: [root.canonicalId], selectedResourceIds: {[root.canonicalId]: ['grid-1']}});
+    const retried = await migrator.run({
+      ...options,
+      scope: 'subtree',
+      retry: {rootRunId: firstReport.runId, parentRunId: firstReport.runId, attempt: 1, baseline: firstReport, plan},
+    });
+    expect(retried).toMatchObject({
+      status: 'completed', hasErrors: false,
+      summary: {pages: 2, complete: 2, partial: 0, resources: 0, grids: 1, gridsComplete: 1, gridsFailed: 0},
+    });
+    expect(adapters.snapshot()).toMatchObject({created: 2});
+    expect(childResourceReads).toBe(1);
+    expect(gridRefreshes).toBe(4);
+  });
+
   it('resumes an exhausted source inventory from retained page checkpoints', async () => {
     const {config, options} = await setup();
     const adapters = fixture([child], root, false);
@@ -1005,7 +1079,7 @@ describe('source-derived remote page safety', () => {
       if (error instanceof MigrationRunError) first = error;
       else throw error;
     }
-    expect(first?.message).toMatch(/1\/2 pages checkpointed.*destination mutations: 0.*resume the retained checkpoints/);
+    expect(first?.message).toMatch(/1\/2 pages checkpointed.*destination mutations: 0.*retry this run/i);
     expect(adapters.snapshot()).toMatchObject({created: 0, resourceReads: {'1': 1, '2': 4}});
     const firstReport = JSON.parse(await readFile(first!.reportPaths.json, 'utf8')) as TransferReportData;
     expect(firstReport.summary).toMatchObject({inventoryFreshPages: 1, inventoryReusedPages: 0, inventoryRecoveryAttempts: 3, inventoryRemainingFailures: 1});

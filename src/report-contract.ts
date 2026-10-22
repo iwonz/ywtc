@@ -12,7 +12,7 @@ export interface TransferReportResource {
   sourceName: string;
   sourceUrl?: string;
   sourceReference?: string;
-  kind: Exclude<SourceResource['kind'], 'grid'> | 'comment-attachment';
+  kind: SourceResource['kind'] | 'comment-attachment';
   status: ReportResourceStatus;
   sourceBytes?: number;
   transferredBytes?: number;
@@ -202,6 +202,8 @@ export interface TransferReportSummary {
   images: number;
   tables: number;
   grids: number;
+  gridsComplete?: number;
+  gridsFailed?: number;
   codeBlocks: number;
   cycles: number;
   normalizations: number;

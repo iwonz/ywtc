@@ -30,6 +30,36 @@ function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sou
 }
 
 describe('transfer report', () => {
+  it('reports Grid payload outcomes without inflating file or byte totals', () => {
+    const report = new TransferReport({
+      runId: '10000000-0000-4000-8000-000000000000',
+      dryRun: false,
+      scope: 'page',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
+    });
+    report.addPage(page({
+      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'partial', grids: 2,
+      resourceItems: [
+        {sourceId: 'grid-ok', sourceName: 'ok.grid.json', kind: 'grid', status: 'complete'},
+        {sourceId: 'grid-failed', sourceName: 'failed.grid.json', kind: 'grid', status: 'failed', error: 'Service unavailable'},
+      ],
+    }));
+    report.issue({
+      code: 'network-inventory-grid-read', severity: 'error', phase: 'inventory', pageId: 'wiki:1',
+      resourceId: 'grid-failed', retryable: true, message: 'Service unavailable',
+    });
+    report.finish('partial');
+
+    expect(report.data.summary).toMatchObject({
+      resources: 0, sourceBytes: 0, bytes: 0, bytesUnknown: 0,
+      grids: 2, gridsComplete: 1, gridsFailed: 1,
+      resourcesComplete: 0, resourcesFailed: 0,
+    });
+  });
+
   it('merges a retry attempt into the full baseline and records object provenance', () => {
     const baseline = new TransferReport({
       runId: '10000000-0000-4000-8000-000000000001',

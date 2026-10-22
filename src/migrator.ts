@@ -621,29 +621,33 @@ function reportPage(input: {
   const transferable = input.resources.filter(
     (resource): resource is SourceResource & {kind: 'attachment' | 'image'} => resource.kind !== 'grid',
   );
-  const resourceItems = transferable.map((resource) => {
+  const resourceItems = input.resources.map((resource) => {
     const state = input.resourceStates?.[resource.id];
     const sourceBytes = state?.size ?? resource.size;
-    const status = input.resourceStatusOverride ?? state?.status ?? 'planned';
+    const status = input.resourceStatusOverride
+      ?? (resource.kind === 'grid' ? resource.inventoryFailure ? 'failed' : 'complete' : state?.status ?? 'planned');
     return {
       sourceId: resource.id,
       sourceName: resource.name,
-      ...(resource.downloadUrl ? {sourceUrl: resource.downloadUrl} : {}),
+      ...((resource.sourceUrl ?? resource.downloadUrl) ? {sourceUrl: resource.sourceUrl ?? resource.downloadUrl} : {}),
       ...(resource.referenceAliases?.[0] ? {sourceReference: resource.referenceAliases[0]} : {}),
-      kind: commentResourceIds.has(resource.id) ? 'comment-attachment' as const : resource.kind,
+      kind: resource.kind !== 'grid' && commentResourceIds.has(resource.id) ? 'comment-attachment' as const : resource.kind,
       status,
-      ...(sourceBytes !== undefined ? {sourceBytes} : {}),
-      ...(status === 'complete' && sourceBytes !== undefined ? {transferredBytes: sourceBytes} : {}),
+      ...(resource.kind !== 'grid' && sourceBytes !== undefined ? {sourceBytes} : {}),
+      ...(resource.kind !== 'grid' && status === 'complete' && sourceBytes !== undefined ? {transferredBytes: sourceBytes} : {}),
       ...(state?.destinationId ? {destinationId: state.destinationId} : {}),
       ...(state?.destinationName ? {destinationName: state.destinationName} : {}),
       ...(state?.destinationUrl ? {destinationUrl: state.destinationUrl} : {}),
       ...(state?.sha256 ? {sha256: state.sha256} : {}),
-      ...(state?.lastError ? {error: state.lastError} : {}),
+      ...(resource.inventoryFailure?.message
+        ? {error: resource.inventoryFailure.message}
+        : state?.lastError ? {error: state.lastError} : {}),
       ...(status === 'blocked' && input.blockedBy ? input.blockedBy : {}),
     };
   });
-  const knownBytes = resourceItems.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
-  const transferredBytes = resourceItems.reduce((total, resource) => total + (resource.transferredBytes ?? 0), 0);
+  const fileResourceItems = resourceItems.filter((resource) => resource.kind !== 'grid');
+  const knownBytes = fileResourceItems.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
+  const transferredBytes = fileResourceItems.reduce((total, resource) => total + (resource.transferredBytes ?? 0), 0);
   const commentsEnabled = input.commentsEnabled ?? true;
   const commentState = input.commentState;
   const commentStatus = !commentsEnabled
@@ -702,7 +706,7 @@ function reportPage(input: {
     resourceItems,
     ...(transferable.length === 0 || resourceItems.some((resource) => resource.sourceBytes !== undefined) ? {sourceBytes: knownBytes} : {}),
     transferredBytes,
-    bytesUnknown: resourceItems.filter((resource) => resource.sourceBytes === undefined).length,
+    bytesUnknown: fileResourceItems.filter((resource) => resource.sourceBytes === undefined).length,
     links: input.document.metrics.links,
     images: input.document.metrics.images,
     tables: input.document.metrics.tables,
@@ -1155,7 +1159,13 @@ export class Migrator {
     let freshInventoryCount = 0;
     const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
-    const retrySelectedIds = new Set(options.retry?.plan.retryPageIds ?? []);
+    const retryFullPageIds = new Set(options.retry?.plan.retryPageIds.filter((pageId) => {
+      const plan = options.retry?.plan.pages[pageId];
+      if (plan?.retryPage) return true;
+      if (!plan || plan.resourceIds.length === 0) return false;
+      const baselinePage = options.retry?.baseline.pages.find((page) => page.sourceCanonicalId === pageId);
+      return plan.resourceIds.some((resourceId) => baselinePage?.resourceItems.find((resource) => resource.sourceId === resourceId)?.kind !== 'grid');
+    }) ?? []);
     status(`Inspecting content and resources for ${graph.pages.length} pages`);
 
     const readComments = async (page: PageInventoryResult): Promise<CommentInventory> => {
@@ -1181,7 +1191,7 @@ export class Migrator {
       try {
         if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
         const sourcePage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
-        const checkpoint = retrySelectedIds.has(page.canonicalId)
+        const checkpoint = retryFullPageIds.has(page.canonicalId)
           ? undefined
           : await sourceInventoryStore.loadComplete(sourcePage);
         let result: PageInventoryResult;
@@ -1257,19 +1267,69 @@ export class Migrator {
       await Promise.all(pages.map((page) => queue.add(() => inspectPage(page))));
     };
 
+    const failedGridResources = (retryableOnly: boolean): Array<{result: PageInventoryResult; resource: SourceResource}> =>
+      [...inventoryResults.values()].flatMap((result) => result.resources
+        .filter((resource) => resource.kind === 'grid'
+          && resource.inventoryFailure
+          && (!retryableOnly || resource.inventoryFailure.retryable)
+          && (!options.retry
+            || options.retry.plan.pages[result.page.canonicalId]?.retryPage
+            || options.retry.plan.selectedResourceIds[result.page.canonicalId]?.includes(resource.id)))
+        .map((resource) => ({result, resource})));
+
+    const retryGridResource = async (result: PageInventoryResult, resource: SourceResource): Promise<void> => {
+      if (!source.refreshResource) return;
+      try {
+        const refreshed = await source.refreshResource(result.sourcePage, resource);
+        result.resources = result.resources.map((candidate) => candidate.id === resource.id ? refreshed : candidate);
+        result.document = appendGridSnapshots(normalizePageContent(result.sourcePage), result.resources);
+        await cacheDocument(options.cacheDirectory, result.page.canonicalId, result.document);
+        await sourceInventoryStore.saveComplete({
+          page: result.sourcePage,
+          resources: result.resources,
+          document: result.document,
+          ...(result.comments ? {comments: result.comments} : {}),
+        });
+      } catch (error) {
+        const typed = sourceInventoryOperationError('grid-read', error, resource.inventoryFailure?.endpoint);
+        result.resources = result.resources.map((candidate) => candidate.id === resource.id
+          ? {...candidate, inventoryFailure: {
+            operation: 'grid-read',
+            code: sourceInventoryIssueCode(typed),
+            message: typed.message,
+            retryable: typed.retryable,
+            ...(typed.details.status !== undefined ? {status: typed.details.status} : {}),
+            ...(typed.details.endpoint ? {endpoint: typed.details.endpoint} : {}),
+            ...(typed.details.attempts !== undefined ? {attempts: typed.details.attempts} : {}),
+          }}
+          : candidate);
+        result.document = appendGridSnapshots(normalizePageContent(result.sourcePage), result.resources);
+        await cacheDocument(options.cacheDirectory, result.page.canonicalId, result.document);
+        await sourceInventoryStore.saveComplete({
+          page: result.sourcePage,
+          resources: result.resources,
+          document: result.document,
+          ...(result.comments ? {comments: result.comments} : {}),
+        });
+      }
+    };
+
     await runInventoryWave(graph.pages, options.concurrency);
     for (const [round, delay] of inventoryRecoveryDelays.entries()) {
       const required = graph.pages.filter((page) => inventoryFailures.get(page.canonicalId)?.retryable);
+      const gridResources = failedGridResources(true);
       const hasNonRetryableRequiredFailure = [...inventoryFailures.values()].some((error) => !error.retryable);
       const comments = hasNonRetryableRequiredFailure
         ? []
         : graph.pages.filter((page) => !inventoryFailures.has(page.canonicalId) && commentFailures.get(page.canonicalId)?.retryable);
-      if (required.length === 0 && comments.length === 0) break;
+      if (required.length === 0 && comments.length === 0 && gridResources.length === 0) break;
       inventoryRecoveryAttempts += 1;
       const recoveryConcurrency = Math.max(1, Math.floor(options.concurrency / (round + 2)));
-      status(`Inventory recovery ${round + 1}/${inventoryRecoveryDelays.length} · ${required.length} required page(s) · ${comments.length} comment archive(s) · concurrency ${recoveryConcurrency} · retrying after ${delay} ms`);
+      status(`Inventory recovery ${round + 1}/${inventoryRecoveryDelays.length} · ${required.length} required page(s) · ${gridResources.length} Grid payload(s) · ${comments.length} comment archive(s) · concurrency ${recoveryConcurrency} · retrying after ${delay} ms`);
       await inventoryRecoveryDelay(delay, options.signal, this.inventoryRecoveryOptions.sleep);
       await runInventoryWave(required, recoveryConcurrency);
+      const gridQueue = new PQueue({concurrency: recoveryConcurrency});
+      await Promise.all(gridResources.map(({result, resource}) => gridQueue.add(() => retryGridResource(result, resource))));
       const commentQueue = new PQueue({concurrency: recoveryConcurrency});
       await Promise.all(comments.map((page) => commentQueue.add(async () => {
         const result = inventoryResults.get(page.canonicalId);
@@ -1312,6 +1372,18 @@ export class Migrator {
         commentsEnabled,
         ...(commentInventory ? {commentInventory} : {}),
       }), undefined, false);
+      for (const resource of resources.filter((candidate) => candidate.kind === 'grid' && candidate.inventoryFailure)) {
+        const failure = resource.inventoryFailure!;
+        report.issue({
+          code: failure.code,
+          severity: failure.retryable ? 'error' : 'degradation',
+          phase: 'inventory',
+          pageId: page.canonicalId,
+          resourceId: resource.id,
+          retryable: failure.retryable,
+          message: `${page.title}: ${resource.name}: ${failure.message}`,
+        });
+      }
     }
 
     for (const page of graph.pages) {
@@ -1347,7 +1419,7 @@ export class Migrator {
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, graph.pages.length));
       const first = graph.pages.map((page) => ({page, error: inventoryFailures.get(page.canonicalId)})).find((item) => item.error);
       const retained = inventoryResults.size;
-      const message = `Source inventory incomplete: ${retained}/${graph.pages.length} pages checkpointed; ${inventoryFailures.size} required failure(s) remain after ${inventoryRecoveryAttempts} recovery attempt(s); destination mutations: 0.${first?.error ? ` First failure: ${inventoryFailureMessage(first.page, first.error)}.` : ''} Repeat the same migration to resume the retained checkpoints.`;
+      const message = `Source inventory incomplete: ${retained}/${graph.pages.length} pages checkpointed; ${inventoryFailures.size} required failure(s) remain after ${inventoryRecoveryAttempts} recovery attempt(s); destination mutations: 0.${first?.error ? ` First failure: ${inventoryFailureMessage(first.page, first.error)}.` : ''} Retry this run to resume the retained checkpoints.`;
       throw new MigrationRunError(message, reportPaths, stateLocation.filename);
     }
     if (options.retry) {

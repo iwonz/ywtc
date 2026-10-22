@@ -314,7 +314,8 @@ function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTr
   const sourceUrl = node.page?.sourceUrl ?? node.excluded?.sourceUrl;
   const destinationUrl = node.page?.destinationUrl;
   const counters = node.page ? countText([
-    [node.page.resourceItems.length, t('files').toLocaleLowerCase()],
+    [node.page.resources, t('files').toLocaleLowerCase()],
+    [node.page.grids, t('grids')],
     [node.page.comments.comments, t('comments').toLocaleLowerCase()],
     [node.page.links, t('links')],
   ]) : undefined;
@@ -528,7 +529,11 @@ function ResourcesTable({node, t}: {node: ReportTreeNode; t: Translate}) {
             <Table.Tr key={resource.sourceId}>
               <Table.Td>
                 <Group gap="xs" align="flex-start" wrap="nowrap">
-                  {resource.kind === 'image' ? <FileImage size={16} color="var(--mantine-primary-color-filled)" /> : <Paperclip size={16} color="var(--mantine-primary-color-filled)" />}
+                  {resource.kind === 'image'
+                    ? <FileImage size={16} color="var(--mantine-primary-color-filled)" />
+                    : resource.kind === 'grid'
+                      ? <Database size={16} color="var(--mantine-primary-color-filled)" />
+                      : <Paperclip size={16} color="var(--mantine-primary-color-filled)" />}
                   <Box>
                     <Text size="sm" fw={600}>{resource.sourceName}</Text>
                     {resource.destinationName && resource.destinationName !== resource.sourceName && <Text size="xs" c="dimmed">→ {resource.destinationName}</Text>}

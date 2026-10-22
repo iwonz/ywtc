@@ -86,6 +86,16 @@ function resumeCommand(command: ReadyMigrationCommand, workdir: string, retry?: 
   ].join(' ');
 }
 
+export function migrationContinuationCommand(
+  command: ReadyMigrationCommand,
+  workdir: string,
+  reportRunId?: string,
+  retry?: RetryExecution,
+): string {
+  if (!command.dryRun && reportRunId) return shellRetryCommand(retry?.rootRunId ?? reportRunId, workdir);
+  return resumeCommand(command, workdir, retry);
+}
+
 export async function runMigrationCommand(command: ReadyMigrationCommand, retry?: RetryExecution): Promise<MigrationCommandOutcome> {
   const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
   const initialized = await initializeWorkspace(workspace);
@@ -166,7 +176,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
       console.log(`  Workdir  ${workspace.root}`);
       console.log(`  Reports  ${workspace.reportsDirectory}`);
       if (reportBearingError(error)) await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume   ${resumeCommand(command, workspace.root, retry)}`);
+      console.log(`  Resume   ${migrationContinuationCommand(command, workspace.root, reportBearingError(error) ? error.reportPaths.runId : undefined, retry)}`);
       return {
         code: signalCode,
         workspaceRoot: workspace.root,
@@ -178,7 +188,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
       console.log('  Status  failed');
       console.log(`  State   ${error.stateFilename}`);
       await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume  ${resumeCommand(command, workspace.root, retry)}`);
+      console.log(`  Resume  ${migrationContinuationCommand(command, workspace.root, error.reportPaths.runId, retry)}`);
     }
     throw error;
   } finally {
@@ -196,6 +206,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesBlocked} blocked · ${result.summary.resourcesNotStarted} not started${result.summary.resourcesPlanned ? ` · ${result.summary.resourcesPlanned} planned` : ''} · ${result.summary.bytes} transferred bytes`);
   console.log(`  Causes  ${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
   console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
+  if (result.summary.grids > 0) console.log(`  Grids   ${result.summary.gridsComplete ?? 0} complete · ${result.summary.gridsFailed ?? 0} failed`);
   if (result.summary.inventoryReusedPages || result.summary.inventoryRecoveryAttempts || result.summary.inventoryRemainingFailures) {
     console.log(`  Inventory ${result.summary.inventoryReusedPages ?? 0} reused · ${result.summary.inventoryFreshPages ?? 0} fresh · ${result.summary.inventoryRecoveryAttempts ?? 0} recovery attempts${result.summary.inventoryRemainingFailures ? ` · ${result.summary.inventoryRemainingFailures} remaining failures` : ''}`);
   }
@@ -214,7 +225,10 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
     console.log(`  Remaining     ${remainingRetryable} retryable · ${remainingTerminal} terminal`);
     retryIncomplete = remainingRetryable > 0 || remainingTerminal > 0;
   }
-  if (result.hasErrors || retryIncomplete) console.log(`  ${retry ? 'Next' : 'Resume'}  ${resumeCommand(command, workspace.root, retry)}`);
+  if (result.hasErrors || retryIncomplete) {
+    const continuation = migrationContinuationCommand(command, workspace.root, result.reportPaths.runId, retry);
+    console.log(`  ${retry ? 'Next' : 'Retry'}  ${continuation}`);
+  }
   return {
     code: result.hasErrors || retryIncomplete ? 1 : 0,
     result,
