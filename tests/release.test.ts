@@ -112,6 +112,30 @@ describe('release validation', () => {
     expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN/);
   });
 
+  it('provisions Playwright Chromium before every complete CI quality gate', async () => {
+    const workflow = await readFile('.github/workflows/release.yml', 'utf8');
+    const chromiumInstall = 'npx playwright install chromium --with-deps';
+    const jobSegment = (start: string, end: string): string => {
+      const startIndex = workflow.indexOf(`\n  ${start}:`);
+      const endIndex = workflow.indexOf(`\n  ${end}:`, startIndex + 1);
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      expect(endIndex).toBeGreaterThan(startIndex);
+      return workflow.slice(startIndex, endIndex);
+    };
+    const expectProvisionedBeforeCheck = (job: string): void => {
+      const dependencyInstallIndex = job.indexOf('npm ci');
+      const browserInstallIndex = job.indexOf(chromiumInstall);
+      const checkIndex = job.indexOf('npm run check');
+      expect(dependencyInstallIndex).toBeGreaterThanOrEqual(0);
+      expect(browserInstallIndex).toBeGreaterThan(dependencyInstallIndex);
+      expect(checkIndex).toBeGreaterThan(browserInstallIndex);
+      expect(job.split(chromiumInstall)).toHaveLength(2);
+    };
+
+    expectProvisionedBeforeCheck(jobSegment('checks', 'release-please'));
+    expectProvisionedBeforeCheck(jobSegment('publish-npm', 'homebrew'));
+  });
+
   it('documents the Homebrew third-party tap trust boundary', async () => {
     const readme = await readFile('README.md', 'utf8');
     expect(readme).toContain(

@@ -74,6 +74,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
       - name: Run project checks
         run: npm run check
 
@@ -164,6 +166,7 @@ jobs:
           RECOVERY_PACKAGE_VERIFIER: ${{ steps.recovery-tools.outputs.package_verifier }}
         run: |
           npm ci
+          npx playwright install chromium --with-deps
           if [[ -n "$RECOVERY_PACKAGE_VERIFIER" ]]; then
             cp "$RECOVERY_PACKAGE_VERIFIER" scripts/package-validation.ts
           fi
