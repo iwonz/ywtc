@@ -1,7 +1,6 @@
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {load} from 'cheerio';
-import {LinkifyIt} from 'linkify-it';
 import rehypeParse from 'rehype-parse';
 import rehypeRemark from 'rehype-remark';
 import rehypeSanitize, {defaultSchema, type Options as SanitizeSchema} from 'rehype-sanitize';
@@ -26,8 +25,7 @@ import {convertYfmToStorage} from './conversion.js';
 import {transformYfm} from './diplodoc.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
-
-const linkifier = new LinkifyIt();
+import {safeLinkifyMatches} from './safe-linkify.js';
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -262,7 +260,7 @@ export function extractPageReferences(content: string, format: SourcePage['rawFo
     for (const match of content.matchAll(markdownLink)) if (match[1]) references.push(classifyHref(match[1]));
     const wikiLink = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
     for (const match of content.matchAll(wikiLink)) if (match[1]) references.push(classifyHref(match[1]));
-    for (const match of linkifier.match(content) ?? []) references.push(classifyHref(match.url));
+    for (const match of safeLinkifyMatches(content)) references.push(classifyHref(match.url));
   }
   return uniqueReferences(references);
 }

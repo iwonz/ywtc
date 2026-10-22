@@ -30,6 +30,27 @@ const destination: DestinationPage = {
 };
 
 describe('normalized content pipeline', () => {
+  it('bounds megabyte inline payloads while preserving surrounding content and the original raw source', async () => {
+    const payload = `data:image/png;base64,${'A'.repeat(1_100_000)}`;
+    const page = source(`# Before\n\n${payload}\n\nAfter with https://example.com/path`);
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(),
+      sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    const rendered = await renderConfluenceStorage(document, page, context, 'DOC');
+
+    expect(document.raw).toContain(payload);
+    expect(document.degraded).toBe(true);
+    expect(document.warnings).toContainEqual(expect.stringContaining('ywtc bounded source payload'));
+    expect(rendered.body).toContain('Before');
+    expect(rendered.body).toContain('Oversized inline data payload');
+    expect(rendered.body).toContain('After with');
+    expect(rendered.body).toContain('https://example.com/path');
+    expect(rendered.body).not.toContain(payload);
+    expect(rendered.degraded).toBe(true);
+  });
+
   it('isolates Diplodoc diagnostics between source pages', () => {
     const unresolved = normalizePageContent(source('Hello {{ missing_value }}'));
     expect(unresolved.warnings.join(' ')).toMatch(/missing_value|variable/i);

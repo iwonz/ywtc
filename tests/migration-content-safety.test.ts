@@ -442,6 +442,40 @@ describe('source-derived remote page safety', () => {
     expect(adapters.snapshot()).toMatchObject({created: 25});
   });
 
+  it('continues independent pages when one source page contains a megabyte inline payload', async () => {
+    const payload = `data:image/png;base64,${'A'.repeat(1_100_000)}`;
+    const boundedRoot: SourcePage = {
+      ...root,
+      rawContent: `# Root before\n\n${payload}\n\nRoot after`,
+      references: [],
+    };
+    const {config, options} = await setup();
+    const adapters = fixture([child], boundedRoot, false);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const statuses: string[] = [];
+
+    const result = await new Migrator(config, logger, factory).run({
+      ...options,
+      scope: 'subtree',
+      progressHeartbeatMs: 1,
+      onStatus: (message) => statuses.push(message),
+    });
+
+    expect(result).toMatchObject({
+      status: 'completed-with-warnings',
+      summary: {pages: 2, complete: 1, partial: 1, failed: 0, blocked: 0, degradations: 1},
+    });
+    expect(adapters.snapshot()).toMatchObject({created: 2, uploaded: 1});
+    const rootDestination = adapters.snapshot().pages.find((page) => page.title === boundedRoot.title);
+    const childDestination = adapters.snapshot().pages.find((page) => page.title === child.title);
+    expect(rootDestination?.content).toContain('Root before');
+    expect(rootDestination?.content).toContain('Oversized inline data payload');
+    expect(rootDestination?.content).toContain('Root after');
+    expect(rootDestination?.content).not.toContain(payload);
+    expect(childDestination?.content).toContain('Child body');
+    expect(statuses).toContainEqual(expect.stringMatching(/Content transfer · \d+\/\d+ operations/));
+  });
+
   it('retries a failed resource through the targeted run chain without recreating the page', async () => {
     const {config, options} = await setup();
     const adapters = fixture();

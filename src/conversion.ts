@@ -1,8 +1,8 @@
 import {load} from 'cheerio';
-import {LinkifyIt} from 'linkify-it';
 import {transformYfm} from './diplodoc.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
+import {safeLinkifyMatches} from './safe-linkify.js';
 import type {YandexGrid} from './types.js';
 
 export interface DestinationPageReference {
@@ -97,8 +97,6 @@ const legacyTextColors: Record<string, string> = {
   black: '#172b4d',
   white: '#ffffff',
 };
-const linkifier = new LinkifyIt();
-
 function closingParenthesis(value: string, openingIndex: number): number | undefined {
   let depth = 0;
   for (let index = openingIndex; index < value.length; index += 1) {
@@ -116,8 +114,8 @@ function closingParenthesis(value: string, openingIndex: number): number | undef
 }
 
 function renderAutolinkText(value: string, context: ConversionContext, stats: ConversionStats): string {
-  const matches = linkifier.match(value);
-  if (!matches) return escapeXml(value);
+  const matches = safeLinkifyMatches(value);
+  if (matches.length === 0) return escapeXml(value);
 
   let cursor = 0;
   let output = '';
