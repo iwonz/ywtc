@@ -374,6 +374,42 @@ describe('source-derived remote page safety', () => {
     expect(adapters.snapshot().current?.content).toContain('ri:attachment');
   });
 
+  it('keeps reporting the active resource while a remote operation is in flight', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    let releaseDownload: (() => void) | undefined;
+    let signalDownloadStarted: (() => void) | undefined;
+    const downloadGate = new Promise<void>((resolve) => { releaseDownload = resolve; });
+    const downloadStarted = new Promise<void>((resolve) => { signalDownloadStarted = resolve; });
+    const source = {
+      ...adapters.source,
+      downloadResource: async (selected: SourceResource, destination: string) => {
+        signalDownloadStarted?.();
+        await downloadGate;
+        return adapters.source.downloadResource(selected, destination);
+      },
+    } as SourceAdapter;
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const statuses: string[] = [];
+    const run = new Migrator(config, logger, factory).run({
+      ...options,
+      progressHeartbeatMs: 5,
+      onStatus: (message) => statuses.push(message),
+    });
+
+    await downloadStarted;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(statuses).toContainEqual(expect.stringContaining('Still working'));
+    expect(statuses).toContainEqual(expect.stringMatching(/active 1: Resource manual\.pdf → Root/));
+    expect(statuses.at(-1)).toContain('last completion');
+
+    releaseDownload?.();
+    await expect(run).resolves.toMatchObject({status: 'completed'});
+    const completedCount = statuses.length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(statuses).toHaveLength(completedCount);
+  });
+
   it('retries a failed resource through the targeted run chain without recreating the page', async () => {
     const {config, options} = await setup();
     const adapters = fixture();

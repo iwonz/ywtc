@@ -38,8 +38,21 @@ describe('transactional filesystem export', () => {
       },
     } as unknown as SourceAdapter;
     const exporter = new FilesystemExporter(source, 2);
-    const first = await exporter.export({graph, directory: output, format: 'html', identity: 'id', archive: true, dryRun: false, cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources, commentsByPage});
+    const activity: string[] = [];
+    const completed: string[] = [];
+    const first = await exporter.export({
+      graph, directory: output, format: 'html', identity: 'id', archive: true, dryRun: false,
+      cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources, commentsByPage,
+      onActivity: (message) => activity.push(message), onItem: (message) => completed.push(message),
+    });
     expect(first.archive).toMatch(/\.zip$/);
+    expect(activity).toEqual(expect.arrayContaining([
+      expect.stringContaining('Preparing export page'),
+      expect.stringContaining('Downloading image.png'),
+      expect.stringContaining('Rendering export page'),
+      'Verifying generated export tree',
+    ]));
+    expect(completed).toEqual(expect.arrayContaining(['attachment image.png', 'page Root', 'page Child']));
     const manifest = JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8')) as Record<string, unknown>;
     expect(manifest).toMatchObject({tool: 'ywtc', pages: [{title: 'Root', comments: {status: 'complete', threads: 1, comments: 2, attachments: 1}}, {title: 'Child'}]});
     expect(manifest).not.toHaveProperty('schemaVersion');

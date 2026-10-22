@@ -221,6 +221,7 @@ export class FilesystemExporter {
     dryRun: boolean;
     cacheDirectory: string;
     signal?: AbortSignal;
+    onActivity?: (message: string) => void;
     onItem?: (message: string) => void;
     resourcesByPage?: Map<string, SourceResource[]>;
     commentsByPage?: Map<string, CommentInventory>;
@@ -305,6 +306,7 @@ export class FilesystemExporter {
 
       await Promise.all(pagesToProcess.map((page) => queue.add(async () => {
         if (input.signal?.aborted) throw input.signal.reason ?? new Error('Export cancelled');
+        input.onActivity?.(`Preparing export page · ${page.title}`);
         const resources = input.resourcesByPage?.get(page.canonicalId) ?? await this.source.listResources(page);
         resourcesByPage.set(page.canonicalId, resources);
         const pageResources = sourceResourceBindings(page, resources);
@@ -337,6 +339,7 @@ export class FilesystemExporter {
             continue;
           }
           const name = nameAllocator.allocate(resource);
+          input.onActivity?.(`Downloading ${name} → ${page.title}`);
           const relative = `attachments/${stableSegment(page)}/${name}`;
           const destination = path.join(staging, relative);
           await mkdir(path.dirname(destination), {recursive: true});
@@ -436,6 +439,7 @@ export class FilesystemExporter {
         return renderItems('__root__');
       };
       for (const page of pagesToProcess) {
+        input.onActivity?.(`Rendering export page · ${page.title}`);
         const fullPage = input.loadPage ? await input.loadPage(page) : page;
         const relative = pagePaths.get(page.canonicalId)!;
         const resources = resourcesByPage.get(page.canonicalId) ?? [];
@@ -475,6 +479,7 @@ export class FilesystemExporter {
         await writeFile(path.join(staging, 'assets/site.css'), SITE_CSS, {mode: 0o600});
       }
       await writeFile(path.join(staging, '.ywtc-export.json'), `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o600});
+      input.onActivity?.('Verifying generated export tree');
       await verifyGeneratedTree(staging, manifest);
 
       if (await exists(input.directory)) {

@@ -50,9 +50,10 @@ import {FilesystemExporter, type FilesystemExportResult} from './filesystem-expo
 import {discoverPageGraph} from './graph.js';
 import {HttpRequestError} from './http.js';
 import {safeFilename} from './input.js';
-import type {Logger} from './logger.js';
+import {redact, type Logger} from './logger.js';
 import type {DirectoryLocator, RemoteLocator, ResolvedLocator} from './locators.js';
 import {profileBaseUrl, sameRemoteInstance} from './locators.js';
+import {ContinuousProgress} from './progress.js';
 import {
   TransferReport,
   type MigrationReportPaths,
@@ -98,6 +99,7 @@ export interface TransferOptions {
   reportsDirectory: string;
   signal?: AbortSignal;
   onStatus?: (message: string) => void;
+  progressHeartbeatMs?: number;
   retry?: RetryExecution;
 }
 
@@ -322,13 +324,23 @@ function cachedDocumentPath(cacheDirectory: string, canonicalId: string): string
   return path.join(cacheDirectory, 'documents', `${sha256(canonicalId)}.json`);
 }
 
-async function cacheDiscoveredPages(cacheDirectory: string, graph: PageGraph): Promise<Map<string, string>> {
+async function cacheDiscoveredPages(
+  cacheDirectory: string,
+  graph: PageGraph,
+  onProgress?: (completed: number, total: number, page: SourcePage) => void,
+): Promise<Map<string, string>> {
   await mkdir(path.join(cacheDirectory, 'pages'), {recursive: true, mode: 0o700});
   const fingerprints = new Map<string, string>();
+  let completed = 0;
+  const reportingStep = Math.max(1, Math.ceil(graph.pages.length / 100));
   await Promise.all(graph.pages.map(async (page) => {
     fingerprints.set(page.canonicalId, sourceFingerprint(page));
     await writeFile(cachedPagePath(cacheDirectory, page.canonicalId), `${JSON.stringify(page)}\n`, {mode: 0o600});
     page.rawContent = '';
+    completed += 1;
+    if (completed === graph.pages.length || completed % reportingStep === 0) {
+      onProgress?.(completed, graph.pages.length, page);
+    }
   }));
   return fingerprints;
 }
@@ -873,6 +885,22 @@ export class Migrator {
   ) {}
 
   async run(options: TransferOptions): Promise<TransferResult> {
+    const secrets = secretValues(this.config);
+    const progress = new ContinuousProgress(options.onStatus, {
+      ...(options.progressHeartbeatMs !== undefined ? {heartbeatMs: options.progressHeartbeatMs} : {}),
+      redact: (message) => redact(message, secrets),
+    });
+    const trackedOptions = options.onStatus
+      ? {...options, onStatus: (message: string) => progress.complete(message)}
+      : options;
+    try {
+      return await this.runWithProgress(trackedOptions, progress);
+    } finally {
+      progress.stop();
+    }
+  }
+
+  private async runWithProgress(options: TransferOptions, progress: ContinuousProgress): Promise<TransferResult> {
     const sourceStatus = options.sourceStatus ?? 'all';
     const commentsEnabled = options.comments ?? true;
     const source = this.adapterFactory(options.source.profile, this.config);
@@ -881,12 +909,13 @@ export class Migrator {
       : undefined;
     assertTransferCapabilities(source, destination, options.scope, sourceStatus, commentsEnabled);
     const status = options.onStatus ?? (() => undefined);
-    status('Checking source and destination capabilities');
+    progress.phase('Preflight · checking source and destination capabilities');
     const [sourcePlatform, destinationPlatform] = await Promise.all([
       source.preflight(),
       destination?.preflight(),
     ]);
     status(`Connected to ${sourcePlatform.product}${destinationPlatform ? ` and ${destinationPlatform.product}` : ''}`);
+    progress.phase('Preflight · resolving source and destination');
     const [root, container] = await Promise.all([
       source.resolvePage(options.source.value),
       options.destination.type === 'remote' && destination ? destination.resolveContainer(options.destination.value) : undefined,
@@ -992,7 +1021,7 @@ export class Migrator {
     let inventoryRecoveryAttempts = 0;
     const inventoryRecoveryDelays = this.inventoryRecoveryOptions.delaysMs ?? DEFAULT_INVENTORY_RECOVERY_DELAYS_MS;
     try {
-      status(`Discovering ${options.scope} scope from ${root.title}`);
+      progress.phase(`Discovery · ${options.scope} scope from ${root.title}`);
       for (let attempt = 0; ; attempt += 1) {
         try {
           graph = options.retry && !options.retry.plan.discoveryIncomplete && options.destination.type === 'remote'
@@ -1017,7 +1046,7 @@ export class Migrator {
           const delay = inventoryRecoveryDelays[attempt];
           if (!retryable || delay === undefined || options.signal?.aborted) throw error;
           inventoryRecoveryAttempts += 1;
-          status(`Discovery recovery ${attempt + 1}/${inventoryRecoveryDelays.length} · retrying failed page details after ${delay} ms; completed details remain checkpointed`);
+          progress.phase(`Discovery recovery ${attempt + 1}/${inventoryRecoveryDelays.length} · retrying failed page details after ${delay} ms; completed details remain checkpointed`);
           await inventoryRecoveryDelay(delay, options.signal, this.inventoryRecoveryOptions.sleep);
         }
       }
@@ -1086,8 +1115,10 @@ export class Migrator {
         }
         status(`Targeted retry: ${options.retry.plan.retryPageIds.length} actionable pages · ${options.retry.plan.contextPageIds.length} context pages`);
       }
-      status(`Caching source content for ${graph.pages.length} pages`);
-      sourceFingerprints = await cacheDiscoveredPages(options.cacheDirectory, graph);
+      progress.phase(`Source cache · 0/${graph.pages.length} pages persisted`);
+      sourceFingerprints = await cacheDiscoveredPages(options.cacheDirectory, graph, (completed, total, page) => {
+        status(`Source cache ${completed}/${total} · ${page.title}`);
+      });
     } catch (error) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
@@ -1166,7 +1197,7 @@ export class Migrator {
       const baselinePage = options.retry?.baseline.pages.find((page) => page.sourceCanonicalId === pageId);
       return plan.resourceIds.some((resourceId) => baselinePage?.resourceItems.find((resource) => resource.sourceId === resourceId)?.kind !== 'grid');
     }) ?? []);
-    status(`Inspecting content and resources for ${graph.pages.length} pages`);
+    progress.phase(`Inventory · 0/${graph.pages.length} pages inspected`);
 
     const readComments = async (page: PageInventoryResult): Promise<CommentInventory> => {
       if (!commentsEnabled) {
@@ -1188,6 +1219,7 @@ export class Migrator {
     };
 
     const inspectPage = async (page: PageInventoryResult['page']): Promise<void> => {
+      const operation = progress.begin(`Inventory · ${page.title}`);
       try {
         if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
         const sourcePage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
@@ -1244,6 +1276,9 @@ export class Migrator {
         inventoryFailures.set(page.canonicalId, error instanceof SourceInventoryOperationError
           ? error
           : sourceInventoryOperationError('resources-list', error));
+        status(`Inventory ${inventoryResults.size + inventoryFailures.size}/${graph.pages.length} · ${inventoryFailures.size} failed · ${Math.max(0, graph.pages.length - inventoryResults.size - inventoryFailures.size)} pending · ${page.title}`);
+      } finally {
+        progress.end(operation);
       }
     };
 
@@ -1279,6 +1314,7 @@ export class Migrator {
 
     const retryGridResource = async (result: PageInventoryResult, resource: SourceResource): Promise<void> => {
       if (!source.refreshResource) return;
+      const operation = progress.begin(`Inventory recovery · Grid ${resource.preferredName ?? resource.name} → ${result.page.title}`);
       try {
         const refreshed = await source.refreshResource(result.sourcePage, resource);
         result.resources = result.resources.map((candidate) => candidate.id === resource.id ? refreshed : candidate);
@@ -1290,6 +1326,7 @@ export class Migrator {
           document: result.document,
           ...(result.comments ? {comments: result.comments} : {}),
         });
+        status(`Inventory recovery · Grid restored · ${resource.preferredName ?? resource.name} → ${result.page.title}`);
       } catch (error) {
         const typed = sourceInventoryOperationError('grid-read', error, resource.inventoryFailure?.endpoint);
         result.resources = result.resources.map((candidate) => candidate.id === resource.id
@@ -1311,6 +1348,9 @@ export class Migrator {
           document: result.document,
           ...(result.comments ? {comments: result.comments} : {}),
         });
+        status(`Inventory recovery · Grid still unavailable · ${resource.preferredName ?? resource.name} → ${result.page.title}`);
+      } finally {
+        progress.end(operation);
       }
     };
 
@@ -1325,7 +1365,7 @@ export class Migrator {
       if (required.length === 0 && comments.length === 0 && gridResources.length === 0) break;
       inventoryRecoveryAttempts += 1;
       const recoveryConcurrency = Math.max(1, Math.floor(options.concurrency / (round + 2)));
-      status(`Inventory recovery ${round + 1}/${inventoryRecoveryDelays.length} · ${required.length} required page(s) · ${gridResources.length} Grid payload(s) · ${comments.length} comment archive(s) · concurrency ${recoveryConcurrency} · retrying after ${delay} ms`);
+      progress.phase(`Inventory recovery ${round + 1}/${inventoryRecoveryDelays.length} · ${required.length} required page(s) · ${gridResources.length} Grid payload(s) · ${comments.length} comment archive(s) · concurrency ${recoveryConcurrency} · retrying after ${delay} ms`);
       await inventoryRecoveryDelay(delay, options.signal, this.inventoryRecoveryOptions.sleep);
       await runInventoryWave(required, recoveryConcurrency);
       const gridQueue = new PQueue({concurrency: recoveryConcurrency});
@@ -1333,7 +1373,14 @@ export class Migrator {
       const commentQueue = new PQueue({concurrency: recoveryConcurrency});
       await Promise.all(comments.map((page) => commentQueue.add(async () => {
         const result = inventoryResults.get(page.canonicalId);
-        if (result) await retryComments(result);
+        if (!result) return;
+        const operation = progress.begin(`Inventory recovery · comments → ${page.title}`);
+        try {
+          await retryComments(result);
+          status(`Inventory recovery · comments ${result.comments?.status ?? 'unknown'} → ${page.title}`);
+        } finally {
+          progress.end(operation);
+        }
       })));
     }
 
@@ -1506,7 +1553,8 @@ export class Migrator {
     let archive: string | undefined;
     try {
       if (options.destination.type === 'directory') {
-        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage);
+        progress.phase(`Filesystem export · preparing ${graph.pages.length} pages`);
+        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress);
         output = result.directory;
         archive = result.archive;
         const exportEntry = path.join(result.directory, options.destination.format === 'html' ? 'index.html' : 'index.md');
@@ -1526,10 +1574,12 @@ export class Migrator {
           sourceFingerprints,
           resourcesByPage,
           commentsByPage,
+          progress,
         });
         output = container!.url;
         report.output('destination', container!.url);
       }
+      progress.phase('Finalizing transfer · calculating outcomes and writing report');
       report.finish('completed');
       const finalStatus = runStatus(report.data.summary.errors, report.data.summary.warnings, report.data.summary.degradations);
       await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
@@ -1559,6 +1609,7 @@ export class Migrator {
       const cancelled = options.signal?.aborted;
       const finalStatus: RunStatus = cancelled ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
+      progress.phase('Finalizing failed transfer · saving state and report');
       report.error(message);
       await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
       report.finish(finalStatus);
@@ -1583,6 +1634,7 @@ export class Migrator {
     sourceFingerprints: Map<string, string>,
     resourcesByPage: Map<string, SourceResource[]>,
     commentsByPage: Map<string, CommentInventory>,
+    progress: ContinuousProgress,
   ): Promise<FilesystemExportResult> {
     const exporter = new FilesystemExporter(source, options.concurrency);
     const retryResourceIds = new Map<string, ReadonlySet<string>>();
@@ -1616,6 +1668,7 @@ export class Migrator {
       dryRun: options.dryRun,
       cacheDirectory: options.cacheDirectory,
       ...(options.signal ? {signal: options.signal} : {}),
+      onActivity: (message: string) => progress.phase(`Filesystem export · ${message}`),
       ...(options.onStatus ? {onItem: (message: string) => {
         processed += 1;
         options.onStatus?.(`Progress ${Math.min(100, Math.floor((processed / total) * 100))}% · ${processed}/${total} · ${message}`);
@@ -2113,8 +2166,9 @@ export class Migrator {
     sourceFingerprints: Map<string, string>;
     resourcesByPage: Map<string, SourceResource[]>;
     commentsByPage: Map<string, CommentInventory>;
+    progress: ContinuousProgress;
   }): Promise<void> {
-    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage} = input;
+    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress: liveProgress} = input;
     const destinationPages = new Map<string, DestinationPage>();
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
     const promotedContextIds = new Set<string>();
@@ -2189,26 +2243,36 @@ export class Migrator {
       options.onStatus?.(`Progress ${Math.min(100, Math.floor((completed / totalUnits) * 100))}% · pages ${progress.pages}/${graph.pages.length} · files ${progress.resources}/${totalResources} · comments ${progress.comments}/${totalCommentArchives} · ${active}`);
     };
 
+    liveProgress.phase(`Bootstrap rendering · 0/${graph.pages.length} pages`);
+    let bootstrapPrepared = 0;
     for (const page of graph.pages) {
-      const [document, cachedPage] = await Promise.all([
-        loadCachedDocument(options.cacheDirectory, page.canonicalId),
-        loadCachedPage(options.cacheDirectory, page.canonicalId),
-      ]);
-      const resources = resourcesByPage.get(page.canonicalId) ?? [];
-      bootstrapBodies.set(page.canonicalId, await renderRemoteDocument({
-        destination,
-        container,
-        document,
-        page: cachedPage,
-        context: {
-          pages: new Map(),
-          resources: sourceResourceBindings(cachedPage, resources),
-          sourcePages,
-          currentPageId: page.canonicalId,
-        },
-      }));
+      const operation = liveProgress.begin(`Bootstrap render · ${page.title}`);
+      try {
+        const [document, cachedPage] = await Promise.all([
+          loadCachedDocument(options.cacheDirectory, page.canonicalId),
+          loadCachedPage(options.cacheDirectory, page.canonicalId),
+        ]);
+        const resources = resourcesByPage.get(page.canonicalId) ?? [];
+        bootstrapBodies.set(page.canonicalId, await renderRemoteDocument({
+          destination,
+          container,
+          document,
+          page: cachedPage,
+          context: {
+            pages: new Map(),
+            resources: sourceResourceBindings(cachedPage, resources),
+            sourcePages,
+            currentPageId: page.canonicalId,
+          },
+        }));
+        bootstrapPrepared += 1;
+        options.onStatus?.(`Bootstrap rendering ${bootstrapPrepared}/${graph.pages.length} · ${page.title}`);
+      } finally {
+        liveProgress.end(operation);
+      }
     }
 
+    liveProgress.phase(`Page staging · 0/${graph.pages.length} pages`);
     for (const page of graph.pages) {
       if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
       const saved = store.value.pages[page.canonicalId];
@@ -2281,6 +2345,7 @@ export class Migrator {
       } else if (retryContextIds.has(page.canonicalId)) {
         await promoteRetryContext(page.canonicalId, 'context-mapping-recovery');
       }
+      const stagingOperation = liveProgress.begin(`${options.dryRun ? 'Planning' : 'Staging'} page · ${page.title}`);
       try {
         const ownershipConflict = ownershipConflicts.get(page.canonicalId);
         if (ownershipConflict) {
@@ -2528,11 +2593,13 @@ export class Migrator {
           });
         }
       } finally {
+        liveProgress.end(stagingOperation);
         progress.staged += 1;
         updateProgress(`content staged ${page.title}`);
       }
     }
 
+    liveProgress.phase(`Content transfer · pages 0/${graph.pages.length} · files 0/${totalResources} · comments 0/${totalCommentArchives}`);
     const contentQueue = new PQueue({concurrency: options.concurrency});
     const contentPages = graph.pages.filter((page) => !retryContextIds.has(page.canonicalId) || promotedContextIds.has(page.canonicalId));
     const contentTasks = contentPages.map((page) => contentQueue.add(async () => {
@@ -2541,6 +2608,7 @@ export class Migrator {
       const document = await loadCachedDocument(options.cacheDirectory, page.canonicalId);
       const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
       const resources = resourcesByPage.get(page.canonicalId) ?? [];
+      const contentOperation = liveProgress.begin(`Page content · ${page.title}`);
       if (!destinationPage) {
         const currentFailure = stagingFailures.get(page.canonicalId);
         const failedState = store.value.pages[page.canonicalId];
@@ -2568,6 +2636,7 @@ export class Migrator {
         }));
         progress.pages += 1;
         updateProgress(`blocked ${page.title}`);
+        liveProgress.end(contentOperation);
         return;
       }
       const state = store.value.pages[page.canonicalId]!;
@@ -2636,6 +2705,7 @@ export class Migrator {
           }
         };
         for (const resource of transferableResources) {
+          liveProgress.update(contentOperation, `Resource ${resource.preferredName ?? resource.name} → ${page.title}`);
           const existing = state.resources[resource.id];
           if (options.retry && !retryPagePlan?.retryPage && !targetedResourceIds.has(resource.id) && existing?.status === 'complete' && existing.destinationId) {
             const mapped = remoteResources.find((item) => item.id === existing.destinationId);
@@ -2793,6 +2863,7 @@ export class Migrator {
         }
 
         if (!options.dryRun && transferableResources.length > 0) {
+          liveProgress.update(contentOperation, `Verifying ${transferableResources.length} resources → ${page.title}`);
           try {
             remoteResources = await destination.listUploadedResources(destinationPage);
             for (const resource of transferableResources) {
@@ -2829,6 +2900,7 @@ export class Migrator {
           sourcePages,
           currentPageId: page.canonicalId,
         };
+        liveProgress.update(contentOperation, `Rendering final content → ${page.title}`);
         const rendered = await renderRemoteDocument({destination, container, document, page: cachedPage, context});
         if (rendered.degraded && !options.dryRun) {
           if (transferableResources.length === 0) {
@@ -2942,6 +3014,7 @@ export class Migrator {
         let verificationAdaptations: string[] = [];
         let verificationDegradations: string[] = [];
         if (!options.dryRun) {
+          liveProgress.update(contentOperation, `Updating and verifying page → ${page.title}`);
           const current = await verifyConfirmedDestinationPage(destination, destinationPage, this.consistencyOptions);
           const update = await updateMappedPage({
             destination,
@@ -2971,6 +3044,9 @@ export class Migrator {
         }
         const commentInventory = commentsByPage.get(page.canonicalId);
         const reuseCommentState = Boolean(options.retry && !retryPagePlan?.retryComments && state.comments);
+        if ((options.comments ?? true) && !reuseCommentState) {
+          liveProgress.update(contentOperation, `Archiving comments → ${page.title}`);
+        }
         const commentState = reuseCommentState
           ? state.comments!
           : (options.comments ?? true)
@@ -3123,6 +3199,7 @@ export class Migrator {
           actual?.content ? {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(actual.content, destination.kind)} : undefined,
         );
       } finally {
+        liveProgress.end(contentOperation);
         progress.pages += 1;
         updateProgress(`${options.dryRun ? 'planned' : 'completed'} ${page.title}`);
       }

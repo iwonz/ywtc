@@ -15,6 +15,7 @@ export * from './graph.js';
 export * from './input.js';
 export * from './locators.js';
 export * from './migrator.js';
+export * from './progress.js';
 export * from './rate-limiter.js';
 export * from './report.js';
 export * from './state.js';

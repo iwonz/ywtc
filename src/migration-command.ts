@@ -25,6 +25,10 @@ export interface MigrationCommandOutcome {
 const color = process.stdout.isTTY && !process.env.NO_COLOR;
 const paint = (code: number, value: string) => color ? `\u001b[${code}m${value}\u001b[0m` : value;
 
+export function progressHeartbeatInterval(interactiveTerminal: boolean): number {
+  return interactiveTerminal ? 2_500 : 15_000;
+}
+
 function heading(label: string): void {
   console.log(`\n${paint(36, '◆')} ${paint(1, label)}`);
 }
@@ -156,6 +160,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
           cacheDirectory: workspace.cacheDirectory,
           reportsDirectory: workspace.reportsDirectory,
           signal: controller.signal,
+          progressHeartbeatMs: progressHeartbeatInterval(Boolean(process.stdout.isTTY)),
           ...(stateFilename ? {stateFilename} : {}),
           ...(retry ? {retry} : {}),
           onStatus: (message) => { task.output = message; },

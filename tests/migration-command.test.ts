@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {migrationContinuationCommand, type ReadyMigrationCommand} from '../src/migration-command.js';
+import {migrationContinuationCommand, progressHeartbeatInterval, type ReadyMigrationCommand} from '../src/migration-command.js';
 
 function command(dryRun: boolean): ReadyMigrationCommand {
   return {
@@ -17,6 +17,11 @@ function command(dryRun: boolean): ReadyMigrationCommand {
 }
 
 describe('migration continuation commands', () => {
+  it('uses a quieter heartbeat for durable non-TTY logs', () => {
+    expect(progressHeartbeatInterval(true)).toBe(2_500);
+    expect(progressHeartbeatInterval(false)).toBe(15_000);
+  });
+
   it('uses checkpoint-aware retry for a state-backed failed live run', () => {
     expect(migrationContinuationCommand(
       command(false),
