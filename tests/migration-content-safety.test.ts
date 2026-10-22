@@ -60,6 +60,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let updated = 0;
   let reparented = 0;
   let failUpload = false;
+  let uploadFailure: Error | undefined;
   let failUpdate = false;
   let forbiddenUpdateFailures = 0;
   let failCreatedVerification = false;
@@ -209,6 +210,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
       return verified;
     },
     uploadResource: async ({page: selected, name, existingId}: {page: DestinationPage; name: string; existingId?: string}) => {
+      if (uploadFailure) throw uploadFailure;
       if (failUpload) throw new Error('attachment upload unavailable');
       const attachments = uploaded.get(selected.id) ?? new Map<string, UploadedResource>();
       const duplicate = [...attachments.values()].find((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
@@ -234,6 +236,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     source,
     destination,
     setFailUpload: (value: boolean) => { failUpload = value; },
+    setUploadFailure: (value: Error | undefined) => { uploadFailure = value; },
     setFailUpdate: (value: boolean) => { failUpdate = value; },
     setForbiddenUpdateFailures: (value: number) => { forbiddenUpdateFailures = value; },
     setFailCreatedVerification: (value: boolean) => { failCreatedVerification = value; },
@@ -420,6 +423,24 @@ describe('source-derived remote page safety', () => {
     });
     expect(adapters.snapshot()).toMatchObject({created: 1, uploaded: 1});
     expect(adapters.snapshot().current?.content).toContain('ri:attachment');
+  });
+
+  it('reports a destination attachment-size limit once with exact bytes and a non-retryable action', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setUploadFailure(new HttpRequestError('payload too large', 413, 'POST', '/content/200/child/attachment'));
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, logger, factory).run(options);
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+
+    expect(result).toMatchObject({status: 'partial', summary: {partial: 1, resourcesFailed: 1}});
+    expect(report.issues.filter((issue) => issue.code === 'destination-resource-size-limit')).toHaveLength(1);
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'destination-resource-size-limit', retryable: false,
+      message: expect.stringContaining('manual.pdf (4 bytes)'),
+    }));
+    expect(adapters.snapshot().current?.content).toContain('https://wiki.example/download/manual.pdf');
   });
 
   it('keeps reporting the active resource while a remote operation is in flight', async () => {

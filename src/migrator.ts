@@ -29,7 +29,7 @@ import {
   verifyCommentArchive,
 } from './comments.js';
 import {ConfirmedDestinationMissingError, type ConsistencyRetryOptions, verifyConfirmedDestinationPage} from './consistency.js';
-import {DestinationOwnershipConflictError, DestinationPageCreateRejectedError, DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from './domain.js';
+import {DestinationOwnershipConflictError, DestinationPageCreateRejectedError, DestinationResourceSizeLimitError, DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from './domain.js';
 import type {
   CommentInventory,
   DestinationAdapter,
@@ -203,6 +203,7 @@ function sourceResourceFingerprint(resource: SourceResource): string {
     size: resource.size,
     mimeType: resource.mimeType,
     downloadUrl: resource.downloadUrl,
+    embedded: resource.embedded,
     metadata: resource.metadata,
   }));
 }
@@ -696,7 +697,7 @@ function reportPage(input: {
     }
   }
   const transferable = input.resources.filter(
-    (resource): resource is SourceResource & {kind: 'attachment' | 'image'} => resource.kind !== 'grid',
+    (resource): resource is SourceResource & {kind: 'attachment' | 'image' | 'diagram'} => resource.kind !== 'grid',
   );
   const resourceItems = input.resources.map((resource) => {
     const state = input.resourceStates?.[resource.id];
@@ -789,6 +790,7 @@ function reportPage(input: {
     tables: input.document.metrics.tables,
     grids: input.resources.filter((resource) => resource.kind === 'grid').length,
     codeBlocks: input.document.metrics.codeBlocks,
+    diagrams: input.document.metrics.diagrams ?? 0,
     degraded: effectiveWarnings.length > 0 || (input.resourceFallbacks?.length ?? 0) > 0,
     resourceFallbacks: input.resourceFallbacks ?? [],
     warnings: [...new Set(effectiveWarnings)],
@@ -1263,7 +1265,7 @@ export class Migrator {
     const commentFailures = new Map<string, SourceInventoryOperationError>();
     let reusedInventoryCount = 0;
     let freshInventoryCount = 0;
-    const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
+    const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, diagrams: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
     const retryFullPageIds = new Set(options.retry?.plan.retryPageIds.filter((pageId) => {
       const plan = options.retry?.plan.pages[pageId];
@@ -1493,6 +1495,7 @@ export class Migrator {
       inventory.bytes += resources.reduce((total, resource) => total + (resource.size ?? 0), 0);
       inventory.unknownSizes += resources.filter((resource) => resource.kind !== 'grid' && resource.size === undefined).length;
       inventory.grids += resources.filter((resource) => resource.kind === 'grid').length;
+      inventory.diagrams += document.metrics.diagrams ?? 0;
       inventory.links += document.metrics.links;
       inventory.images += document.metrics.images;
       inventory.tables += document.metrics.tables;
@@ -1652,7 +1655,7 @@ export class Migrator {
         progress.measure({phase: 'Preparing transfer state', completed: preparedStatePages, total: graph.pages.length, unit: 'pages', queued: graph.pages.length - preparedStatePages});
       }
     }
-    const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
+    const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids)${inventory.diagrams > 0 ? ` · ${inventory.diagrams} diagrams` : ''} · ${inventory.codeBlocks} code blocks · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
     status(planSummary);
     this.logger.info(planSummary);
 
@@ -1983,7 +1986,7 @@ export class Migrator {
             sha256: resourceState.sha256,
             ...(resourceState.size !== undefined ? {size: resourceState.size} : {}),
           } : undefined);
-          downloaded = cached ?? await source.downloadResource(resource, filename);
+          downloaded = cached ?? await source.downloadResource(resource, filename, page);
           downloads.set(resourceId, downloaded);
         }
         archiveFiles.push({
@@ -2807,17 +2810,21 @@ export class Migrator {
       const targetedResourceIds = new Set(retryPagePlan?.resourceIds ?? []);
       const resourceProblems: string[] = [];
       const failedResourceIds = new Set<string>();
-      const recordResourceFailure = async (resource: SourceResource, detail: string): Promise<void> => {
+      const recordResourceFailure = async (
+        resource: SourceResource,
+        detail: string,
+        failure: {code?: string; retryable?: boolean} = {},
+      ): Promise<void> => {
         if (!failedResourceIds.has(resource.id)) {
           failedResourceIds.add(resource.id);
           resourceProblems.push(detail);
           report.issue({
-            code: 'resource-transfer-failed',
+            code: failure.code ?? 'resource-transfer-failed',
             severity: 'error',
             phase: 'resource',
             pageId: page.canonicalId,
             resourceId: resource.id,
-            retryable: true,
+            retryable: failure.retryable ?? true,
             message: `${page.title}: ${detail}`,
           });
         }
@@ -2934,7 +2941,7 @@ export class Migrator {
               ...(existing.size !== undefined ? {size: existing.size} : {}),
               ...(existing.mimeType ? {mimeType: existing.mimeType} : {}),
             } : undefined);
-            const downloaded = cached ?? await source.downloadResource(resource, filename);
+            const downloaded = cached ?? await source.downloadResource(resource, filename, cachedPage);
             const mimeType = downloaded.mimeType ?? existing?.mimeType ?? resource.mimeType;
             const mappedRemote = existing?.destinationId
               ? remoteResources.find((item) => item.id === existing.destinationId)
@@ -3020,6 +3027,11 @@ export class Migrator {
                 });
               } catch (uploadError) {
                 lastUploadError = uploadError;
+                const uploadStatus = (uploadError as {status?: unknown}).status;
+                if (uploadError instanceof DestinationResourceSizeLimitError) throw uploadError;
+                if (uploadStatus === 413) {
+                  throw new DestinationResourceSizeLimitError(resource.preferredName ?? resource.name, downloaded.size, {cause: uploadError});
+                }
                 remoteResources = await destination.listUploadedResources(destinationPage);
                 for (const remote of remoteResources) nameAllocator.reserve(remote.name);
                 const uncertain = remoteResources.find((item) => item.name.toLocaleLowerCase() === destinationName.toLocaleLowerCase());
@@ -3050,7 +3062,12 @@ export class Migrator {
             await store.setPage({...state, updatedAt: new Date().toISOString()});
             updateProgress(`uploaded ${resource.name} → ${page.title}`);
           } catch (error) {
-            await recordResourceFailure(resource, `Resource ${resource.name} was not transferred: ${error instanceof Error ? error.message : String(error)}`);
+            const sizeLimit = error instanceof DestinationResourceSizeLimitError;
+            await recordResourceFailure(
+              resource,
+              `Resource ${resource.name} was not transferred: ${error instanceof Error ? error.message : String(error)}`,
+              sizeLimit ? {code: 'destination-resource-size-limit', retryable: false} : {},
+            );
             updateProgress(`fallback ${resource.name} → ${page.title}`);
           } finally {
             progress.resources += 1;

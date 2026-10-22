@@ -343,7 +343,7 @@ export class FilesystemExporter {
           const relative = `attachments/${stableSegment(page)}/${name}`;
           const destination = path.join(staging, relative);
           await mkdir(path.dirname(destination), {recursive: true});
-          const downloaded = await this.source.downloadResource(resource, destination);
+          const downloaded = await this.source.downloadResource(resource, destination, page);
           downloadedByResource.set(resource.id, downloaded);
           setSourceResourceBinding(pageResources, page, resources, resource, {kind: 'file', path: relative, name});
           manifestResources.push({sourceId: resource.id, name, path: relative, size: downloaded.size, sha256: downloaded.sha256});

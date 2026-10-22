@@ -54,7 +54,11 @@ const forbidden = packResult.files
     || filename === '.ywtc-workspace.json'
     || filename === 'ywtc.config.yaml'
     || filename.startsWith('.states/')
-    || filename.includes('/.states/'));
+    || filename.includes('/.states/')
+    || filename.endsWith('.part')
+    || filename.endsWith('.part.json')
+    || filename.startsWith('reports/')
+    || filename.startsWith('cache/'));
 if (forbidden.length > 0) throw new Error(`Packed archive contains runtime data: ${forbidden.join(', ')}`);
 for (const required of ['dist/report-ui/index.html', 'docs/assets/report-header-transparent.png']) {
   if (!packResult.files.some((file) => file.path === required)) throw new Error(`Packed archive is missing ${required}`);
@@ -273,6 +277,34 @@ try {
 }
 
 const installedReportModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'report.js');
+const installedDiagramModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'diagrams.js');
+process.stdout.write('Verifying packaged diagram extraction and materialization...\n');
+const installedDiagramDirectory = path.join(temporary, 'installed-diagram');
+await mkdir(installedDiagramDirectory, {recursive: true});
+const diagramSmoke = `
+  import {readFile} from 'node:fs/promises';
+  import {discoverPageDiagrams, materializeEmbeddedDiagram} from ${JSON.stringify(pathToFileURL(installedDiagramModule).toString())};
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><!--' + 'x'.repeat(131072) + '--><text>Package smoke</text></svg>';
+  const encoded = Buffer.from(svg).toString('base64');
+  const page = {
+    provider: 'yandex-wiki', profile: 'wiki', id: '1', canonicalId: 'yandex:wiki:1', title: 'Diagram',
+    locator: 'diagram', url: 'https://wiki.example.test/diagram', rawFormat: 'yfm', references: [],
+    rawContent: '# Diagram\\n\\n{% drawio data="data:image/svg+xml;base64,' + encoded + '" %}',
+  };
+  const result = discoverPageDiagrams(page);
+  if (result.diagrams.length !== 1 || result.resources.length !== 1 || result.preparedContent.includes(encoded)) {
+    throw new Error('Packaged diagram discovery did not isolate the inline payload');
+  }
+  if (JSON.stringify(result.resources).includes(encoded.slice(0, 256))) {
+    throw new Error('Packaged diagram metadata contains inline payload data');
+  }
+  const output = ${JSON.stringify(path.join(installedDiagramDirectory, 'diagram.drawio.svg'))};
+  const materialized = await materializeEmbeddedDiagram(page, result.resources[0], output);
+  if (materialized.size !== Buffer.byteLength(svg) || (await readFile(output, 'utf8')) !== svg) {
+    throw new Error('Packaged diagram materialization changed the source artifact');
+  }
+`;
+await execFileAsync(process.execPath, ['--input-type=module', '--eval', diagramSmoke], {encoding: 'utf8'});
 process.stdout.write('Verifying packaged autonomous report generation...\n');
 const installedReportDirectory = path.join(temporary, 'installed-report');
 const reportSmoke = `

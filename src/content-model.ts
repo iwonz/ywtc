@@ -11,6 +11,7 @@ import {unified} from 'unified';
 import type {
   DestinationPage,
   NormalizedDocument,
+  NormalizedDiagram,
   NormalizedNode,
   NormalizedReference,
   PageReference,
@@ -22,6 +23,7 @@ import type {
   TransformationNotice,
 } from './domain.js';
 import {convertYfmToStorage} from './conversion.js';
+import {discoverPageDiagrams} from './diagrams.js';
 import {transformYfm} from './diplodoc.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
@@ -275,7 +277,7 @@ const confluenceLayoutCellCounts = new Map([
 ]);
 
 function storageToSemanticHtml(storage: string, warnings: string[], adaptations: string[] = []): string {
-  const $ = load(`<main data-ywtc-root>${storage}</main>`, {xmlMode: false}, false);
+  const $ = load(`<main data-ywtc-root>${storage}</main>`, {xmlMode: true}, false);
   $('script, iframe, object, embed, form').each((_index, element) => {
     warnings.push(`Active or embedded element <${element.tagName}> was replaced by a safe fallback`);
     $(element).replaceWith(`<pre data-ywtc-fallback>${escapeHtml($.html(element))}</pre>`);
@@ -300,22 +302,32 @@ function storageToSemanticHtml(storage: string, warnings: string[], adaptations:
   $('ac\\:structured-macro').toArray().reverse().forEach((element) => {
     const macro = $(element);
     const name = macro.attr('ac:name') ?? 'unknown';
+    const normalizedName = name.toLocaleLowerCase();
     const richBody = macro.children('ac\\:rich-text-body').html() ?? '';
-    const plainBody = macro.children('ac\\:plain-text-body').text();
+    const macroXml = load($.html(element), {xmlMode: true}, false);
+    const plainBody = macroXml('ac\\:plain-text-body').text() || macro.children('ac\\:plain-text-body').text();
     const parameters = new Map(macro.children('ac\\:parameter').toArray().map((item) => [$(item).attr('ac:name') ?? '', $(item).text().trim()]));
     const title = parameters.get('title') ?? '';
-    if (name === 'code') {
+    if (normalizedName === 'code') {
       const language = parameters.get('language');
       macro.replaceWith(`<pre><code${language ? ` class="language-${escapeHtml(language)}"` : ''}>${escapeHtml(plainBody)}</code></pre>`);
-    } else if (name === 'expand') {
+    } else if (['mermaid', 'plantuml', 'd2'].includes(normalizedName)) {
+      const displayName = normalizedName === 'plantuml' ? 'PlantUML' : normalizedName === 'd2' ? 'D2' : 'Mermaid';
+      adaptations.push(`${displayName} Confluence macro source was preserved as a portable diagram source block`);
+      macro.replaceWith(`<figure class="ywtc-diagram" data-ywtc-diagram-kind="${normalizedName}"><figcaption>${displayName} diagram</figcaption><pre><code class="language-${normalizedName}">${escapeHtml(plainBody)}</code></pre></figure>`);
+    } else if (['drawio', 'inc-drawio'].includes(normalizedName) && (parameters.get('diagramName') || parameters.get('name'))) {
+      const diagramName = parameters.get('diagramName') ?? parameters.get('name')!;
+      adaptations.push('Draw.io Confluence macro source was preserved as a portable managed diagram attachment');
+      macro.replaceWith(`<figure class="ywtc-diagram" data-ywtc-diagram-kind="drawio"><figcaption>Draw.io diagram</figcaption><a href="attachment:${escapeHtml(diagramName)}">${escapeHtml(diagramName)}</a></figure>`);
+    } else if (normalizedName === 'expand') {
       macro.replaceWith(`<details class="ywtc-expand" data-ywtc-title="${escapeHtml(title || 'Details')}" open><summary>${escapeHtml(title || 'Details')}</summary>${richBody}</details>`);
-    } else if (['info', 'tip', 'warning', 'note'].includes(name)) {
-      macro.replaceWith(`<aside class="ywtc-note ywtc-${name}" data-ywtc-note-type="${name}" data-ywtc-title="${escapeHtml(title)}">${richBody}</aside>`);
-    } else if (name === 'anchor') {
-      macro.replaceWith(`<span class="ywtc-anchor" id="${escapeHtml(macro.children('ac\\:parameter').first().text())}"></span>`);
-    } else if (name === 'children' && !parameters.get('page')) {
+    } else if (['info', 'tip', 'warning', 'note'].includes(normalizedName)) {
+      macro.replaceWith(`<aside class="ywtc-note ywtc-${normalizedName}" data-ywtc-note-type="${normalizedName}" data-ywtc-title="${escapeHtml(title)}">${richBody}</aside>`);
+    } else if (normalizedName === 'anchor') {
+      macro.replaceWith(`<a class="ywtc-anchor" id="${escapeHtml(macro.children('ac\\:parameter').first().text())}"><span data-ywtc-anchor-marker=""></span></a>`);
+    } else if (normalizedName === 'children' && !parameters.get('page')) {
       const depth = Number(parameters.get('depth'));
-      macro.replaceWith(`<nav class="ywtc-children" data-ywtc-depth="${Number.isInteger(depth) && depth > 0 ? depth : ''}" data-ywtc-sort="${escapeHtml(parameters.get('sort') ?? '')}" data-ywtc-reverse="${parameters.get('reverse') === 'true' ? 'true' : 'false'}"></nav>`);
+      macro.replaceWith(`<nav class="ywtc-children" data-ywtc-depth="${Number.isInteger(depth) && depth > 0 ? depth : ''}" data-ywtc-sort="${escapeHtml(parameters.get('sort') ?? '')}" data-ywtc-reverse="${parameters.get('reverse') === 'true' ? 'true' : 'false'}"><span data-ywtc-children-marker=""></span></nav>`);
     } else {
       warnings.push(`Confluence macro "${name}" was converted to a static fallback`);
       macro.replaceWith(`<aside class="ywtc-fallback"><strong>${escapeHtml(name)}</strong>${richBody || `<pre>${escapeHtml(plainBody)}</pre>`}</aside>`);
@@ -436,7 +448,24 @@ function containsEmptyYfmHeading(content: string): boolean {
   return /^\s{0,3}#{1,6}\s*$/m.test(content);
 }
 
-function yfmFragmentToHtml(content: string, warnings: string[], normalizations: string[]): string {
+function injectDiagramMarkers(html: string, diagrams: NormalizedDiagram[]): string {
+  if (diagrams.length === 0) return html;
+  const $ = load(`<main data-ywtc-diagrams>${html}</main>`, null, false);
+  const byMarker = new Map(diagrams.map((diagram) => [diagram.marker, diagram]));
+  $('main[data-ywtc-diagrams] *').contents().toArray().forEach((node) => {
+    if (node.type !== 'text') return;
+    const value = 'data' in node ? String(node.data ?? '') : '';
+    const diagram = [...byMarker.values()].find((candidate) => value.includes(candidate.marker));
+    if (!diagram) return;
+    const replacement = `<ywtc-diagram data-ywtc-diagram-id="${escapeHtml(diagram.id)}"></ywtc-diagram>`;
+    const parent = node.parent ? $(node.parent) : undefined;
+    if (value.trim() === diagram.marker && parent?.is('p')) parent.replaceWith(replacement);
+    else $(node).replaceWith(value.split(diagram.marker).map((part, index) => `${escapeHtml(part)}${index === 0 ? replacement : ''}`).join(''));
+  });
+  return $('main[data-ywtc-diagrams]').html() ?? html;
+}
+
+function yfmFragmentToHtml(content: string, warnings: string[], normalizations: string[], diagrams: NormalizedDiagram[] = []): string {
   try {
     const result = transformYfm(content || '', {
       allowHTML: true,
@@ -466,22 +495,22 @@ function yfmFragmentToHtml(content: string, warnings: string[], normalizations: 
       if (clean) warnings.push(clean);
     }
     if (removedHeadings > 0) normalizations.push(`Removed ${removedHeadings} empty heading${removedHeadings === 1 ? '' : 's'} emitted by source conversion`);
-    return $.html() || '<p></p>';
+    return injectDiagramMarkers($.html() || '<p></p>', diagrams);
   } catch (error) {
     warnings.push(`YFM transformation failed: ${stripAnsi(error instanceof Error ? error.message : String(error))}`);
     return `<pre data-ywtc-fallback><code>${escapeHtml(content)}</code></pre>`;
   }
 }
 
-function yfmToHtml(content: string, warnings: string[], normalizations: string[] = []): string {
+function yfmToHtml(content: string, warnings: string[], normalizations: string[] = [], diagrams: NormalizedDiagram[] = []): string {
   const segments = parseYfmDocumentSegments(content);
-  if (!hasYfmLayouts(segments)) return yfmFragmentToHtml(content, warnings, normalizations);
+  if (!hasYfmLayouts(segments)) return yfmFragmentToHtml(content, warnings, normalizations, diagrams);
   return segments.map((segment) => {
     if (segment.type === 'content') {
-      return segment.raw.trim() ? yfmFragmentToHtml(segment.raw, warnings, normalizations) : '';
+      return segment.raw.trim() ? yfmFragmentToHtml(segment.raw, warnings, normalizations, diagrams) : '';
     }
     const gap = segment.gap?.replace(/[^a-z0-9_-]/gi, '') || 'default';
-    const cells = segment.cells.map((cell) => `<div class="ywtc-layout-cell">${yfmFragmentToHtml(cell, warnings, normalizations)}</div>`).join('');
+    const cells = segment.cells.map((cell) => `<div class="ywtc-layout-cell">${yfmFragmentToHtml(cell, warnings, normalizations, diagrams)}</div>`).join('');
     return `<section class="ywtc-layout" data-ywtc-layout-source="yandex-wiki"><section class="ywtc-layout-section ywtc-layout-columns-${segment.cells.length} ywtc-layout-gap-${gap}" data-ywtc-layout-type="${segment.cells.length === 1 ? 'single' : segment.cells.length === 2 ? 'two_equal' : segment.cells.length === 3 ? 'three_equal' : 'unsupported'}">${cells}</section></section>`;
   }).join('');
 }
@@ -491,7 +520,7 @@ function metrics(html: string): NormalizedDocument['metrics'] {
   return {links: $('a').length, images: $('img').length, tables: $('table').length, codeBlocks: $('pre').length, preservedExternalReferences: 0};
 }
 
-function normalizedNodesFromHtml(html: string, provider: SourcePage['provider']): NormalizedNode[] {
+function normalizedNodesFromHtml(html: string, provider: SourcePage['provider'], diagrams: NormalizedDiagram[] = []): NormalizedNode[] {
   const $ = load(`<main data-ywtc-nodes>${html}</main>`, null, false);
   const nodes: NormalizedNode[] = [];
   let pending = '';
@@ -502,6 +531,12 @@ function normalizedNodesFromHtml(html: string, provider: SourcePage['provider'])
   };
   for (const element of $('main[data-ywtc-nodes]').contents().toArray()) {
     const item = $(element);
+    if (item.is('ywtc-diagram')) {
+      flush();
+      const diagram = diagrams.find((candidate) => candidate.id === item.attr('data-ywtc-diagram-id'));
+      if (diagram) nodes.push({type: 'diagram', diagram});
+      continue;
+    }
     if (!item.is('section.ywtc-layout')) {
       pending += $.html(element);
       continue;
@@ -516,7 +551,7 @@ function normalizedNodesFromHtml(html: string, provider: SourcePage['provider'])
       const gap = String(sectionItem.attr('class') ?? '').split(/\s+/).find((value) => value.startsWith('ywtc-layout-gap-'))?.slice('ywtc-layout-gap-'.length);
       const cells = sectionItem.children('.ywtc-layout-cell').toArray().map<NormalizedNode>((cell) => ({
         type: 'layout-cell',
-        children: [{type: 'html', value: $(cell).html() ?? ''}],
+        children: normalizedNodesFromHtml($(cell).html() ?? '', provider, diagrams),
       }));
       return {type: 'layout-section', layout: {source: provider, sectionType, ...(gap ? {gap} : {})}, children: cells};
     });
@@ -530,15 +565,16 @@ function semanticallyEmptyHtml(html: string): boolean {
   const $ = load(html, null, false);
   $('script,style').remove();
   if (semanticText($.root().text())) return false;
-  return $('a[href],a[name],[id],img,video,audio,table,pre,code,hr,blockquote,ul,ol,.ywtc-note,.ywtc-expand,.ywtc-children,.ywtc-task-list,.ywtc-fallback').length === 0;
+  return $('a[href],a[name],[id],img,video,audio,table,pre,code,hr,blockquote,ul,ol,ywtc-diagram,.ywtc-diagram,.ywtc-note,.ywtc-expand,.ywtc-children,.ywtc-task-list,.ywtc-fallback').length === 0;
 }
 
 export function normalizePageContent(page: SourcePage): NormalizedDocument {
   const warnings: string[] = [];
   const normalizations: string[] = [];
   const adaptations: string[] = [];
-  const tree = page.rawFormat === 'yfm' ? extractTreeDirectives(page.rawContent) : {content: page.rawContent, directives: []};
-  const html = page.rawFormat === 'yfm' ? yfmToHtml(tree.content, warnings, normalizations) : storageToSemanticHtml(page.rawContent, warnings, adaptations);
+  const diagramDiscovery = discoverPageDiagrams(page);
+  const tree = page.rawFormat === 'yfm' ? extractTreeDirectives(diagramDiscovery.preparedContent) : {content: page.rawContent, directives: []};
+  const html = page.rawFormat === 'yfm' ? yfmToHtml(tree.content, warnings, normalizations, diagramDiscovery.diagrams) : storageToSemanticHtml(page.rawContent, warnings, adaptations);
   const references = extractPageReferences(page.rawContent, page.rawFormat).map<NormalizedReference>((reference, index) => ({
     token: `ref-${index}`,
     kind: reference.kind,
@@ -547,7 +583,7 @@ export function normalizePageContent(page: SourcePage): NormalizedDocument {
     label: reference.pageTitle ?? reference.href ?? reference.raw,
     ...(reference.anchor ? {anchor: reference.anchor} : {}),
   }));
-  const children: NormalizedNode[] = normalizedNodesFromHtml(html, page.provider);
+  const children: NormalizedNode[] = normalizedNodesFromHtml(html, page.provider, diagramDiscovery.diagrams);
   children.push(...tree.directives.map((directive): NormalizedNode => ({
     type: 'tree-directive',
     value: directive.raw,
@@ -557,6 +593,8 @@ export function normalizePageContent(page: SourcePage): NormalizedDocument {
       ...(directive.sortBy ? {sortBy: directive.sortBy} : {}),
     },
   })));
+  const diagramDegradations = diagramDiscovery.diagnostics.filter((notice) => notice.kind === 'degradation');
+  warnings.push(...diagramDegradations.map((notice) => notice.message));
   if (warnings.length > 0) children.push({type: 'vendor-extension', vendor: page.provider, value: page.rawContent});
   return {
     root: {type: 'document', children},
@@ -570,13 +608,14 @@ export function normalizePageContent(page: SourcePage): NormalizedDocument {
       },
     } : {}),
     references,
+    ...(diagramDiscovery.diagrams.length > 0 ? {diagrams: diagramDiscovery.diagrams, renderSource: diagramDiscovery.preparedContent} : {}),
     warnings,
     normalizations,
     adaptations,
-    notices: transformationNotices({normalizations, adaptations, degradations: warnings}),
+    notices: [...transformationNotices({normalizations, adaptations, degradations: warnings.filter((message) => !diagramDegradations.some((notice) => notice.message === message))}), ...diagramDiscovery.diagnostics],
     degraded: warnings.length > 0,
     semanticallyEmpty: tree.directives.length === 0 && semanticallyEmptyHtml(html),
-    metrics: metrics(html),
+    metrics: {...metrics(html), diagrams: diagramDiscovery.diagrams.length},
   };
 }
 
@@ -688,7 +727,7 @@ async function semanticHtmlToYfm(html: string): Promise<YfmSemanticResult> {
   const convert = async (fragment: string): Promise<string> => {
     const $ = load(fragment, null, false);
     const tokens = new Map<string, string>();
-    const selector = 'section.ywtc-layout,details.ywtc-expand,aside.ywtc-note,nav.ywtc-children,ul.ywtc-task-list,span.ywtc-anchor';
+    const selector = 'section.ywtc-layout,details.ywtc-expand,aside.ywtc-note,nav.ywtc-children,ul.ywtc-task-list,figure.ywtc-diagram,.ywtc-anchor';
     const elements = $(selector).filter((_index, element) => $(element).parents(selector).length === 0).toArray().reverse();
     for (const element of elements) {
       const item = $(element);
@@ -737,7 +776,18 @@ async function semanticHtmlToYfm(html: string): Promise<YfmSemanticResult> {
           tasks.push(`- [${marker}] ${body}`);
         }
         rendered = tasks.join('\n');
-      } else if (item.is('span.ywtc-anchor')) {
+      } else if (item.is('figure.ywtc-diagram')) {
+        const kind = item.attr('data-ywtc-diagram-kind');
+        const source = item.find('pre code').first().text();
+        if (kind === 'plantuml' && source) rendered = `{% diagram %}\n${source}\n{% enddiagram %}`;
+        else if ((kind === 'mermaid' || kind === 'd2') && source) rendered = `\`\`\`${kind}\n${source}\n\`\`\``;
+        else {
+          const link = item.find('a[href]').first();
+          const href = link.attr('href');
+          const label = link.text().trim() || item.children('figcaption').text().trim() || 'Diagram source';
+          rendered = href ? `[${label}](${href})` : `> ${label}: source representation is unavailable`;
+        }
+      } else if (item.is('.ywtc-anchor')) {
         const id = item.attr('id');
         rendered = id ? `<a id="${escapeHtml(id)}"></a>` : '';
       }
@@ -774,6 +824,21 @@ async function sanitizeHtml(html: string): Promise<string> {
 
 function normalizedNodeHtml(node: NormalizedNode): string {
   if (node.type === 'html') return node.value ?? '';
+  if (node.type === 'diagram' && node.diagram) {
+    const diagram = node.diagram;
+    if (!diagram.valid) {
+      return `<aside class="ywtc-fallback ywtc-diagram" data-ywtc-diagram-id="${escapeHtml(diagram.id)}"><strong>${escapeHtml(diagram.label)}</strong><p>${escapeHtml(diagram.error ?? 'The diagram payload is invalid')}. Exact source is retained in the raw snapshot.</p></aside>`;
+    }
+    if (diagram.kind === 'drawio' && diagram.resourceReference) {
+      if (diagram.previewSafe === false) {
+        return `<figure class="ywtc-diagram" data-ywtc-diagram-id="${escapeHtml(diagram.id)}" data-ywtc-diagram-kind="drawio"><figcaption>${escapeHtml(diagram.label)} · preview disabled because the source SVG contains active or external content</figcaption><p><a href="${escapeHtml(diagram.resourceReference)}">Download diagram source</a></p></figure>`;
+      }
+      const dimensions = `${diagram.width ? ` width="${escapeHtml(diagram.width)}"` : ''}${diagram.height ? ` height="${escapeHtml(diagram.height)}"` : ''}`;
+      return `<figure class="ywtc-diagram" data-ywtc-diagram-id="${escapeHtml(diagram.id)}" data-ywtc-diagram-kind="drawio"><img src="${escapeHtml(diagram.resourceReference)}" alt="${escapeHtml(diagram.label)}"${dimensions}><figcaption>${escapeHtml(diagram.label)} · <a href="${escapeHtml(diagram.resourceReference)}">diagram source</a></figcaption></figure>`;
+    }
+    const source = diagram.sourceText ?? '';
+    return `<figure class="ywtc-diagram" data-ywtc-diagram-id="${escapeHtml(diagram.id)}" data-ywtc-diagram-kind="${diagram.kind}"><figcaption>${escapeHtml(diagram.label)}</figcaption><pre><code class="language-${diagram.kind}">${escapeHtml(source)}</code></pre></figure>`;
+  }
   if (node.type === 'layout-cell') return `<div class="ywtc-layout-cell">${(node.children ?? []).map(normalizedNodeHtml).join('')}</div>`;
   if (node.type === 'layout-section') {
     const cells = node.children ?? [];
@@ -785,6 +850,31 @@ function normalizedNodeHtml(node: NormalizedNode): string {
     return `<section class="ywtc-layout" data-ywtc-layout-source="${node.layout?.source ?? 'yandex-wiki'}">${(node.children ?? []).map(normalizedNodeHtml).join('')}</section>`;
   }
   return '';
+}
+
+function yfmSourceForPortableRendering(document: NormalizedDocument): string {
+  let content = document.renderSource ?? document.raw;
+  for (const diagram of document.diagrams ?? []) {
+    let replacement: string;
+    if (!diagram.valid) replacement = `> ${diagram.label}: ${diagram.error ?? 'invalid diagram payload'}; exact source retained in the raw snapshot`;
+    else if (diagram.kind === 'drawio' && diagram.resourceReference) {
+      replacement = diagram.previewSafe === false
+        ? `[${diagram.label} source — preview disabled](${diagram.resourceReference})`
+        : `![${diagram.label}](${diagram.resourceReference})\n\n[${diagram.label} source](${diagram.resourceReference})`;
+    } else {
+      const language = diagram.kind === 'plantuml' ? 'plantuml' : diagram.kind;
+      replacement = `\`\`\`${language}\n${diagram.sourceText ?? ''}\n\`\`\``;
+    }
+    content = content.replace(diagram.marker, replacement);
+  }
+  return content;
+}
+
+function diagramAdaptations(document: NormalizedDocument, destination: 'confluence' | 'markdown' | 'html'): string[] {
+  return (document.diagrams ?? []).filter((diagram) => diagram.valid).map((diagram) => {
+    if (diagram.kind === 'drawio') return `Draw.io diagram source was preserved as a managed SVG ${destination === 'confluence' ? 'attachment' : 'artifact'}${diagram.previewSafe === false ? '; active or external SVG preview content was not executed' : ''}`;
+    return `${diagram.kind === 'plantuml' ? 'PlantUML' : diagram.kind === 'd2' ? 'D2' : 'Mermaid'} diagram source was preserved as a safe ${destination === 'confluence' ? 'code representation' : 'portable source representation'}`;
+  });
 }
 
 function htmlFromDocument(document: NormalizedDocument): string {
@@ -1257,7 +1347,7 @@ export async function renderMarkdown(document: NormalizedDocument, context: Rend
   const content = await htmlToMarkdown(linearized.html);
   const body = tree ? `${content.trimEnd()}\n\n${tree}\n` : content;
   const layoutAdaptations = linearized.layouts > 0 ? [`${linearized.layouts} column layout${linearized.layouts === 1 ? ' was' : 's were'} linearized for portable Markdown`] : [];
-  const adaptations = [...document.adaptations, ...layoutAdaptations];
+  const adaptations = [...document.adaptations, ...diagramAdaptations(document, 'markdown'), ...layoutAdaptations];
   return {body, warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations, notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: document.warnings}), degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: preservedExternalImageCount(document, context)};
 }
 
@@ -1276,7 +1366,7 @@ export async function renderStaticHtml(document: NormalizedDocument, context: Re
   };
   visit(document.root);
   const layoutAdaptations = unsupportedLayouts.map((cells) => `Unsupported ${cells}-cell layout was stacked in static HTML without losing cell content`);
-  const adaptations = [...document.adaptations, ...layoutAdaptations];
+  const adaptations = [...document.adaptations, ...diagramAdaptations(document, 'html'), ...layoutAdaptations];
   return {body, warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations, notices: transformationNotices({normalizations: document.normalizations, adaptations, degradations: document.warnings}), degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: preservedExternalImageCount(document, context)};
 }
 
@@ -1435,6 +1525,27 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       warnings.push(`Attachment uses its source fallback because it was not transferred: ${filename}`);
       attachment.replaceWith(`<a href="${escapeHtml(target)}">${escapeHtml(filename)}</a>`);
     });
+    $('ac\\:structured-macro').each((_index, element) => {
+      const macro = $(element);
+      const name = (macro.attr('ac:name') ?? '').toLocaleLowerCase();
+      if (name !== 'drawio' && name !== 'inc-drawio') return;
+      const parameter = macro.children('ac\\:parameter').filter((_parameterIndex, item) => {
+        const parameterName = $(item).attr('ac:name');
+        return parameterName === 'diagramName' || parameterName === 'name';
+      }).first();
+      const filename = parameter.text().trim();
+      if (!filename) return;
+      const binding = resourceBinding(filename, context);
+      if (!binding) return;
+      if (binding.kind === 'uploaded') {
+        parameter.text(binding.resource.name);
+        return;
+      }
+      const target = bindingTarget(binding);
+      if (!target) return;
+      warnings.push(`Draw.io diagram uses its source fallback because its managed attachment was not transferred: ${filename}`);
+      macro.replaceWith(`<p><a href="${escapeHtml(target)}">Draw.io diagram: ${escapeHtml(filename)}</a></p>`);
+    });
     $('ri\\:page').each((_index, element) => {
       const title = $(element).attr('ri:content-title');
       const id = $(element).attr('ri:content-id');
@@ -1481,7 +1592,7 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
     if (binding.kind === 'uploaded') attachments.set(name, binding.resource.name);
     else if (binding.kind === 'source' && binding.url) resourceFallbacks.set(name, binding.url);
   }
-  const tree = extractTreeDirectives(document.raw);
+  const tree = extractTreeDirectives(yfmSourceForPortableRendering(document));
   const converted = convertYfmToStorage(tree.content, {
     currentSlug: page.locator,
     spaceKey,
@@ -1524,12 +1635,13 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
   const gridFallbackStorage = $('aside.ywtc-fallback[data-ywtc-resource-id]').toArray()
     .map((element) => `<blockquote>${$(element).html() ?? ''}</blockquote>`)
     .join('');
+  const adaptations = [...document.adaptations, ...diagramAdaptations(document, 'confluence'), ...converted.adaptations];
   return {
     body: `${normalizedStorage('main[data-root]').html() ?? '<p></p>'}${treeStorage}${gridStorage}${gridFallbackStorage}`,
     warnings: [...document.warnings, ...conversionWarnings],
     normalizations,
-    adaptations: [...document.adaptations, ...converted.adaptations],
-    notices: transformationNotices({normalizations, adaptations: [...document.adaptations, ...converted.adaptations], degradations: [...document.warnings, ...conversionWarnings]}),
+    adaptations,
+    notices: transformationNotices({normalizations, adaptations, degradations: [...document.warnings, ...conversionWarnings]}),
     degraded: document.degraded || conversionWarnings.length > 0,
     representedReferences: document.references.length,
     preservedExternalReferences: converted.stats.preservedExternalReferences,

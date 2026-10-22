@@ -68,6 +68,7 @@ export interface TransferReportPage {
   tables: number;
   grids: number;
   codeBlocks: number;
+  diagrams?: number;
   degraded: boolean;
   resourceFallbacks: Array<{name: string; error: string}>;
   warnings: string[];
@@ -189,6 +190,7 @@ export interface TransferReportSummary {
   resources: number;
   attachments: number;
   resourceImages: number;
+  resourceDiagrams?: number;
   resourcesComplete: number;
   resourcesPartial: number;
   resourcesFailed: number;
@@ -206,6 +208,7 @@ export interface TransferReportSummary {
   gridsFailed?: number;
   gridStatuses?: ResourceStatusCounts;
   codeBlocks: number;
+  diagrams?: number;
   cycles: number;
   normalizations: number;
   adaptations: number;

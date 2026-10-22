@@ -175,25 +175,89 @@ describe('provider clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
-  it('retries an aborted Yandex response stream without publishing a partial cache file', async () => {
+  it('resumes an aborted Yandex response stream from a verified byte range', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-yandex-download-'));
     const destination = path.join(directory, 'large.bin');
-    const failing = new Readable({
-      read() {
-        this.push(Buffer.from('partial'));
-        this.destroy(Object.assign(new Error('aborted'), {code: 'ECONNRESET'}));
-      },
-    });
+    await writeFile(`${destination}.part`, 'partial');
+    await writeFile(`${destination}.part.json`, JSON.stringify({source: '2:7', bytes: 7, etag: '"file-v1"', updatedAt: new Date().toISOString()}));
     const api = nock('https://api.wiki.yandex.net')
-      .get('/v1/pages/2/attachments/7/download').reply(200, () => failing)
-      .get('/v1/pages/2/attachments/7/download').reply(200, 'complete', {'Content-Type': 'application/octet-stream'});
+      .get('/v1/pages/2/attachments/7/download')
+      .matchHeader('range', 'bytes=7-')
+      .matchHeader('if-range', '"file-v1"')
+      .reply(206, 'complete', {'Content-Type': 'application/octet-stream', 'Content-Range': 'bytes 7-14/15', 'ETag': '"file-v1"'});
 
     await expect(new YandexWikiClient(wiki, 5_000, limits).download(2, 7, destination)).resolves.toMatchObject({
       path: destination,
-      size: 8,
+      size: 15,
     });
+    await expect(readFile(destination, 'utf8')).resolves.toBe('partialcomplete');
+    expect((await readdir(directory)).filter((name) => name.includes('.part'))).toEqual([]);
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('restarts safely when a Yandex download ignores a requested range', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-yandex-range-restart-'));
+    const destination = path.join(directory, 'large.bin');
+    await writeFile(`${destination}.part`, 'stale');
+    await writeFile(`${destination}.part.json`, JSON.stringify({source: '2:7', bytes: 5, etag: '"old"', updatedAt: new Date().toISOString()}));
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/2/attachments/7/download')
+      .matchHeader('range', 'bytes=5-')
+      .reply(200, 'complete', {'Content-Type': 'application/octet-stream', 'ETag': '"new"'});
+
+    await expect(new YandexWikiClient(wiki, 5_000, limits).download(2, 7, destination)).resolves.toMatchObject({size: 8});
     await expect(readFile(destination, 'utf8')).resolves.toBe('complete');
-    expect((await readdir(directory)).filter((name) => name.includes('.part-'))).toEqual([]);
+    expect((await readdir(directory)).filter((name) => name.includes('.part'))).toEqual([]);
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('rejects an incompatible partial-content range and retries from byte zero', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-yandex-range-invalid-'));
+    const destination = path.join(directory, 'large.bin');
+    await writeFile(`${destination}.part`, 'stale');
+    await writeFile(`${destination}.part.json`, JSON.stringify({source: '2:7', bytes: 5, etag: '"same"', updatedAt: new Date().toISOString()}));
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/2/attachments/7/download')
+      .matchHeader('range', 'bytes=5-')
+      .reply(206, 'wrong', {'Content-Range': 'bytes 2-6/7', 'ETag': '"same"'})
+      .get('/v1/pages/2/attachments/7/download')
+      .reply(200, 'complete', {'Content-Type': 'application/octet-stream', 'ETag': '"same"'});
+
+    await expect(new YandexWikiClient(wiki, 5_000, limits).download(2, 7, destination)).resolves.toMatchObject({size: 8});
+    await expect(readFile(destination, 'utf8')).resolves.toBe('complete');
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('restarts when a resumed response omits the validator used by If-Range', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-yandex-range-validator-'));
+    const destination = path.join(directory, 'large.bin');
+    await writeFile(`${destination}.part`, 'stale');
+    await writeFile(`${destination}.part.json`, JSON.stringify({source: '2:7', bytes: 5, etag: '"same"', updatedAt: new Date().toISOString()}));
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/2/attachments/7/download')
+      .matchHeader('range', 'bytes=5-')
+      .matchHeader('if-range', '"same"')
+      .reply(206, 'tail', {'Content-Range': 'bytes 5-8/9'})
+      .get('/v1/pages/2/attachments/7/download')
+      .reply(200, 'complete', {'Content-Type': 'application/octet-stream', 'ETag': '"new"'});
+
+    await expect(new YandexWikiClient(wiki, 5_000, limits).download(2, 7, destination)).resolves.toMatchObject({size: 8});
+    await expect(readFile(destination, 'utf8')).resolves.toBe('complete');
+    expect(api.isDone()).toBe(true);
+  });
+
+  it('promotes a complete partial file after a matching range-unsatisfied response', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-yandex-range-complete-'));
+    const destination = path.join(directory, 'large.bin');
+    await writeFile(`${destination}.part`, 'complete');
+    await writeFile(`${destination}.part.json`, JSON.stringify({source: '2:7', bytes: 8, etag: '"same"', updatedAt: new Date().toISOString()}));
+    const api = nock('https://api.wiki.yandex.net')
+      .get('/v1/pages/2/attachments/7/download')
+      .matchHeader('range', 'bytes=8-')
+      .reply(416, '', {'Content-Range': 'bytes */8', 'ETag': '"same"'});
+
+    await expect(new YandexWikiClient(wiki, 5_000, limits).download(2, 7, destination)).resolves.toMatchObject({size: 8});
+    await expect(readFile(destination, 'utf8')).resolves.toBe('complete');
     expect(api.isDone()).toBe(true);
   });
 

@@ -227,6 +227,7 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
         [summary.resources, t('files').toLocaleLowerCase()],
         [summary.attachments, t('attachments')],
         [summary.resourceImages, t('images')],
+        [summary.resourceDiagrams ?? 0, t('diagrams')],
         [summary.commentAttachments, t('commentAttachments')],
       ]),
       destination: <OutcomeList counts={summary.resourceStatuses} t={t} />,
@@ -529,7 +530,7 @@ function ResourcesTable({node, t}: {node: ReportTreeNode; t: Translate}) {
             <Table.Tr key={resource.sourceId}>
               <Table.Td>
                 <Group gap="xs" align="flex-start" wrap="nowrap">
-                  {resource.kind === 'image'
+                  {resource.kind === 'image' || resource.kind === 'diagram'
                     ? <FileImage size={16} color="var(--mantine-primary-color-filled)" />
                     : resource.kind === 'grid'
                       ? <Database size={16} color="var(--mantine-primary-color-filled)" />
@@ -625,6 +626,7 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
     [page.links, t('links')],
     [page.tables, t('tables')],
     [page.grids, t('grids')],
+    [page.diagrams ?? 0, t('diagrams')],
     [page.codeBlocks, t('codeBlocks')],
   ]) : undefined;
   const title = (

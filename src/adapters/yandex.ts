@@ -19,8 +19,9 @@ import type {
   SourceSelection,
   UploadedResource,
 } from '../domain.js';
-import {DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../domain.js';
+import {DestinationResourceSizeLimitError, DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../domain.js';
 import {normalizeCommentForest} from '../comments.js';
+import {diagramKindForFilename, discoverPageDiagrams, materializeEmbeddedDiagram} from '../diagrams.js';
 import {HttpRequestError} from '../http.js';
 import {SourceInventoryOperationError, sourceInventoryIssueCode, sourceInventoryOperationError, sourceResourceInventoryFailure} from '../source-inventory.js';
 import {normalizeWikiSlug, safeFilename} from '../input.js';
@@ -250,6 +251,7 @@ function attachmentResource(profile: YandexConnectionProfile, page: SourcePage, 
   } catch {
     // Keep the API name when a provider returns a non-URL download reference.
   }
+  const diagramKind = diagramKindForFilename(preferredName, attachment.mimetype);
   return {
     provider: 'yandex-wiki',
     id: String(attachment.id),
@@ -261,8 +263,8 @@ function attachmentResource(profile: YandexConnectionProfile, page: SourcePage, 
     ...(numericSize !== undefined ? {size: numericSize} : {}),
     ...(attachment.mimetype ? {mimeType: attachment.mimetype} : {}),
     ...(attachment.download_url ? {downloadUrl: attachment.download_url} : {}),
-    kind: attachment.has_preview ? 'image' : 'attachment',
-    metadata: {profile: profile.name},
+    kind: attachment.has_preview ? 'image' : diagramKind ? 'diagram' : 'attachment',
+    metadata: {profile: profile.name, ...(diagramKind ? {diagramKind} : {})},
   };
 }
 
@@ -491,7 +493,7 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
         return {...resource, inventoryFailure: sourceResourceInventoryFailure(typed)};
       }
     }));
-    return [...attachmentItems, ...gridItems];
+    return [...attachmentItems, ...gridItems, ...discoverPageDiagrams(page).resources];
   }
 
   async refreshResource(page: SourcePage, resource: SourceResource): Promise<SourceResource> {
@@ -534,8 +536,12 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
     }
   }
 
-  downloadResource(resource: SourceResource, destination: string) {
+  downloadResource(resource: SourceResource, destination: string, page?: SourcePage) {
     if (resource.kind === 'grid') throw new Error(`Grid ${resource.name} is normalized as page content and is not downloadable`);
+    if (resource.embedded) {
+      if (!page) throw new Error(`Embedded diagram ${resource.id} requires its owning source page`);
+      return materializeEmbeddedDiagram(page, resource, destination);
+    }
     return this.client.download(Number(resource.pageId), Number(resource.id), destination);
   }
 
@@ -592,7 +598,15 @@ export class YandexAdapter implements SourceAdapter, DestinationAdapter {
 
   async uploadResource(input: {page: DestinationPage; name: string; filePath: string; size?: number; mimeType?: string}): Promise<UploadedResource> {
     const size = input.size ?? (await stat(input.filePath)).size;
-    const attachment = await this.client.uploadAttachment({pageId: Number(input.page.id), filename: input.name, path: input.filePath, size});
+    let attachment: YandexAttachment;
+    try {
+      attachment = await this.client.uploadAttachment({pageId: Number(input.page.id), filename: input.name, path: input.filePath, size});
+    } catch (error) {
+      if (error instanceof HttpRequestError && error.status === 413) {
+        throw new DestinationResourceSizeLimitError(input.name, size, {cause: error});
+      }
+      throw error;
+    }
     return {id: String(attachment.id), name: attachment.name, size, ...(attachment.download_url ? {url: attachment.download_url} : {})};
   }
 

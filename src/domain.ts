@@ -5,6 +5,35 @@ export type TransferScope = 'page' | 'subtree' | 'linked';
 export type SourceStatus = 'all' | 'current';
 export type ExportFormat = 'markdown' | 'html';
 export type RawContentFormat = 'yfm' | 'confluence-storage';
+export type DiagramKind = 'drawio' | 'mermaid' | 'plantuml' | 'd2';
+
+export interface EmbeddedResourceDescriptor {
+  type: 'yfm-data-uri';
+  diagramKind: DiagramKind;
+  encoding: 'base64';
+  mediaType: string;
+  payloadStart: number;
+  payloadEnd: number;
+  sha256: string;
+  size: number;
+  previewSafe: boolean;
+}
+
+export interface NormalizedDiagram {
+  id: string;
+  kind: DiagramKind;
+  marker: string;
+  label: string;
+  valid: boolean;
+  sourceHash: string;
+  sourceText?: string;
+  resourceId?: string;
+  resourceReference?: string;
+  width?: string;
+  height?: string;
+  previewSafe?: boolean;
+  error?: string;
+}
 
 export interface PageReference {
   raw: string;
@@ -56,7 +85,9 @@ export interface SourceResource {
   downloadUrl?: string;
   /** Canonical provider page or resource URL used when the managed payload is unavailable. */
   sourceUrl?: string;
-  kind: 'attachment' | 'image' | 'grid';
+  kind: 'attachment' | 'image' | 'grid' | 'diagram';
+  /** Location and digest of payload embedded in the owning page body. */
+  embedded?: EmbeddedResourceDescriptor;
   metadata?: Record<string, unknown>;
   /** A known resource whose independently fetched payload could not be inspected. */
   inventoryFailure?: SourceResourceInventoryFailure;
@@ -108,6 +139,19 @@ export class DestinationTitleConflictError extends Error {
   ) {
     super(`Destination already contains a page titled "${title}"`, options);
     this.name = 'DestinationTitleConflictError';
+  }
+}
+
+export class DestinationResourceSizeLimitError extends Error {
+  readonly status = 413;
+
+  constructor(
+    readonly resourceName: string,
+    readonly size: number,
+    options?: ErrorOptions,
+  ) {
+    super(`Destination rejected ${resourceName} (${size} bytes) because it exceeds the configured attachment-size limit; raise the provider limit and retry the run`, options);
+    this.name = 'DestinationResourceSizeLimitError';
   }
 }
 
@@ -280,7 +324,7 @@ export interface SourceAdapter {
   /** Refresh one already enumerated resource without repeating page-wide resource discovery. */
   refreshResource?(page: SourcePage, resource: SourceResource): Promise<SourceResource>;
   readComments?(page: SourcePage): Promise<CommentInventory>;
-  downloadResource(resource: SourceResource, destination: string): Promise<{path: string; size: number; sha256: string; mimeType?: string}>;
+  downloadResource(resource: SourceResource, destination: string, page?: SourcePage): Promise<{path: string; size: number; sha256: string; mimeType?: string}>;
 }
 
 export interface DestinationAdapter {
@@ -390,12 +434,13 @@ export interface NormalizedReference {
 }
 
 export interface NormalizedNode {
-  type: 'document' | 'html' | 'layout' | 'layout-section' | 'layout-cell' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback' | 'tree-directive';
+  type: 'document' | 'html' | 'layout' | 'layout-section' | 'layout-cell' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback' | 'tree-directive' | 'diagram';
   value?: string;
   children?: NormalizedNode[];
   reference?: NormalizedReference;
   vendor?: ProviderKind;
   tree?: {depth?: number; sort?: 'asc' | 'desc'; sortBy?: 'title'};
+  diagram?: NormalizedDiagram;
   layout?: {
     source: ProviderKind;
     gap?: string;
@@ -423,6 +468,9 @@ export interface NormalizedDocument {
     reason: 'provider-null-body';
   };
   references: NormalizedReference[];
+  diagrams?: NormalizedDiagram[];
+  /** YFM with heavyweight native payloads replaced by stable resource references. */
+  renderSource?: string;
   warnings: string[];
   normalizations: string[];
   adaptations: string[];
@@ -434,6 +482,7 @@ export interface NormalizedDocument {
     images: number;
     tables: number;
     codeBlocks: number;
+    diagrams?: number;
     preservedExternalReferences: number;
   };
 }

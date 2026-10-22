@@ -1,9 +1,11 @@
 import {createHash} from 'node:crypto';
 import {createReadStream} from 'node:fs';
+import {stat} from 'node:fs/promises';
 import type {ConfluenceConnectionProfile} from '../config.js';
 import {extractPageReferences} from '../content-model.js';
 import {normalizeCommentForest} from '../comments.js';
-import {DestinationRevisionConflictError, DestinationTitleConflictError} from '../domain.js';
+import {diagramKindForFilename} from '../diagrams.js';
+import {DestinationResourceSizeLimitError, DestinationRevisionConflictError, DestinationTitleConflictError} from '../domain.js';
 import type {
   AdapterCapabilities,
   CommentAuthor,
@@ -236,7 +238,9 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
       ...(attachment.extensions?.fileSize !== undefined ? {size: attachment.extensions.fileSize} : {}),
       ...(attachment.metadata?.mediaType ? {mimeType: attachment.metadata.mediaType} : {}),
       ...(attachment._links?.download ? {downloadUrl: attachment._links.download} : {}),
-      kind: attachment.metadata?.mediaType?.startsWith('image/') ? 'image' as const : 'attachment' as const,
+      kind: attachment.metadata?.mediaType?.startsWith('image/')
+        ? 'image' as const
+        : diagramKindForFilename(attachment.title, attachment.metadata?.mediaType) ? 'diagram' as const : 'attachment' as const,
       metadata: {attachment},
     }));
   }
@@ -370,14 +374,23 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   }
 
   async uploadResource(input: {page: DestinationPage; name: string; filePath: string; size?: number; mimeType?: string; existingId?: string}): Promise<UploadedResource> {
-    const uploaded = await this.client.uploadAttachment({
-      pageId: input.page.id,
-      filename: input.name,
-      file: createReadStream(input.filePath),
-      ...(input.size !== undefined ? {contentLength: input.size} : {}),
-      ...(input.mimeType ? {mimeType: input.mimeType} : {}),
-      ...(input.existingId ? {existingAttachmentId: input.existingId} : {}),
-    });
+    const size = input.size ?? (await stat(input.filePath)).size;
+    let uploaded: ConfluenceAttachment;
+    try {
+      uploaded = await this.client.uploadAttachment({
+        pageId: input.page.id,
+        filename: input.name,
+        file: createReadStream(input.filePath),
+        contentLength: size,
+        ...(input.mimeType ? {mimeType: input.mimeType} : {}),
+        ...(input.existingId ? {existingAttachmentId: input.existingId} : {}),
+      });
+    } catch (error) {
+      if (error instanceof HttpRequestError && error.status === 413) {
+        throw new DestinationResourceSizeLimitError(input.name, size, {cause: error});
+      }
+      throw error;
+    }
     return {
       id: uploaded.id,
       name: uploaded.title,

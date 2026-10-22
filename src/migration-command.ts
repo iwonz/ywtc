@@ -210,7 +210,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   console.log(`  Pages   ${result.summary.complete} complete · ${result.summary.partial} partial · ${result.summary.failed} failed · ${result.summary.blocked} blocked · ${result.summary.conflicts} conflicts · ${result.summary.notStartedPages} not started`);
   console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesBlocked} blocked · ${result.summary.resourcesNotStarted} not started${result.summary.resourcesPlanned ? ` · ${result.summary.resourcesPlanned} planned` : ''} · ${result.summary.bytes} transferred bytes`);
   console.log(`  Causes  ${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
-  console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
+  console.log(`  Content ${result.summary.links} links${result.summary.diagrams ? ` · ${result.summary.diagrams} diagrams` : ''} · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
   if (result.summary.grids > 0) {
     const gridStatuses = result.summary.gridStatuses
       ? Object.entries(result.summary.gridStatuses).filter(([, count]) => count > 0).map(([status, count]) => `${count} ${status}`).join(' · ')

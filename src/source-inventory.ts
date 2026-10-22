@@ -3,6 +3,7 @@ import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
 import {HttpRequestError} from './http.js';
+import {discoverPageDiagrams} from './diagrams.js';
 import type {
   CommentInventory,
   NormalizedDocument,
@@ -149,7 +150,18 @@ const sourceResourceSchema = z.object({
   id: z.string().min(1),
   pageId: z.string().min(1),
   name: z.string(),
-  kind: z.enum(['attachment', 'image', 'grid']),
+  kind: z.enum(['attachment', 'image', 'grid', 'diagram']),
+  embedded: z.object({
+    type: z.literal('yfm-data-uri'),
+    diagramKind: z.enum(['drawio', 'mermaid', 'plantuml', 'd2']),
+    encoding: z.literal('base64'),
+    mediaType: z.string().min(1),
+    payloadStart: z.number().int().nonnegative(),
+    payloadEnd: z.number().int().nonnegative(),
+    sha256: z.string().regex(/^[a-f\d]{64}$/u),
+    size: z.number().int().nonnegative(),
+    previewSafe: z.boolean(),
+  }).optional(),
   inventoryFailure: z.object({
     operation: z.literal('grid-read'),
     code: z.string().min(1),
@@ -177,6 +189,7 @@ const normalizedDocumentSchema = z.object({
     images: z.number().int().nonnegative(),
     tables: z.number().int().nonnegative(),
     codeBlocks: z.number().int().nonnegative(),
+    diagrams: z.number().int().nonnegative().optional(),
     preservedExternalReferences: z.number().int().nonnegative(),
   }).passthrough(),
 }).passthrough();
@@ -371,6 +384,9 @@ export class SourceInventoryStore {
       || !record.resources
       || !record.document
     ) return undefined;
+    const expectedDiagrams = discoverPageDiagrams(page).diagrams.map((diagram) => `${diagram.id}:${diagram.sourceHash}:${diagram.valid}`).join('|');
+    const checkpointDiagrams = (record.document.diagrams ?? []).map((diagram) => `${diagram.id}:${diagram.sourceHash}:${diagram.valid}`).join('|');
+    if (expectedDiagrams !== checkpointDiagrams) return undefined;
     return record;
   }
 

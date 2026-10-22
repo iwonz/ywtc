@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {normalizeCommentForest, resolveCommentAttachmentReferences} from '../src/comments.js';
+import {discoverPageDiagrams, materializeEmbeddedDiagram} from '../src/diagrams.js';
 import type {PageGraph, SourceAdapter, SourcePage, SourceResource} from '../src/domain.js';
 import {FilesystemExporter} from '../src/filesystem-export.js';
 
@@ -67,6 +68,39 @@ describe('transactional filesystem export', () => {
     expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toMatch(/pages\/child-[a-f0-9]+\.md/);
     expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toContain('attachments/root-');
     expect(await readFile(path.join(markdownOutput, 'index.md'), 'utf8')).toContain('## Комментарии');
+  });
+
+  it('exports inline Draw.io as a verified local artifact without serializing its base64 payload', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-diagram-'));
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>Architecture</text></svg>';
+    const diagramRoot = {
+      ...root,
+      rawContent: `{% drawio data="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}" %}`,
+      references: [],
+    };
+    const diagramGraph: PageGraph = {
+      rootId: diagramRoot.canonicalId, pages: [diagramRoot], edges: [], warnings: [],
+      selection: {...selection, returnedDescendants: 0, selectedDescendants: 0, maximumDepth: 0},
+    };
+    const discovered = discoverPageDiagrams(diagramRoot);
+    const resources = new Map([[diagramRoot.canonicalId, discovered.resources]]);
+    const source = {
+      downloadResource: async (resource: SourceResource, destination: string, page: SourcePage) => materializeEmbeddedDiagram(page, resource, destination),
+    } as SourceAdapter;
+    const output = path.join(temporary, 'site');
+
+    const result = await new FilesystemExporter(source, 1).export({
+      graph: diagramGraph, directory: output, format: 'html', identity: 'diagram-export', archive: false, dryRun: false,
+      cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources,
+    });
+
+    expect(result.manifest.pages[0]).toMatchObject({degraded: false});
+    const artifact = result.manifest.pages[0]?.resources[0];
+    expect(artifact).toMatchObject({sourceId: discovered.resources[0]?.id, size: Buffer.byteLength(svg)});
+    expect(await readFile(path.join(output, artifact!.path), 'utf8')).toBe(svg);
+    const html = await readFile(path.join(output, 'index.html'), 'utf8');
+    expect(html).toContain(artifact!.path);
+    expect(html).not.toContain('base64,');
   });
 
   it('does not write a destination during dry-run', async () => {

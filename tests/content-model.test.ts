@@ -20,6 +20,7 @@ import {
   verifyDestinationContent,
 } from '../src/content-model.js';
 import type {DestinationPage, RenderContext, SourcePage, SourceResource} from '../src/domain.js';
+import {discoverPageDiagrams} from '../src/diagrams.js';
 
 const source = (rawContent: string, rawFormat: SourcePage['rawFormat'] = 'yfm'): SourcePage => ({
   provider: rawFormat === 'yfm' ? 'yandex-wiki' : 'confluence', profile: 'source', id: '1', canonicalId: 'source:1',
@@ -31,6 +32,134 @@ const destination: DestinationPage = {
 };
 
 describe('normalized content pipeline', () => {
+  it('preserves Draw.io as a verified managed artifact instead of an oversized fallback', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>Architecture</text></svg>';
+    const page = source(`# Diagram\n\n{% drawio data="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}" width=640 height=360 %}`);
+    const discovered = discoverPageDiagrams(page);
+    const resource = discovered.resources[0]!;
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(),
+      resources: sourceResourceBindings(page, discovered.resources),
+      sourcePages: new Map([[page.canonicalId, page]]),
+      currentPageId: page.canonicalId,
+    };
+    setSourceResourceBinding(context.resources, page, discovered.resources, resource, {
+      kind: 'uploaded', resource: {id: 'attachment-1', name: 'architecture.drawio.svg', size: Buffer.byteLength(svg)},
+    });
+
+    expect(document.diagrams).toHaveLength(1);
+    expect(document.metrics.diagrams).toBe(1);
+    expect(document.degraded).toBe(false);
+    expect(document.root.children).toContainEqual(expect.objectContaining({type: 'diagram'}));
+    const storage = await renderConfluenceStorage(document, page, context, 'DOC');
+    expect(storage.body).toContain('<ac:image');
+    expect(storage.body).toContain('ri:filename="architecture.drawio.svg"');
+    expect(storage.body).not.toContain('base64,');
+    expect(storage.degraded).toBe(false);
+    expect(storage.adaptations).toContainEqual(expect.stringContaining('Draw.io'));
+  });
+
+  it('keeps active Draw.io SVG as an exact attachment without executing an inline preview', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><text>Architecture</text></svg>';
+    const page = source(`{% drawio data="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}" %}`);
+    const discovered = discoverPageDiagrams(page);
+    const resource = discovered.resources[0]!;
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: sourceResourceBindings(page, discovered.resources),
+      sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    setSourceResourceBinding(context.resources, page, discovered.resources, resource, {
+      kind: 'uploaded', resource: {id: 'attachment-1', name: 'architecture.drawio.svg', size: Buffer.byteLength(svg)},
+    });
+
+    const storage = await renderConfluenceStorage(document, page, context, 'DOC');
+
+    expect(storage.body).not.toContain('<ac:image');
+    expect(storage.body).toContain('ri:filename="architecture.drawio.svg"');
+    expect(storage.body).toContain('preview disabled');
+    expect(storage.body).not.toContain('<script');
+    expect(storage.degraded).toBe(false);
+    expect(storage.adaptations).toContainEqual(expect.stringContaining('not executed'));
+  });
+
+  it('exports text diagram sources without executing them', async () => {
+    const page = source('```mermaid\nflowchart LR\n  A --> B\n```\n\n```d2\nA -> B\n```');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+
+    const markdown = await renderMarkdown(document, context);
+    const html = await renderStaticHtml(document, context);
+    expect(markdown.body).toContain('flowchart LR');
+    expect(markdown.body).toContain('A --> B');
+    expect(markdown.body).toContain('A -> B');
+    expect(html.body).toContain('Mermaid diagram');
+    expect(html.body).toContain('flowchart LR');
+    expect(html.body).not.toContain('<script');
+    expect(markdown.degraded).toBe(false);
+    expect(html.degraded).toBe(false);
+  });
+
+  it('adapts known Confluence text-diagram macros without treating them as lost content', async () => {
+    const page = source([
+      '<ac:structured-macro ac:name="mermaid"><ac:plain-text-body><![CDATA[flowchart LR\nA --> B]]></ac:plain-text-body></ac:structured-macro>',
+      '<ac:structured-macro ac:name="d2"><ac:plain-text-body><![CDATA[A -> B]]></ac:plain-text-body></ac:structured-macro>',
+    ].join(''), 'confluence-storage');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+
+    expect(document.degraded).toBe(false);
+    expect(document.adaptations).toContainEqual(expect.stringContaining('Mermaid'));
+    expect(document.adaptations).toContainEqual(expect.stringContaining('D2'));
+    const yfm = await renderYfm(document, context);
+    expect(yfm.body).toContain('```mermaid\nflowchart LR\nA --> B\n```');
+    expect(yfm.body).toContain('```d2\nA -> B\n```');
+    expect(yfm.degraded).toBe(false);
+  });
+
+  it('maps a known Confluence PlantUML macro to the native YFM diagram directive', async () => {
+    const page = source('<ac:structured-macro ac:name="plantuml"><ac:plain-text-body><![CDATA[@startuml\nAlice -> Bob\n@enduml]]></ac:plain-text-body></ac:structured-macro>', 'confluence-storage');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+
+    const yfm = await renderYfm(document, context);
+
+    expect(yfm.body).toContain('{% diagram %}\n@startuml\nAlice -> Bob\n@enduml\n{% enddiagram %}');
+    expect(yfm.degraded).toBe(false);
+  });
+
+  it('preserves Draw.io Confluence macro attachments across native and portable destinations', async () => {
+    const storage = '<ac:structured-macro ac:name="drawio"><ac:parameter ac:name="diagramName">architecture.drawio</ac:parameter></ac:structured-macro>';
+    const page = source(storage, 'confluence-storage');
+    const resource: SourceResource = {
+      provider: 'confluence', id: 'drawio-1', pageId: page.id, name: 'architecture.drawio', preferredName: 'architecture.drawio',
+      referenceAliases: ['architecture.drawio'], kind: 'diagram', mimeType: 'application/vnd.jgraph.mxfile',
+    };
+    const uploaded: RenderContext = {
+      pages: new Map(), resources: sourceResourceBindings(page, [resource]), sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+    setSourceResourceBinding(uploaded.resources, page, [resource], resource, {kind: 'uploaded', resource: {id: 'a', name: 'architecture-renamed.drawio'}});
+    const document = normalizePageContent(page);
+
+    expect(document.degraded).toBe(false);
+    expect(document.adaptations).toContainEqual(expect.stringContaining('Draw.io'));
+    const confluence = await renderConfluenceStorage(document, page, uploaded, 'DOC');
+    expect(confluence.body).toContain('architecture-renamed.drawio');
+    expect(confluence.body).toContain('ac:name="drawio"');
+    const yfm = await renderYfm(document, uploaded);
+    expect(yfm.body).toContain('architecture-renamed.drawio');
+    expect(yfm.degraded).toBe(false);
+  });
+
+
+
   it('bounds megabyte inline payloads while preserving surrounding content and the original raw source', async () => {
     const payload = `data:image/png;base64,${'A'.repeat(1_100_000)}`;
     const page = source(`# Before\n\n${payload}\n\nAfter with https://example.com/path`);

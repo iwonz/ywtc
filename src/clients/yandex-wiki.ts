@@ -1,9 +1,9 @@
 import {createHash, randomUUID} from 'node:crypto';
-import {createWriteStream} from 'node:fs';
+import {createReadStream, createWriteStream} from 'node:fs';
 import {open} from 'node:fs/promises';
-import {mkdir, rename, rm} from 'node:fs/promises';
+import {mkdir, readFile, rename, rm, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import {Transform, type Readable} from 'node:stream';
+import type {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import PQueue from 'p-queue';
 import {z} from 'zod';
@@ -105,6 +105,56 @@ const gridSchema = z.object({
   }).passthrough()),
   rich_text_format: z.enum(['yfm', 'wom', 'plain']).optional(), revision: z.string().optional(),
 }).passthrough();
+
+interface PartialDownloadCheckpoint {
+  source: string;
+  bytes: number;
+  etag?: string;
+  lastModified?: string;
+  updatedAt: string;
+}
+
+async function readPartialCheckpoint(filename: string): Promise<PartialDownloadCheckpoint | undefined> {
+  try {
+    const value = JSON.parse(await readFile(filename, 'utf8')) as PartialDownloadCheckpoint;
+    return typeof value.source === 'string' && Number.isInteger(value.bytes) && value.bytes >= 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function writePartialCheckpoint(filename: string, value: PartialDownloadCheckpoint): Promise<void> {
+  const temporary = `${filename}.tmp-${randomUUID()}`;
+  await writeFile(temporary, `${JSON.stringify(value)}\n`, {mode: 0o600});
+  await rename(temporary, filename);
+}
+
+async function fileDigest(filename: string): Promise<{size: number; sha256: string}> {
+  const hash = createHash('sha256');
+  let size = 0;
+  for await (const chunk of createReadStream(filename)) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    hash.update(buffer);
+    size += buffer.length;
+  }
+  return {size, sha256: hash.digest('hex')};
+}
+
+function contentRange(value: unknown): {start?: number; end?: number; total?: number} | undefined {
+  if (typeof value !== 'string') return undefined;
+  const complete = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(value.trim());
+  if (complete) return {
+    start: Number(complete[1]),
+    end: Number(complete[2]),
+    ...(complete[3] !== '*' ? {total: Number(complete[3])} : {}),
+  };
+  const unsatisfied = /^bytes\s+\*\/(\d+)$/i.exec(value.trim());
+  return unsatisfied ? {total: Number(unsatisfied[1])} : undefined;
+}
+
+function headerString(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}
 
 function parseResponse<T>(schema: z.ZodType<T>, payload: unknown, operation: string): T {
   const result = schema.safeParse(payload);
@@ -254,40 +304,120 @@ export class YandexWikiClient implements YandexWikiApi {
   async download(pageId: number, attachmentId: number, destination: string): Promise<DownloadedFile> {
     return this.downloadQueue.add(async () => {
       await mkdir(path.dirname(destination), {recursive: true});
+      const partial = `${destination}.part`;
+      const checkpointFile = `${partial}.json`;
+      const source = `${pageId}:${attachmentId}`;
+      let forceFresh = false;
       for (let attempt = 0; ; attempt += 1) {
-        const temporary = `${destination}.part-${randomUUID()}`;
+        let checkpoint = forceFresh ? undefined : await readPartialCheckpoint(checkpointFile);
+        let offset = 0;
+        try {
+          const partialStat = await stat(partial);
+          if (checkpoint?.source === source && partialStat.isFile()) offset = partialStat.size;
+          else await Promise.all([rm(partial, {force: true}), rm(checkpointFile, {force: true})]);
+        } catch {
+          await Promise.all([rm(partial, {force: true}), rm(checkpointFile, {force: true})]);
+          checkpoint = undefined;
+        }
+        forceFresh = false;
         try {
           const response = await this.authenticated.request<Readable>({
             method: 'GET',
             url: `/pages/${pageId}/attachments/${attachmentId}/download`,
             responseType: 'stream',
+            ...(offset > 0 ? {headers: {
+              Range: `bytes=${offset}-`,
+              ...(checkpoint?.etag ?? checkpoint?.lastModified ? {'If-Range': checkpoint.etag ?? checkpoint.lastModified} : {}),
+            }} : {}),
+            validateStatus: (status) => (status >= 200 && status < 300) || status === 416,
           });
-          const hash = createHash('sha256');
-          let size = 0;
-          const meter = new Transform({
-            transform(chunk: Buffer, _encoding, callback) {
-              hash.update(chunk);
-              size += chunk.length;
-              callback(null, chunk);
-            },
+          const range = contentRange(response.headers['content-range']);
+          const etag = headerString(response.headers.etag);
+          const lastModified = headerString(response.headers['last-modified']);
+          if (response.status === 416) {
+            response.data.destroy();
+            if (range?.total === offset && offset > 0) {
+              const complete = await fileDigest(partial);
+              if (complete.size === range.total) {
+                await rename(partial, destination);
+                await rm(checkpointFile, {force: true});
+                return {path: destination, ...complete};
+              }
+            }
+            await Promise.all([rm(partial, {force: true}), rm(checkpointFile, {force: true})]);
+            forceFresh = true;
+            if (attempt >= 3) throw new Error(`Yandex Wiki download range was unsatisfied for ${source}`);
+            continue;
+          }
+          const validatorMismatch = checkpoint?.etag !== undefined
+            ? etag !== checkpoint.etag
+            : checkpoint?.lastModified !== undefined
+              ? lastModified !== checkpoint.lastModified
+              : false;
+          const incompatibleRange = response.status === 206 && (
+            range?.start !== offset
+            || range.end === undefined
+            || validatorMismatch
+          );
+          if (incompatibleRange) {
+            response.data.destroy();
+            await Promise.all([rm(partial, {force: true}), rm(checkpointFile, {force: true})]);
+            forceFresh = true;
+            if (attempt >= 3) throw new Error(`Yandex Wiki returned an incompatible content range for ${source}`);
+            continue;
+          }
+          const append = response.status === 206 && offset > 0;
+          const writeOffset = append ? offset : 0;
+          await writePartialCheckpoint(checkpointFile, {
+            source,
+            bytes: writeOffset,
+            ...(etag ? {etag} : {}),
+            ...(lastModified ? {lastModified} : {}),
+            updatedAt: new Date().toISOString(),
           });
-          await pipeline(response.data, meter, createWriteStream(temporary, {mode: 0o600}));
-          await rename(temporary, destination);
+          await pipeline(response.data, createWriteStream(partial, {mode: 0o600, flags: append ? 'a' : 'w'}));
+          const complete = await fileDigest(partial);
+          if (range?.total !== undefined && complete.size !== range.total) {
+            throw Object.assign(new Error(`Yandex Wiki download ended at ${complete.size} bytes; expected ${range.total}`), {code: 'ERR_STREAM_PREMATURE_CLOSE'});
+          }
+          await rename(partial, destination);
+          await rm(checkpointFile, {force: true});
           const contentType = response.headers['content-type'];
           return {
             path: destination,
-            size,
-            sha256: hash.digest('hex'),
+            ...complete,
             ...(typeof contentType === 'string' ? {mimeType: contentType} : {}),
           };
         } catch (error) {
-          await rm(temporary, {force: true});
           const code = error instanceof Error && 'code' in error ? String(error.code ?? '') : '';
+          const retainPartialCheckpoint = async (): Promise<void> => {
+            try {
+              const current = await stat(partial);
+              const previous = await readPartialCheckpoint(checkpointFile);
+              await writePartialCheckpoint(checkpointFile, {
+                source,
+                bytes: current.size,
+                ...(previous?.etag ? {etag: previous.etag} : {}),
+                ...(previous?.lastModified ? {lastModified: previous.lastModified} : {}),
+                updatedAt: new Date().toISOString(),
+              });
+            } catch {
+              // A later run can still restart safely when no partial checkpoint was persisted.
+            }
+          };
+          if (code === 'ERR_CANCELED') {
+            await retainPartialCheckpoint();
+            throw error;
+          }
           const retryable = !(error instanceof HttpRequestError)
-            && code !== 'ERR_CANCELED'
             && (/aborted|premature close|socket hang up/i.test(error instanceof Error ? error.message : String(error))
               || ['ECONNRESET', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE', 'ETIMEDOUT'].includes(code));
-          if (!retryable || attempt >= 3) throw error;
+          if (!retryable) {
+            await Promise.all([rm(partial, {force: true}), rm(checkpointFile, {force: true})]);
+            throw error;
+          }
+          await retainPartialCheckpoint();
+          if (attempt >= 3) throw error;
           const delay = Math.min(4_000, 250 * 2 ** attempt + Math.floor(Math.random() * 125));
           await new Promise((resolve) => setTimeout(resolve, delay));
         }

@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {mkdtemp, readFile, stat, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
@@ -73,6 +73,22 @@ describe('source inventory snapshots', () => {
     const moved = page('renamed/root');
     await expect(store.loadDiscoveredPage(moved.canonicalId, moved.locator)).resolves.toBeUndefined();
     await expect(store.loadComplete(moved)).resolves.toBeUndefined();
+  });
+
+  it('invalidates a complete checkpoint that predates discovered embedded diagrams', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-inventory-'));
+    const store = await SourceInventoryStore.open(options(directory));
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>Diagram</text></svg>';
+    const sourcePage = {...page(), rawContent: `{% drawio data="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}" %}`};
+    await store.saveComplete({page: sourcePage, resources: [], document: normalizePageContent(sourcePage)});
+    const current = await manifest(directory);
+    const pagesDirectory = path.join(directory, 'inventory', stateId, String(current.generation), 'pages');
+    const recordFilename = path.join(pagesDirectory, (await readdir(pagesDirectory))[0]!);
+    const record = JSON.parse(await readFile(recordFilename, 'utf8')) as {document: {diagrams?: unknown[]}};
+    delete record.document.diagrams;
+    await writeFile(recordFilename, `${JSON.stringify(record)}\n`, {mode: 0o600});
+
+    await expect(store.loadComplete(sourcePage)).resolves.toBeUndefined();
   });
 
   it('starts a new generation for fresh, incompatible, retired, and corrupt manifests', async () => {
