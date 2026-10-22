@@ -2,6 +2,23 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.2.4](https://github.com/iwonz/ywtc/compare/v4.2.3...v4.2.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* **migration:** bound pathological YFM payloads ([47f4bf4](https://github.com/iwonz/ywtc/commit/47f4bf4b267ddafe7ed1a20b78906431c8c4a9fd))
+
+
+### Continuous Integration
+
+* **release:** rerun checks after metadata validation ([23973f2](https://github.com/iwonz/ywtc/commit/23973f23db36f50fccfcd047bec09a99289f25a3))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.2.3 ([a843a98](https://github.com/iwonz/ywtc/commit/a843a98079c301c91b24fe9d09fd92cfa9185140))
+
 ## [4.2.3](https://github.com/iwonz/ywtc/compare/v4.2.2...v4.2.3) (2026-10-22)
 
 
