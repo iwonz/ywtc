@@ -4,6 +4,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import PQueue from 'p-queue';
 import {createProviderAdapter} from './adapters/factory.js';
+import {CooperativeScheduler} from './cooperative.js';
 import {secretValues, type AppConfig} from './config.js';
 import {
   appendGridSnapshots,
@@ -327,13 +328,18 @@ function cachedDocumentPath(cacheDirectory: string, canonicalId: string): string
 async function cacheDiscoveredPages(
   cacheDirectory: string,
   graph: PageGraph,
+  concurrency: number,
+  scheduler: CooperativeScheduler,
+  signal?: AbortSignal,
   onProgress?: (completed: number, total: number, page: SourcePage) => void,
 ): Promise<Map<string, string>> {
   await mkdir(path.join(cacheDirectory, 'pages'), {recursive: true, mode: 0o700});
   const fingerprints = new Map<string, string>();
   let completed = 0;
   const reportingStep = Math.max(1, Math.ceil(graph.pages.length / 100));
-  await Promise.all(graph.pages.map(async (page) => {
+  const queue = new PQueue({concurrency: Math.max(1, concurrency)});
+  await Promise.all(graph.pages.map((page) => queue.add(async () => {
+    await scheduler.checkpoint(signal ? {signal} : {});
     fingerprints.set(page.canonicalId, sourceFingerprint(page));
     await writeFile(cachedPagePath(cacheDirectory, page.canonicalId), `${JSON.stringify(page)}\n`, {mode: 0o600});
     page.rawContent = '';
@@ -341,7 +347,8 @@ async function cacheDiscoveredPages(
     if (completed === graph.pages.length || completed % reportingStep === 0) {
       onProgress?.(completed, graph.pages.length, page);
     }
-  }));
+  }, signal ? {signal} : undefined)));
+  await queue.onIdle();
   return fingerprints;
 }
 
@@ -909,6 +916,7 @@ export class Migrator {
       : undefined;
     assertTransferCapabilities(source, destination, options.scope, sourceStatus, commentsEnabled);
     const status = options.onStatus ?? (() => undefined);
+    const scheduler = new CooperativeScheduler();
     progress.phase('Preflight · checking source and destination capabilities');
     const [sourcePlatform, destinationPlatform] = await Promise.all([
       source.preflight(),
@@ -1115,10 +1123,21 @@ export class Migrator {
         }
         status(`Targeted retry: ${options.retry.plan.retryPageIds.length} actionable pages · ${options.retry.plan.contextPageIds.length} context pages`);
       }
-      progress.phase(`Source cache · 0/${graph.pages.length} pages persisted`);
-      sourceFingerprints = await cacheDiscoveredPages(options.cacheDirectory, graph, (completed, total, page) => {
-        status(`Source cache ${completed}/${total} · ${page.title}`);
-      });
+      progress.measure({phase: 'Source cache', completed: 0, total: graph.pages.length, unit: 'pages', queued: graph.pages.length, inFlight: 0});
+      sourceFingerprints = await cacheDiscoveredPages(
+        options.cacheDirectory,
+        graph,
+        options.concurrency,
+        scheduler,
+        options.signal,
+        (completed, total) => progress.measure({
+          phase: 'Source cache',
+          completed,
+          total,
+          unit: 'pages',
+          queued: Math.max(0, total - completed),
+        }),
+      );
     } catch (error) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
@@ -1197,7 +1216,20 @@ export class Migrator {
       const baselinePage = options.retry?.baseline.pages.find((page) => page.sourceCanonicalId === pageId);
       return plan.resourceIds.some((resourceId) => baselinePage?.resourceItems.find((resource) => resource.sourceId === resourceId)?.kind !== 'grid');
     }) ?? []);
-    progress.phase(`Inventory · 0/${graph.pages.length} pages inspected`);
+    let inventoryInFlight = 0;
+    const inventoryProgress = (): void => {
+      const completed = inventoryResults.size + inventoryFailures.size;
+      progress.measure({
+        phase: 'Source inventory',
+        completed,
+        total: graph.pages.length,
+        unit: 'pages',
+        detail: `${reusedInventoryCount} reused · ${freshInventoryCount} fresh · ${inventoryFailures.size} failed`,
+        inFlight: inventoryInFlight,
+        queued: Math.max(0, graph.pages.length - completed - inventoryInFlight),
+      });
+    };
+    inventoryProgress();
 
     const readComments = async (page: PageInventoryResult): Promise<CommentInventory> => {
       if (!commentsEnabled) {
@@ -1220,8 +1252,11 @@ export class Migrator {
 
     const inspectPage = async (page: PageInventoryResult['page']): Promise<void> => {
       const operation = progress.begin(`Inventory · ${page.title}`);
+      inventoryInFlight += 1;
+      inventoryProgress();
       try {
         if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
+        await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
         const sourcePage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
         const checkpoint = retryFullPageIds.has(page.canonicalId)
           ? undefined
@@ -1246,7 +1281,9 @@ export class Migrator {
           }
           let document: NormalizedDocument;
           try {
+            await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
             document = appendGridSnapshots(normalizePageContent(sourcePage), resources);
+            await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
           } catch (error) {
             throw sourceInventoryOperationError('normalization', error);
           }
@@ -1271,14 +1308,15 @@ export class Migrator {
         if (result.reused) reusedInventoryCount += 1;
         else freshInventoryCount += 1;
         inventoryFailures.delete(page.canonicalId);
-        status(`Inventory ${inventoryResults.size}/${graph.pages.length} · ${reusedInventoryCount} reused · ${freshInventoryCount} fresh · ${Math.max(0, graph.pages.length - inventoryResults.size - inventoryFailures.size)} pending · ${page.title}`);
       } catch (error) {
         inventoryFailures.set(page.canonicalId, error instanceof SourceInventoryOperationError
           ? error
           : sourceInventoryOperationError('resources-list', error));
-        status(`Inventory ${inventoryResults.size + inventoryFailures.size}/${graph.pages.length} · ${inventoryFailures.size} failed · ${Math.max(0, graph.pages.length - inventoryResults.size - inventoryFailures.size)} pending · ${page.title}`);
       } finally {
         progress.end(operation);
+        inventoryInFlight -= 1;
+        inventoryProgress();
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
       }
     };
 
@@ -1318,7 +1356,9 @@ export class Migrator {
       try {
         const refreshed = await source.refreshResource(result.sourcePage, resource);
         result.resources = result.resources.map((candidate) => candidate.id === resource.id ? refreshed : candidate);
+        await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
         result.document = appendGridSnapshots(normalizePageContent(result.sourcePage), result.resources);
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
         await cacheDocument(options.cacheDirectory, result.page.canonicalId, result.document);
         await sourceInventoryStore.saveComplete({
           page: result.sourcePage,
@@ -1340,7 +1380,9 @@ export class Migrator {
             ...(typed.details.attempts !== undefined ? {attempts: typed.details.attempts} : {}),
           }}
           : candidate);
+        await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
         result.document = appendGridSnapshots(normalizePageContent(result.sourcePage), result.resources);
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
         await cacheDocument(options.cacheDirectory, result.page.canonicalId, result.document);
         await sourceInventoryStore.saveComplete({
           page: result.sourcePage,
@@ -1385,6 +1427,7 @@ export class Migrator {
     }
 
     for (const page of graph.pages) {
+      await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
       const result = inventoryResults.get(page.canonicalId);
       if (!result) continue;
       const {resources, document, comments: commentInventory} = result;
@@ -1498,9 +1541,15 @@ export class Migrator {
     }
     await sourceInventoryStore.markReady();
     if (!options.dryRun) {
+      let preparedStatePages = 0;
+      progress.measure({phase: 'Preparing transfer state', completed: 0, total: graph.pages.length, unit: 'pages', queued: graph.pages.length});
       for (const page of graph.pages) {
-        if (retryContextIds.has(page.canonicalId)) continue;
-        if (store.value.pages[page.canonicalId]) continue;
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
+        if (retryContextIds.has(page.canonicalId) || store.value.pages[page.canonicalId]) {
+          preparedStatePages += 1;
+          progress.measure({phase: 'Preparing transfer state', completed: preparedStatePages, total: graph.pages.length, unit: 'pages', queued: graph.pages.length - preparedStatePages});
+          continue;
+        }
         const commentInventory = commentsByPage.get(page.canonicalId);
         const commentState: CommentTransferState | undefined = !commentsEnabled
           ? {status: 'skipped', threads: 0, comments: 0, participants: 0, attachments: 0, bytes: 0, updatedAt: new Date().toISOString()}
@@ -1543,6 +1592,8 @@ export class Migrator {
           degradations: [],
           updatedAt: new Date().toISOString(),
         });
+        preparedStatePages += 1;
+        progress.measure({phase: 'Preparing transfer state', completed: preparedStatePages, total: graph.pages.length, unit: 'pages', queued: graph.pages.length - preparedStatePages});
       }
     }
     const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids) · ${inventory.codeBlocks} code blocks · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
@@ -1554,7 +1605,7 @@ export class Migrator {
     try {
       if (options.destination.type === 'directory') {
         progress.phase(`Filesystem export · preparing ${graph.pages.length} pages`);
-        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress);
+        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress, scheduler);
         output = result.directory;
         archive = result.archive;
         const exportEntry = path.join(result.directory, options.destination.format === 'html' ? 'index.html' : 'index.md');
@@ -1575,15 +1626,18 @@ export class Migrator {
           resourcesByPage,
           commentsByPage,
           progress,
+          scheduler,
         });
         output = container!.url;
         report.output('destination', container!.url);
       }
       progress.phase('Finalizing transfer · calculating outcomes and writing report');
+      await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
       report.finish('completed');
       const finalStatus = runStatus(report.data.summary.errors, report.data.summary.warnings, report.data.summary.degradations);
       await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
       report.finish(finalStatus);
+      await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
       const reportPaths = await report.write(options.reportsDirectory);
       if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, graph.pages.length));
       if (!options.dryRun && (finalStatus === 'completed' || finalStatus === 'completed-with-warnings')) {
@@ -1610,6 +1664,7 @@ export class Migrator {
       const finalStatus: RunStatus = cancelled ? 'cancelled' : 'failed';
       const message = error instanceof Error ? error.message : String(error);
       progress.phase('Finalizing failed transfer · saving state and report');
+      await scheduler.checkpoint({force: true});
       report.error(message);
       await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
       report.finish(finalStatus);
@@ -1635,6 +1690,7 @@ export class Migrator {
     resourcesByPage: Map<string, SourceResource[]>,
     commentsByPage: Map<string, CommentInventory>,
     progress: ContinuousProgress,
+    scheduler: CooperativeScheduler,
   ): Promise<FilesystemExportResult> {
     const exporter = new FilesystemExporter(source, options.concurrency);
     const retryResourceIds = new Map<string, ReadonlySet<string>>();
@@ -1668,10 +1724,27 @@ export class Migrator {
       dryRun: options.dryRun,
       cacheDirectory: options.cacheDirectory,
       ...(options.signal ? {signal: options.signal} : {}),
-      onActivity: (message: string) => progress.phase(`Filesystem export · ${message}`),
+      onActivity: async (message: string) => {
+        progress.measure({
+          phase: 'Filesystem export',
+          completed: processed,
+          total,
+          unit: 'objects',
+          detail: message,
+          queued: Math.max(0, total - processed),
+        });
+        await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
+      },
       ...(options.onStatus ? {onItem: (message: string) => {
         processed += 1;
-        options.onStatus?.(`Progress ${Math.min(100, Math.floor((processed / total) * 100))}% · ${processed}/${total} · ${message}`);
+        progress.measure({
+          phase: 'Filesystem export',
+          completed: processed,
+          total,
+          unit: 'objects',
+          detail: message,
+          queued: Math.max(0, total - processed),
+        });
       }} : {}),
       resourcesByPage,
       commentsByPage,
@@ -2167,8 +2240,9 @@ export class Migrator {
     resourcesByPage: Map<string, SourceResource[]>;
     commentsByPage: Map<string, CommentInventory>;
     progress: ContinuousProgress;
+    scheduler: CooperativeScheduler;
   }): Promise<void> {
-    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress: liveProgress} = input;
+    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress: liveProgress, scheduler} = input;
     const destinationPages = new Map<string, DestinationPage>();
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
     const promotedContextIds = new Set<string>();
@@ -2230,51 +2304,23 @@ export class Migrator {
         }
       }
     }
-    const bootstrapBodies = new Map<string, RenderedDocument>();
-    const totalResources = [...resourcesByPage.values()].reduce(
-      (total, resources) => total + resources.filter((resource) => resource.kind !== 'grid').length,
-      0,
-    );
-    const totalCommentArchives = (options.comments ?? true) ? graph.pages.length : 0;
     const progress = {staged: 0, pages: 0, resources: 0, comments: 0};
-    const totalUnits = Math.max(1, graph.pages.length * 2 + totalResources + totalCommentArchives);
-    const updateProgress = (active: string): void => {
-      const completed = progress.staged + progress.pages + progress.resources + progress.comments;
-      options.onStatus?.(`Progress ${Math.min(100, Math.floor((completed / totalUnits) * 100))}% · pages ${progress.pages}/${graph.pages.length} · files ${progress.resources}/${totalResources} · comments ${progress.comments}/${totalCommentArchives} · ${active}`);
-    };
+    const stagingPhase = options.dryRun ? 'Planning pages' : 'Page staging';
+    const stagingProgress = (inFlight = 0): void => liveProgress.measure({
+      phase: stagingPhase,
+      completed: progress.staged,
+      total: graph.pages.length,
+      unit: 'pages',
+      inFlight,
+      queued: Math.max(0, graph.pages.length - progress.staged - inFlight),
+    });
 
-    liveProgress.phase(`Bootstrap rendering · 0/${graph.pages.length} pages`);
-    let bootstrapPrepared = 0;
-    for (const page of graph.pages) {
-      const operation = liveProgress.begin(`Bootstrap render · ${page.title}`);
-      try {
-        const [document, cachedPage] = await Promise.all([
-          loadCachedDocument(options.cacheDirectory, page.canonicalId),
-          loadCachedPage(options.cacheDirectory, page.canonicalId),
-        ]);
-        const resources = resourcesByPage.get(page.canonicalId) ?? [];
-        bootstrapBodies.set(page.canonicalId, await renderRemoteDocument({
-          destination,
-          container,
-          document,
-          page: cachedPage,
-          context: {
-            pages: new Map(),
-            resources: sourceResourceBindings(cachedPage, resources),
-            sourcePages,
-            currentPageId: page.canonicalId,
-          },
-        }));
-        bootstrapPrepared += 1;
-        options.onStatus?.(`Bootstrap rendering ${bootstrapPrepared}/${graph.pages.length} · ${page.title}`);
-      } finally {
-        liveProgress.end(operation);
-      }
-    }
-
-    liveProgress.phase(`Page staging · 0/${graph.pages.length} pages`);
+    stagingProgress();
+    await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
     for (const page of graph.pages) {
       if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
+      await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
+      stagingProgress(1);
       const saved = store.value.pages[page.canonicalId];
       const parent = page.projectedParentId ? destinationPages.get(page.projectedParentId) : container;
       if (!parent) {
@@ -2323,7 +2369,7 @@ export class Migrator {
           message,
         });
         progress.staged += 1;
-        updateProgress(message);
+        stagingProgress();
         continue;
       }
       if (retryContextIds.has(page.canonicalId) && saved?.destinationId) {
@@ -2332,7 +2378,7 @@ export class Migrator {
           if (confirmed.parentId === parent.id) {
             destinationPages.set(page.canonicalId, confirmed);
             progress.staged += 1;
-            updateProgress(`verified context ${page.title}`);
+            stagingProgress();
             continue;
           }
           await promoteRetryContext(page.canonicalId, 'context-parent-recovery');
@@ -2347,6 +2393,7 @@ export class Migrator {
       }
       const stagingOperation = liveProgress.begin(`${options.dryRun ? 'Planning' : 'Staging'} page · ${page.title}`);
       try {
+        await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
         const ownershipConflict = ownershipConflicts.get(page.canonicalId);
         if (ownershipConflict) {
           throw new DestinationOwnershipConflictError(
@@ -2355,8 +2402,26 @@ export class Migrator {
             `Multiple source pages are mapped to destination page ${ownershipConflict.destinationId}: ${ownershipConflict.owners.join(', ')}`,
           );
         }
-        const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
-        const bootstrap = bootstrapBodies.get(page.canonicalId)!;
+        const [document, cachedPage] = await Promise.all([
+          loadCachedDocument(options.cacheDirectory, page.canonicalId),
+          loadCachedPage(options.cacheDirectory, page.canonicalId),
+        ]);
+        const resources = resourcesByPage.get(page.canonicalId) ?? [];
+        liveProgress.update(stagingOperation, `Rendering bootstrap · ${page.title}`);
+        const bootstrap = await renderRemoteDocument({
+          destination,
+          container,
+          document,
+          page: cachedPage,
+          context: {
+            pages: new Map(),
+            resources: sourceResourceBindings(cachedPage, resources),
+            sourcePages,
+            currentPageId: page.canonicalId,
+          },
+        });
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
+        liveProgress.update(stagingOperation, `${options.dryRun ? 'Planning' : 'Staging'} destination · ${page.title}`);
         let created: DestinationPage;
         const title = saved && saved.destinationTitle !== saved.sourceTitle
           ? saved.destinationTitle
@@ -2543,7 +2608,6 @@ export class Migrator {
           updatedAt: new Date().toISOString(),
         };
         await store.setPage(next);
-        options.onStatus?.(`${options.dryRun ? 'Planned' : 'Staged content for'} ${page.title}`);
       } catch (error) {
         if (options.signal?.aborted) throw options.signal.reason ?? error;
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
@@ -2595,13 +2659,35 @@ export class Migrator {
       } finally {
         liveProgress.end(stagingOperation);
         progress.staged += 1;
-        updateProgress(`content staged ${page.title}`);
+        stagingProgress();
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
       }
     }
 
-    liveProgress.phase(`Content transfer · pages 0/${graph.pages.length} · files 0/${totalResources} · comments 0/${totalCommentArchives}`);
     const contentQueue = new PQueue({concurrency: options.concurrency});
     const contentPages = graph.pages.filter((page) => !retryContextIds.has(page.canonicalId) || promotedContextIds.has(page.canonicalId));
+    const contentPageIds = new Set(contentPages.map((page) => page.canonicalId));
+    const totalResources = [...resourcesByPage.entries()].reduce(
+      (total, [pageId, resources]) => total + (contentPageIds.has(pageId) ? resources.filter((resource) => resource.kind !== 'grid').length : 0),
+      0,
+    );
+    const totalCommentArchives = (options.comments ?? true) ? contentPages.length : 0;
+    const contentTotalUnits = Math.max(1, contentPages.length + totalResources + totalCommentArchives);
+    let contentInFlight = 0;
+    const updateProgress = (active: string): void => {
+      const completed = progress.pages + progress.resources + progress.comments;
+      liveProgress.measure({
+        phase: 'Content transfer',
+        completed,
+        total: contentTotalUnits,
+        unit: 'operations',
+        detail: `pages ${progress.pages}/${contentPages.length} · files ${progress.resources}/${totalResources} · comments ${progress.comments}/${totalCommentArchives} · ${active}`,
+        inFlight: contentInFlight,
+        queued: Math.max(0, contentPages.length - progress.pages - contentInFlight),
+      });
+    };
+    updateProgress('ready');
+    await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
     const contentTasks = contentPages.map((page) => contentQueue.add(async () => {
       if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
       const destinationPage = destinationPages.get(page.canonicalId);
@@ -2609,6 +2695,9 @@ export class Migrator {
       const cachedPage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
       const resources = resourcesByPage.get(page.canonicalId) ?? [];
       const contentOperation = liveProgress.begin(`Page content · ${page.title}`);
+      contentInFlight += 1;
+      updateProgress(`starting ${page.title}`);
+      await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
       if (!destinationPage) {
         const currentFailure = stagingFailures.get(page.canonicalId);
         const failedState = store.value.pages[page.canonicalId];
@@ -2635,13 +2724,13 @@ export class Migrator {
           error: currentFailure?.message ?? failedState?.lastError ?? 'Destination page with source-derived content was not created',
         }));
         progress.pages += 1;
-        updateProgress(`blocked ${page.title}`);
         liveProgress.end(contentOperation);
+        contentInFlight -= 1;
+        updateProgress(`blocked ${page.title}`);
         return;
       }
       const state = store.value.pages[page.canonicalId]!;
-      const bootstrap = bootstrapBodies.get(page.canonicalId)!;
-      let recoveryExpectedBody = bootstrap.body;
+      let recoveryExpectedBody: string | undefined;
       const bindings = sourceResourceBindings(cachedPage, resources);
       const transferableResources = resources.filter((item) => item.kind !== 'grid');
       const retryPagePlan = options.retry?.plan.pages[page.canonicalId];
@@ -2901,7 +2990,9 @@ export class Migrator {
           currentPageId: page.canonicalId,
         };
         liveProgress.update(contentOperation, `Rendering final content → ${page.title}`);
+        await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
         const rendered = await renderRemoteDocument({destination, container, document, page: cachedPage, context});
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
         if (rendered.degraded && !options.dryRun) {
           if (transferableResources.length === 0) {
             remoteResources = await destination.listUploadedResources(destinationPage);
@@ -3140,6 +3231,7 @@ export class Migrator {
           ...(commentInventory ? {commentInventory} : {}),
           commentState,
         }), options.retry, report.data.runId), {source: normalizedPreviewHtml(document), destination: renderedPreviewHtml(verified.content ?? rendered.body, destination.kind)});
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
       } catch (error) {
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         const ownershipConflict = error instanceof DestinationOwnershipConflictError ? error : undefined;
@@ -3149,6 +3241,21 @@ export class Migrator {
         if (failureStatus !== 'conflict' && !options.dryRun) {
           try {
             actual = await verifyConfirmedDestinationPage(destination, destinationPage, this.consistencyOptions);
+            if (recoveryExpectedBody === undefined) {
+              const bootstrap = await renderRemoteDocument({
+                destination,
+                container,
+                document,
+                page: cachedPage,
+                context: {
+                  pages: new Map(),
+                  resources: sourceResourceBindings(cachedPage, resources),
+                  sourcePages,
+                  currentPageId: page.canonicalId,
+                },
+              });
+              recoveryExpectedBody = bootstrap.body;
+            }
             assertDestinationContent(recoveryExpectedBody, actual.content, destination.kind, cachedPage);
             failureStatus = 'partial';
           } catch {
@@ -3201,7 +3308,9 @@ export class Migrator {
       } finally {
         liveProgress.end(contentOperation);
         progress.pages += 1;
+        contentInFlight -= 1;
         updateProgress(`${options.dryRun ? 'planned' : 'completed'} ${page.title}`);
+        await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
       }
     }, options.signal ? {signal: options.signal} : undefined));
     const settled = await Promise.allSettled(contentTasks);

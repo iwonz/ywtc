@@ -55,6 +55,50 @@ describe('continuous transfer progress', () => {
     progress.stop();
   });
 
+  it('shows truthful structured counters and evidence-gated estimates', () => {
+    let now = 0;
+    const messages: string[] = [];
+    const progress = new ContinuousProgress((message) => messages.push(message), {
+      heartbeatMs: 60_000,
+      now: () => now,
+    });
+
+    progress.measure({phase: 'Bootstrap rendering', completed: 0, total: 10, unit: 'pages', inFlight: 1, queued: 9});
+    expect(messages.at(-1)).toBe('Bootstrap rendering · 0/10 pages · in flight 1 · queued 9');
+    expect(messages.at(-1)).not.toContain('ETA');
+
+    now = 1_000;
+    progress.measure({phase: 'Bootstrap rendering', completed: 1, total: 10, unit: 'pages', inFlight: 1, queued: 8});
+    expect(messages.at(-1)).not.toContain('ETA');
+
+    now = 4_000;
+    progress.measure({phase: 'Bootstrap rendering', completed: 4, total: 10, unit: 'pages', detail: 'files 3/8', inFlight: 2, queued: 4});
+    expect(messages.at(-1)).toContain('4/10 pages');
+    expect(messages.at(-1)).toContain('files 3/8 · in flight 2 · queued 4');
+    expect(messages.at(-1)).toContain('1.0 pages/s · ETA 6s');
+    progress.stop();
+  });
+
+  it('redacts and bounds structured phase labels', () => {
+    const messages: string[] = [];
+    const progress = new ContinuousProgress((message) => messages.push(message), {
+      heartbeatMs: 60_000,
+      maxLabelLength: 24,
+      redact: (value) => value.replaceAll('secret-token', '[REDACTED]'),
+    });
+    progress.measure({
+      phase: 'Rendering secret-token pages with a very long phase name',
+      completed: 2,
+      total: 10,
+      unit: 'pages',
+    });
+
+    expect(messages.at(-1)).not.toContain('secret-token');
+    expect(messages.at(-1)).toContain('[REDACTED]');
+    expect(messages.at(-1)?.split('\n')).toHaveLength(1);
+    progress.stop();
+  });
+
   it('normalizes standalone progress labels', () => {
     expect(progressLabel('  Page\n\tname  ')).toBe('Page name');
     expect(progressLabel('123456789', 6)).toBe('12345…');

@@ -153,7 +153,7 @@ describe('resume, conflicts, and cancellation', () => {
     const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
     const controller = new AbortController();
     controller.abort(new Error('test cancellation'));
-    await expect(new Migrator(config, logger, factory).run({...options, signal: controller.signal})).rejects.toThrow(/Source inventory incomplete/);
+    await expect(new Migrator(config, logger, factory).run({...options, signal: controller.signal})).rejects.toThrow(/test cancellation/);
     expect(adapters.counts()).toEqual({created: 0, updated: 0});
     const states = (await readdir(path.join(directory, '.states'))).filter((filename) => filename.endsWith('.json'));
     const state = JSON.parse(await readFile(path.join(directory, '.states', states[0]!), 'utf8')) as TransferState;

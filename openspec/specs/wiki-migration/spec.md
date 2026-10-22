@@ -116,7 +116,7 @@ The system SHALL enforce independent Yandex Wiki and Confluence request-rate buc
 - **THEN** all requests to that service SHALL pause for Retry-After when supplied, with a minimum cooldown, before safe retries continue
 
 ### Requirement: Observable migration progress
-The CLI SHALL continuously identify the active transfer phase and work, show exact completed/total counters where totals are known, and provide one consistent terminal summary in TTY and non-TTY environments without counting in-flight work as complete.
+The CLI SHALL continuously identify the active transfer phase and work, show exact completed/total counters where totals are known, and provide one consistent terminal summary in TTY and non-TTY environments without counting in-flight work as complete. Long CPU-heavy batches SHALL remain cooperatively responsive to progress rendering, heartbeat timers, and termination signals.
 
 #### Scenario: Discovery and completion
 - **WHEN** a transfer runs
@@ -133,6 +133,24 @@ The CLI SHALL continuously identify the active transfer phase and work, show exa
 #### Scenario: Long operation has no completion event
 - **WHEN** a network request, provider retry, render, upload, comment operation, verification, or export step remains in flight longer than the progress heartbeat interval
 - **THEN** the CLI SHALL refresh the current phase, a bounded sample and count of active objects, elapsed time, and time since the last confirmed completion without advancing any completed counter
+
+#### Scenario: Plan transitions to destination preparation
+- **WHEN** the exact migration plan has been emitted and post-plan preparation begins
+- **THEN** the next visible status SHALL identify that preparation phase before performing its expensive work and SHALL NOT leave `Plan ready` as the apparent active phase
+
+#### Scenario: CPU-heavy page batch
+- **WHEN** normalization, rendering, fingerprinting, report preparation, or another page batch continuously consumes CPU
+- **THEN** the batch SHALL yield often enough for heartbeat output, TTY repaint, and SIGINT or SIGTERM handling to remain responsive
+- **AND** yielding SHALL NOT mark work complete or change migration ordering
+
+#### Scenario: Phase progress can be estimated
+- **WHEN** a phase has a known total and enough confirmed completions to calculate a stable rate
+- **THEN** live output SHALL show completed and total units, throughput, and a bounded ETA estimate
+- **AND** it SHALL omit ETA instead of presenting a speculative value before enough evidence exists
+
+#### Scenario: Concurrent work is active
+- **WHEN** a bounded queue is processing pages, resources, comments, or verification concurrently
+- **THEN** live output SHALL distinguish confirmed completions from queued and in-flight work and SHALL show a bounded sample of active objects
 
 #### Scenario: Non-interactive output
 - **WHEN** progress is rendered without an interactive terminal

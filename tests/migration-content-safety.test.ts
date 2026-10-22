@@ -410,6 +410,38 @@ describe('source-derived remote page safety', () => {
     expect(statuses).toHaveLength(completedCount);
   });
 
+  it('leaves Plan ready immediately and keeps heartbeat responsive during a CPU-heavy page batch', async () => {
+    const descendants = Array.from({length: 24}, (_value, index): SourcePage => ({
+      ...child,
+      id: `cpu-${index}`,
+      canonicalId: `source:yandex-wiki:cpu-${index}`,
+      title: `CPU page ${index}`,
+      locator: `root/cpu-${index}`,
+      url: `https://wiki.example/root/cpu-${index}`,
+      rawContent: `# CPU page ${index}\n\n${`Payload ${index} with [reference](https://example.com/${index}). `.repeat(300)}`,
+    }));
+    const {config, options} = await setup();
+    const adapters = fixture(descendants, root, false);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const statuses: string[] = [];
+
+    await expect(new Migrator(config, logger, factory).run({
+      ...options,
+      scope: 'subtree',
+      concurrency: 2,
+      progressHeartbeatMs: 1,
+      onStatus: (message) => statuses.push(message),
+    })).resolves.toMatchObject({status: 'completed', summary: {pages: 25, complete: 25}});
+
+    const plan = statuses.findIndex((message) => message.startsWith('Plan ready:'));
+    expect(plan).toBeGreaterThanOrEqual(0);
+    expect(statuses[plan + 1]).toContain('Page staging · 0/25 pages');
+    expect(statuses).toContainEqual(expect.stringMatching(/Page staging · \d+\/25 pages/));
+    expect(statuses).toContainEqual(expect.stringMatching(/Content transfer · \d+\/\d+ operations/));
+    expect(statuses).toContainEqual(expect.stringContaining('Still working'));
+    expect(adapters.snapshot()).toMatchObject({created: 25});
+  });
+
   it('retries a failed resource through the targeted run chain without recreating the page', async () => {
     const {config, options} = await setup();
     const adapters = fixture();

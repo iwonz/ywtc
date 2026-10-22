@@ -43,7 +43,7 @@ describe('transactional filesystem export', () => {
     const first = await exporter.export({
       graph, directory: output, format: 'html', identity: 'id', archive: true, dryRun: false,
       cacheDirectory: path.join(temporary, 'cache'), resourcesByPage: resources, commentsByPage,
-      onActivity: (message) => activity.push(message), onItem: (message) => completed.push(message),
+      onActivity: (message) => { activity.push(message); }, onItem: (message) => completed.push(message),
     });
     expect(first.archive).toMatch(/\.zip$/);
     expect(activity).toEqual(expect.arrayContaining([

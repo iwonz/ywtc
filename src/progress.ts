@@ -8,6 +8,21 @@ export interface ContinuousProgressOptions {
   redact?: (value: string) => string;
 }
 
+export interface ProgressMeasure {
+  phase: string;
+  completed: number;
+  total?: number;
+  unit: string;
+  detail?: string;
+  queued?: number;
+  inFlight?: number;
+}
+
+interface ActiveMeasure extends ProgressMeasure {
+  startedAt: number;
+  startedCompleted: number;
+}
+
 export type ProgressOperation = symbol;
 
 function duration(milliseconds: number): string {
@@ -45,6 +60,7 @@ export class ContinuousProgress {
   private readonly maxActive: number;
   private readonly maxLabelLength: number;
   private readonly redact: (value: string) => string;
+  private measureState: ActiveMeasure | undefined;
 
   constructor(
     private readonly emit: ((message: string) => void) | undefined,
@@ -64,14 +80,42 @@ export class ContinuousProgress {
 
   phase(message: string): void {
     if (this.stopped) return;
+    this.measureState = undefined;
     this.current = this.clean(message);
     this.emitSnapshot(false);
   }
 
   complete(message: string): void {
     if (this.stopped) return;
+    this.measureState = undefined;
     this.current = this.clean(message);
     this.lastCompletedAt = this.now();
+    this.emitSnapshot(false);
+  }
+
+  measure(input: ProgressMeasure): void {
+    if (this.stopped) return;
+    const currentTime = this.now();
+    const phase = this.clean(input.phase);
+    const unit = this.clean(input.unit);
+    const completed = Math.max(0, Math.floor(input.completed));
+    const total = input.total === undefined ? undefined : Math.max(completed, Math.floor(input.total));
+    const previous = this.measureState;
+    const reset = !previous || previous.phase !== phase || previous.unit !== unit || previous.total !== total;
+    const advanced = !reset && completed > previous.completed;
+    this.measureState = {
+      phase,
+      completed,
+      ...(total !== undefined ? {total} : {}),
+      unit,
+      ...(input.detail ? {detail: this.clean(input.detail)} : {}),
+      ...(input.queued !== undefined ? {queued: Math.max(0, Math.floor(input.queued))} : {}),
+      ...(input.inFlight !== undefined ? {inFlight: Math.max(0, Math.floor(input.inFlight))} : {}),
+      startedAt: reset ? currentTime : previous.startedAt,
+      startedCompleted: reset ? completed : previous.startedCompleted,
+    };
+    if (advanced) this.lastCompletedAt = currentTime;
+    this.current = this.measureSummary(currentTime);
     this.emitSnapshot(false);
   }
 
@@ -110,6 +154,28 @@ export class ContinuousProgress {
     const labels = [...this.active.values()].slice(0, this.maxActive);
     const remaining = this.active.size - labels.length;
     return ` · active ${this.active.size}: ${labels.join('; ')}${remaining > 0 ? ` (+${remaining})` : ''}`;
+  }
+
+  private measureSummary(currentTime: number): string {
+    const measure = this.measureState;
+    if (!measure) return this.current;
+    const counter = measure.total === undefined
+      ? `${measure.completed} ${measure.unit}`
+      : `${measure.completed}/${measure.total} ${measure.unit}`;
+    const details: string[] = [];
+    if (measure.detail) details.push(measure.detail);
+    if (measure.inFlight !== undefined) details.push(`in flight ${measure.inFlight}`);
+    if (measure.queued !== undefined) details.push(`queued ${measure.queued}`);
+    const elapsedMilliseconds = currentTime - measure.startedAt;
+    const completedDelta = measure.completed - measure.startedCompleted;
+    if (completedDelta >= 2 && elapsedMilliseconds >= 2_000) {
+      const rate = completedDelta / (elapsedMilliseconds / 1_000);
+      details.push(`${rate >= 10 ? Math.round(rate) : rate.toFixed(1)} ${measure.unit}/s`);
+      if (measure.total !== undefined && rate > 0 && measure.completed < measure.total) {
+        details.push(`ETA ${duration(((measure.total - measure.completed) / rate) * 1_000)}`);
+      }
+    }
+    return `${measure.phase} · ${counter}${details.length > 0 ? ` · ${details.join(' · ')}` : ''}`;
   }
 
   private emitHeartbeat(): void {
