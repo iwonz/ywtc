@@ -80,7 +80,8 @@ export function buildRetryPlan(report: TransferReportData): RetryPlan {
     const pageIssues = actionableIssues(issues, 'page');
     const retryPage = page.status === 'not-started'
       || (['failed', 'partial'].includes(page.status) && pageIssues.length > 0)
-      || page.inventoryStatus === 'failed' && pageIssues.length > 0;
+      || page.inventoryStatus === 'failed' && pageIssues.length > 0
+      || pageIssues.some((issue) => issue.code === 'mention-user-unresolved');
     const resourceIds = page.resourceItems
       .filter((resource) => {
         if (retryPage && ['blocked', 'not-started'].includes(resource.status)) return true;

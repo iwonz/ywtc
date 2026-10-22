@@ -17,8 +17,10 @@ import type {
   RawContentFormat,
   SourcePage,
   SourceResource,
+  MentionPolicy,
 } from './domain.js';
 import {safeFilename} from './input.js';
+import {renderSafeCommentMentions} from './mentions.js';
 
 export interface FlatComment {
   id: string;
@@ -273,8 +275,8 @@ function readableBody(value: string): string {
   return decodeEntities(links.replace(/<br\s*\/?\s*>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]*>/g, '')).trim();
 }
 
-function replaceAttachmentTokens(entry: CommentEntry, replacements: Map<string, string>): string {
-  let body = readableBody(entry.body);
+function replaceAttachmentTokens(entry: CommentEntry, replacements: Map<string, string>, source = entry.body): string {
+  let body = readableBody(source);
   const tokens = new Map<string, string>();
   for (const [index, reference] of entry.attachments.entries()) {
     if (!reference.resourceId) continue;
@@ -305,7 +307,8 @@ function entryLines(entry: CommentEntry, depth: number, replacements: Map<string
   const when = entry.createdAt ? ` · ${entry.createdAt}` : '';
   const header = `${indent}${commentAuthorLabel(entry.author)}${when}${status}:`;
   const contextLines = entry.inlineContext ? [`${indent}> ${readableBody(entry.inlineContext).replaceAll('\n', `\n${indent}> `)}`] : [];
-  const body = rewriteInternalUrls(replaceAttachmentTokens(entry, replacements), context.pages, context.sourcePages);
+  const mentionSafeBody = renderSafeCommentMentions(entry.body, context.mentionPolicy ?? {mode: 'off'}).content;
+  const body = rewriteInternalUrls(replaceAttachmentTokens(entry, replacements, mentionSafeBody), context.pages, context.sourcePages);
   const lines = body.split('\n').map((line) => `${indent}${line}`);
   return [header, ...contextLines, ...lines, ...entry.replies.flatMap((reply) => ['', ...entryLines(reply, depth + 1, replacements, context)])];
 }
@@ -335,6 +338,7 @@ export interface CommentRenderContext {
   attachmentNames?: Map<string, string>;
   pages?: Map<string, DestinationPage>;
   sourcePages?: Map<string, SourcePage>;
+  mentionPolicy?: MentionPolicy;
   presentation?: 'native' | 'quote' | 'code';
 }
 

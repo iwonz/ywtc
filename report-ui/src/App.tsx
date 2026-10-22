@@ -26,6 +26,7 @@ import {useVirtualizer} from '@tanstack/react-virtual';
 import {
   AlertTriangle,
   Archive,
+  AtSign,
   Ban,
   CheckCircle2,
   ChevronRight,
@@ -76,12 +77,12 @@ const categoryLabels: Record<Locale, Record<TransferReportIssue['category'], str
   en: {
     network: 'network', 'rate-limit': 'rate limit', authorization: 'authorization', permissions: 'permissions',
     'provider-api': 'provider API', parsing: 'parsing', 'rendering-layout': 'rendering / layout', verification: 'verification',
-    hierarchy: 'hierarchy', conflict: 'conflict', 'attachment-image': 'attachment / image', comment: 'comment', filtering: 'filtering', dependency: 'dependency', unknown: 'unknown',
+    hierarchy: 'hierarchy', conflict: 'conflict', 'attachment-image': 'attachment / image', comment: 'comment', mention: 'mention', filtering: 'filtering', dependency: 'dependency', unknown: 'unknown',
   },
   ru: {
     network: 'сеть', 'rate-limit': 'лимит запросов', authorization: 'авторизация', permissions: 'права',
     'provider-api': 'API провайдера', parsing: 'разбор', 'rendering-layout': 'разметка / вёрстка', verification: 'проверка',
-    hierarchy: 'иерархия', conflict: 'конфликт', 'attachment-image': 'вложение / изображение', comment: 'комментарий', filtering: 'фильтрация', dependency: 'зависимость', unknown: 'неизвестно',
+    hierarchy: 'иерархия', conflict: 'конфликт', 'attachment-image': 'вложение / изображение', comment: 'комментарий', mention: 'упоминание', filtering: 'фильтрация', dependency: 'зависимость', unknown: 'неизвестно',
   },
 };
 
@@ -96,6 +97,7 @@ function issueActionLabel(issue: TransferReportIssue, locale: Locale): string {
   if (issue.severity === 'normalization') return 'Действие не требуется.';
   if (issue.category === 'authorization') return 'Проверьте токен подключения, выполните doctor и повторите миграцию.';
   if (issue.category === 'permissions') return 'Предоставьте пользователю токена доступ к объекту и повторите миграцию.';
+  if (issue.category === 'mention') return 'Задайте точный alias или измените fallback-шаблон упоминаний; повтор нужен только для нативной разметки.';
   if (issue.category === 'conflict') return 'Проверьте ownership и identity destination-объекта, затем повторите миграцию.';
   return 'Проверьте причину, затронутый объект и техническую диагностику.';
 }
@@ -104,28 +106,28 @@ function statusTranslation(status: string): TranslationKey | undefined {
   if (status === 'excluded') return 'excludedStatus';
   if (status === 'completed') return 'complete';
   if (status === 'completed-with-warnings') return 'warning';
-  return ['complete', 'partial', 'failed', 'blocked', 'conflict', 'planned', 'not-started', 'discovered', 'skeleton-created', 'skipped'].includes(status)
+  return ['complete', 'partial', 'failed', 'blocked', 'conflict', 'planned', 'not-started', 'discovered', 'skeleton-created', 'skipped', 'native', 'linked', 'text', 'preserved', 'unresolved'].includes(status)
     ? status as TranslationKey
     : undefined;
 }
 
 function statusColor(status: string): string {
-  if (status === 'complete' || status === 'completed') return 'teal';
+  if (status === 'complete' || status === 'completed' || status === 'native' || status === 'linked' || status === 'text' || status === 'preserved') return 'teal';
   if (status === 'failed') return 'red';
   if (status === 'conflict') return 'grape';
-  if (status === 'partial' || status === 'planned' || status === 'completed-with-warnings') return 'yellow';
+  if (status === 'partial' || status === 'planned' || status === 'completed-with-warnings' || status === 'unresolved') return 'yellow';
   if (status === 'blocked' || status === 'not-started' || status === 'excluded') return 'gray';
   return 'blue';
 }
 
 function StatusIcon({status, size = 13}: {status: string; size?: number}) {
-  if (status === 'complete' || status === 'completed') return <CheckCircle2 size={size} aria-hidden="true" />;
+  if (status === 'complete' || status === 'completed' || status === 'native' || status === 'linked' || status === 'text' || status === 'preserved') return <CheckCircle2 size={size} aria-hidden="true" />;
   if (status === 'failed') return <XCircle size={size} aria-hidden="true" />;
   if (status === 'blocked') return <Ban size={size} aria-hidden="true" />;
   if (status === 'conflict') return <ShieldAlert size={size} aria-hidden="true" />;
   if (status === 'excluded') return <Archive size={size} aria-hidden="true" />;
   if (status === 'not-started' || status === 'planned') return <Timer size={size} aria-hidden="true" />;
-  if (status === 'partial' || status === 'completed-with-warnings') return <AlertTriangle size={size} aria-hidden="true" />;
+  if (status === 'partial' || status === 'completed-with-warnings' || status === 'unresolved') return <AlertTriangle size={size} aria-hidden="true" />;
   return <CircleDashed size={size} aria-hidden="true" />;
 }
 
@@ -241,6 +243,15 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
       ]),
       destination: <OutcomeList counts={summary.commentStatuses} t={t} />,
     }] : []),
+    ...(sections.includes('mentions') && summary.mentionOutcomes ? [{
+      id: 'mentions', icon: <AtSign size={16} />, label: t('mentions'),
+      source: countText([
+        [summary.pageMentions ?? 0, t('pages').toLocaleLowerCase()],
+        [summary.commentMentions ?? 0, t('comments').toLocaleLowerCase()],
+        [summary.mentionIdentities ?? 0, t('identities')],
+      ]),
+      destination: <OutcomeList counts={{...summary.mentionOutcomes, total: 0}} t={t} />,
+    }] : []),
     ...(sections.includes('data') ? [{
       id: 'data', icon: <Database size={16} />, label: t('data'),
       source: byteSummary(sourceBytes, summary.bytesUnknown, t),
@@ -318,6 +329,7 @@ function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTr
     [node.page.resources, t('files').toLocaleLowerCase()],
     [node.page.grids, t('grids')],
     [node.page.comments.comments, t('comments').toLocaleLowerCase()],
+    [node.page.mentions?.length ?? 0, t('mentions').toLocaleLowerCase()],
     [node.page.links, t('links')],
   ]) : undefined;
   return (
@@ -605,6 +617,33 @@ function CommentsPanel({node, locale, t}: {node: ReportTreeNode; locale: Locale;
   );
 }
 
+function MentionsPanel({node, t}: {node: ReportTreeNode; t: Translate}) {
+  const mentions = node.page?.mentions ?? [];
+  if (mentions.length === 0) return <Alert color="gray" icon={<Info size={16} />}>{t('noMentions')}</Alert>;
+  return (
+    <Table.ScrollContainer minWidth={680}>
+      <Table striped highlightOnHover verticalSpacing="sm">
+        <Table.Thead><Table.Tr><Table.Th>{t('source')}</Table.Th><Table.Th>{t('destination')}</Table.Th><Table.Th>{t('status')}</Table.Th><Table.Th>{t('reason')}</Table.Th></Table.Tr></Table.Thead>
+        <Table.Tbody>
+          {mentions.map((mention) => (
+            <Table.Tr key={`${mention.location}:${mention.id}`}>
+              <Table.Td><Text size="sm" fw={600}>{mention.source}</Text><Text size="xs" c="dimmed">{mention.location}</Text></Table.Td>
+              <Table.Td>
+                {mention.url
+                  ? <Text component="a" href={safeLink(mention.url)} target="_blank" rel="noreferrer" size="sm">{mention.label}</Text>
+                  : <Text size="sm">{mention.label}</Text>}
+                {mention.destinationIdentity && <Code mt={4}>{Object.entries(mention.destinationIdentity).map(([key, value]) => `${key}:${value}`).join(' · ')}</Code>}
+              </Table.Td>
+              <Table.Td><StatusBadge status={mention.outcome} t={t} /></Table.Td>
+              <Table.Td><Text size="sm" c="dimmed">{mention.reason}</Text>{mention.retryable && <Badge mt={4} color="yellow" variant="light">{t('retryable')}</Badge>}</Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Table.ScrollContainer>
+  );
+}
+
 function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTreeNode | undefined; payload: ReportPresentationPayload; locale: Locale; t: Translate; onOpenChange: (open: boolean) => void}) {
   const page = node?.page;
   const excluded = node?.excluded;
@@ -619,6 +658,7 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
     {value: 'overview', label: t('overview'), visible: true},
     {value: 'files', label: t('files'), visible: sections.includes('files')},
     {value: 'comments', label: t('comments'), visible: sections.includes('comments')},
+    {value: 'mentions', label: t('mentions'), visible: sections.includes('mentions')},
     {value: 'comparison', label: t('comparison'), visible: sections.includes('comparison')},
     {value: 'issues', label: `${t('issues')} · ${issues.length}`, visible: sections.includes('issues')},
   ].filter((tab) => tab.visible);
@@ -677,6 +717,7 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
           </Tabs.Panel>
           {sections.includes('files') && <Tabs.Panel value="files" pt="md"><ResourcesTable node={node} t={t} /></Tabs.Panel>}
           {sections.includes('comments') && <Tabs.Panel value="comments" pt="md"><CommentsPanel node={node} locale={locale} t={t} /></Tabs.Panel>}
+          {sections.includes('mentions') && <Tabs.Panel value="mentions" pt="md"><MentionsPanel node={node} t={t} /></Tabs.Panel>}
           {preview && (
             <Tabs.Panel value="comparison" pt="md">
               <SimpleGrid cols={{base: 1, lg: 2}} spacing="md">

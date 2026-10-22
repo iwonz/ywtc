@@ -8,7 +8,7 @@ import PQueue from 'p-queue';
 import {z} from 'zod';
 import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml, setSourceResourceBinding, sourceResourceBindings} from './content-model.js';
 import {commentAttachmentUses, createCommentArchiveZip, renderCommentArchive} from './comments.js';
-import type {CommentInventory, ExportFormat, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
+import type {CommentInventory, ExportFormat, MentionOutcomeCounts, MentionPolicy, MentionPresentation, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
 import type {CommentTransferStatus} from './state.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
 import {acquireExclusiveLease} from './exclusive-lease.js';
@@ -24,6 +24,7 @@ export interface ExportManifestPage {
   warnings: string[];
   adaptations: string[];
   preservedExternalReferences: number;
+  mentions?: MentionOutcomeCounts;
   comments: {
     status: CommentTransferStatus;
     threads: number;
@@ -64,6 +65,10 @@ const manifestPageSchema = z.object({
   warnings: z.array(z.string()),
   adaptations: z.array(z.string()),
   preservedExternalReferences: z.number().int().nonnegative(),
+  mentions: z.object({
+    total: z.number().int().nonnegative(), preserved: z.number().int().nonnegative(), native: z.number().int().nonnegative(),
+    linked: z.number().int().nonnegative(), text: z.number().int().nonnegative(), unresolved: z.number().int().nonnegative(), failed: z.number().int().nonnegative(),
+  }).strict().optional(),
   comments: z.object({
     status: z.enum(['planned', 'complete', 'partial', 'failed', 'conflict', 'stale', 'skipped']),
     threads: z.number().int().nonnegative(),
@@ -225,6 +230,8 @@ export class FilesystemExporter {
     onItem?: (message: string) => void;
     resourcesByPage?: Map<string, SourceResource[]>;
     commentsByPage?: Map<string, CommentInventory>;
+    mentionPresentationsByPage?: Map<string, Map<string, MentionPresentation>>;
+    mentionPolicy?: MentionPolicy;
     commentsEnabled?: boolean;
     retryPageIds?: ReadonlySet<string>;
     retryResourceIds?: ReadonlyMap<string, ReadonlySet<string>>;
@@ -395,6 +402,7 @@ export class FilesystemExporter {
               sourceUrl: page.url,
               ...(zip && archivePath ? {archiveName: zip.name, archiveHref: relativeHref(pageFile, archivePath)} : {}),
               attachmentNames: names,
+              mentionPolicy: input.mentionPolicy ?? {mode: 'off'},
             }));
             comments = {
               ...comments,
@@ -453,6 +461,7 @@ export class FilesystemExporter {
           sourcePages,
           currentPageId: page.canonicalId,
           currentPath: relative,
+          ...(input.mentionPresentationsByPage?.get(page.canonicalId) ? {mentions: input.mentionPresentationsByPage.get(page.canonicalId)!} : {}),
         };
         const rendered = input.format === 'html' ? await renderStaticHtml(document, context) : await renderMarkdown(document, context);
         const output = input.format === 'html'
@@ -465,6 +474,7 @@ export class FilesystemExporter {
         manifestPage.warnings.push(...rendered.warnings);
         manifestPage.adaptations.push(...rendered.adaptations);
         manifestPage.preservedExternalReferences = rendered.preservedExternalReferences;
+        if (rendered.mentions) manifestPage.mentions = rendered.mentions;
         warnings.push(...rendered.warnings.map((warning) => `${page.title}: ${warning}`));
         if (manifestPage.degraded) {
           const snapshot = `_source/${stableSegment(page)}.${page.rawFormat === 'yfm' ? 'yfm' : 'storage.xml'}`;

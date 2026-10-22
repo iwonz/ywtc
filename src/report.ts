@@ -40,6 +40,7 @@ export type {
   TransferReportEdge,
   TransferReportExcludedPage,
   TransferReportIssue,
+  TransferReportMention,
   TransferReportPage,
   TransferReportResource,
   TransferReportSummary,
@@ -131,6 +132,7 @@ function emptySummary(): TransferReportSummary {
     commentAttachments: 0,
     commentBytes: 0,
     commentStatuses: countRecord(commentStatuses),
+    mentionOutcomes: {total: 0, preserved: 0, native: 0, linked: 0, text: 0, unresolved: 0, failed: 0},
     pageStatuses: countRecord(pageStatuses),
     resourceStatuses: countRecord(resourceStatuses),
     traversalStatuses: countRecord(edgeStatuses),
@@ -147,6 +149,7 @@ function issueCategory(issue: MigrationIssue): IssueCategory {
   if (issue.code.startsWith('rate-limit-')) return 'rate-limit';
   if (issue.code.startsWith('network-')) return 'network';
   if (issue.code.startsWith('parsing-')) return 'parsing';
+  if (issue.code.startsWith('mention-') || issue.objectType === 'mention') return 'mention';
   if (issue.code.startsWith('hierarchy-') || issue.code.startsWith('destination-hierarchy-') || issue.code === 'destination-parent-unavailable') return 'hierarchy';
   if (issue.phase === 'comment') return 'comment';
   if (issue.phase === 'resource') return 'attachment-image';
@@ -168,6 +171,7 @@ function issueAction(issue: MigrationIssue, category: IssueCategory): string {
   if (issue.lifecycle === 'resolved') return 'Recovered automatically; no action is required.';
   if (issue.severity === 'blocked') return 'Resolve the upstream page error, then repeat the same migration; this object will resume automatically.';
   if (issue.retryable) return 'Repeat the same migration to retry this object.';
+  if (category === 'mention') return 'Configure an exact alias or adjust the mention fallback template, then repeat the migration if a native mention is required.';
   if (issue.severity === 'degradation') return 'Data remains represented; compare the source and destination previews.';
   if (issue.severity === 'adaptation') return 'No action is required; the destination uses an equivalent static or native representation.';
   if (issue.severity === 'normalization') return 'No action is required.';
@@ -565,6 +569,7 @@ export class TransferReport {
     const gridStatusCounts = countRecord(resourceStatuses);
     const traversalStatusCounts = countRecord(edgeStatuses);
     const commentStatusCounts = countRecord(commentStatuses);
+    const mentionOutcomes = {total: 0, preserved: 0, native: 0, linked: 0, text: 0, unresolved: 0, failed: 0};
     for (const page of this.data.pages) pageStatusCounts[page.status] += 1;
     const allResources = this.data.pages.flatMap((page) => page.resourceItems);
     const resources = allResources.filter((resource) => resource.kind !== 'grid');
@@ -573,6 +578,11 @@ export class TransferReport {
     for (const grid of grids) gridStatusCounts[grid.status] += 1;
     for (const edge of this.data.edges) traversalStatusCounts[edge.status] += 1;
     for (const page of this.data.pages) commentStatusCounts[page.comments.status] += 1;
+    const mentions = this.data.pages.flatMap((page) => page.mentions ?? []);
+    for (const mention of mentions) {
+      mentionOutcomes.total += 1;
+      mentionOutcomes[mention.outcome] += 1;
+    }
     const started = Date.parse(this.data.startedAt);
     const finished = Date.parse(this.data.finishedAt);
     const sourceBytes = resources.reduce((total, resource) => total + (resource.sourceBytes ?? 0), 0);
@@ -643,6 +653,18 @@ export class TransferReport {
       commentAttachments: this.data.pages.reduce((total, page) => total + page.comments.attachments, 0),
       commentBytes: this.data.pages.reduce((total, page) => total + page.comments.bytes, 0),
       commentStatuses: commentStatusCounts,
+      ...(this.data.mentionMode ? {mentionMode: this.data.mentionMode} : {}),
+      pageMentions: mentions.filter((mention) => mention.location === 'page').length,
+      commentMentions: mentions.filter((mention) => mention.location === 'comment').length,
+      mentionIdentities: new Set(mentions.map((mention) => {
+        const identity = mention.sourceIdentity;
+        if (identity?.accountId) return `accountId:${identity.accountId}`;
+        if (identity?.userKey) return `userKey:${identity.userKey}`;
+        if (identity?.username) return `username:${identity.username.toLocaleLowerCase()}`;
+        if (identity?.id) return `id:${identity.id}`;
+        return `source:${mention.source}`;
+      })).size,
+      mentionOutcomes,
       ...(Number.isFinite(started) && Number.isFinite(finished) ? {durationMs: Math.max(0, finished - started)} : {}),
       pageStatuses: pageStatusCounts,
       resourceStatuses: resourceStatusCounts,

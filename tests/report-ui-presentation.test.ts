@@ -125,6 +125,22 @@ describe('compact report presentation', () => {
     expect(visibleSummarySections(data)).toEqual(['pages', 'files', 'comments', 'data', 'quality']);
   });
 
+  it('shows mention summaries and details only when occurrences exist', () => {
+    const data = summary();
+    data.mentionMode = 'auto';
+    data.pageMentions = 1;
+    data.mentionIdentities = 1;
+    data.mentionOutcomes = {total: 1, preserved: 0, native: 1, linked: 0, text: 0, unresolved: 0, failed: 0};
+    expect(visibleSummarySections(data)).toEqual(['pages', 'mentions']);
+
+    const withMention = page();
+    withMention.mentions = [{
+      id: 'mention-0', location: 'page', source: '@ivan', outcome: 'native', label: 'Ivan',
+      destinationIdentity: {accountId: 'cloud-42'}, retryable: false,
+    }];
+    expect(visibleDetailSections({page: withMention, hasPreview: false, issueCount: 0})).toEqual(['overview', 'mentions']);
+  });
+
   it('hides empty page-detail categories and reveals each populated category', () => {
     const data = page();
     expect(visibleDetailSections({page: data, hasPreview: false, issueCount: 0})).toEqual(['overview']);

@@ -90,6 +90,8 @@ export const confluenceUserSchema = z.object({
   username: z.string().optional(),
   userKey: z.string().optional(),
   displayName: z.string().optional(),
+  publicName: z.string().optional(),
+  email: z.string().optional(),
 }).passthrough().refine(
   (user) => Boolean(user.accountId || user.username || user.userKey || user.displayName),
   {message: 'current user identity is missing'},

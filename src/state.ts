@@ -3,7 +3,7 @@ import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
 import {acquireExclusiveLease, type ExclusiveLease} from './exclusive-lease.js';
-import type {ExportFormat, GraphEdgeStatus, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
+import type {ExportFormat, GraphEdgeStatus, MentionMode, MentionOutcomeCounts, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
 
 export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'not-started' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
 export type RunStatus = 'running' | 'completed' | 'completed-with-warnings' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
@@ -83,6 +83,12 @@ export interface CommentTransferState extends BlockingCause {
   updatedAt: string;
 }
 
+export interface MentionTransferState {
+  policyFingerprint: string;
+  outcomes: MentionOutcomeCounts;
+  updatedAt: string;
+}
+
 export interface PageTransferState extends BlockingCause {
   sourceId: string;
   sourceCanonicalId: string;
@@ -100,6 +106,7 @@ export interface PageTransferState extends BlockingCause {
   status: PageTransferStatus;
   resources: Record<string, ResourceTransferState>;
   comments?: CommentTransferState;
+  mentions?: MentionTransferState;
   degradations: string[];
   adaptations?: string[];
   conflictEvidence?: ConflictEvidence;
@@ -142,6 +149,11 @@ export interface StateRun {
   commentThreads?: number;
   comments?: number;
   commentAttachments?: number;
+  mentionMode?: MentionMode;
+  pageMentions?: number;
+  commentMentions?: number;
+  mentionIdentities?: number;
+  mentionOutcomes?: MentionOutcomeCounts;
   operation?: 'migrate' | 'retry';
   retryRootRunId?: string;
   retryParentRunId?: string;
@@ -297,6 +309,22 @@ const commentStateSchema = z.object({
   updatedAt: z.string(),
 }).strict();
 
+const mentionOutcomeCountsSchema = z.object({
+  total: z.number().int().nonnegative(),
+  preserved: z.number().int().nonnegative(),
+  native: z.number().int().nonnegative(),
+  linked: z.number().int().nonnegative(),
+  text: z.number().int().nonnegative(),
+  unresolved: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+}).strict();
+
+const mentionStateSchema = z.object({
+  policyFingerprint: z.string().regex(/^[a-f\d]{64}$/u),
+  outcomes: mentionOutcomeCountsSchema,
+  updatedAt: z.string(),
+}).strict();
+
 const pageStateSchema = z.object({
   sourceId: z.string(),
   sourceCanonicalId: z.string(),
@@ -317,6 +345,7 @@ const pageStateSchema = z.object({
   blockedReason: z.string().optional(),
   resources: z.record(z.string(), resourceStateSchema),
   comments: commentStateSchema.optional(),
+  mentions: mentionStateSchema.optional(),
   degradations: z.array(z.string()),
   adaptations: z.array(z.string()).optional(),
   conflictEvidence: z.object({
@@ -362,6 +391,11 @@ const runSchema = z.object({
   commentThreads: z.number().int().nonnegative().optional(),
   comments: z.number().int().nonnegative().optional(),
   commentAttachments: z.number().int().nonnegative().optional(),
+  mentionMode: z.enum(['off', 'template', 'auto']).optional(),
+  pageMentions: z.number().int().nonnegative().optional(),
+  commentMentions: z.number().int().nonnegative().optional(),
+  mentionIdentities: z.number().int().nonnegative().optional(),
+  mentionOutcomes: mentionOutcomeCountsSchema.optional(),
   operation: z.enum(['migrate', 'retry']).optional(),
   retryRootRunId: z.string().optional(),
   retryParentRunId: z.string().optional(),
@@ -517,6 +551,23 @@ export class StateStore {
     run.commentThreads = counts.threads;
     run.comments = counts.comments;
     run.commentAttachments = counts.attachments;
+    if (!this.readOnly) await this.save();
+  }
+
+  async setRunMentions(runId: string, input: {
+    mode: MentionMode;
+    pageMentions: number;
+    commentMentions: number;
+    mentionIdentities: number;
+    outcomes: MentionOutcomeCounts;
+  }): Promise<void> {
+    const run = this.value.runs.find((candidate) => candidate.id === runId);
+    if (!run) throw new Error(`State run ${runId} was not initialized`);
+    run.mentionMode = input.mode;
+    run.pageMentions = input.pageMentions;
+    run.commentMentions = input.commentMentions;
+    run.mentionIdentities = input.mentionIdentities;
+    run.mentionOutcomes = input.outcomes;
     if (!this.readOnly) await this.save();
   }
 

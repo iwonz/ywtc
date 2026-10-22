@@ -1,4 +1,4 @@
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp, readFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import nock from 'nock';
@@ -18,11 +18,11 @@ const confluence = (name: string, host: string): ConfluenceConnectionProfile => 
   token: `${name}-token`, limits,
 });
 
-function mockWikiSource(profile: YandexConnectionProfile, id = 1, slug = 'root') {
+function mockWikiSource(profile: YandexConnectionProfile, id = 1, slug = 'root', content = '# Root\n\nBody') {
   const api = new URL(profile.apiUrl);
   return nock(api.origin, {reqheaders: {authorization: `OAuth ${profile.token}`, 'x-org-id': profile.organization.id}})
     .get(`${api.pathname}/pages`).query({slug, fields: 'breadcrumbs,redirect,attributes,content'})
-    .reply(200, {id, slug, title: 'Root', page_type: 'page', content: '# Root\n\nBody'})
+    .reply(200, {id, slug, title: 'Root', page_type: 'page', content})
     .get(`${api.pathname}/pages/${id}/attachments`).query({order_by: 'name', page_size: 100}).reply(200, {results: []})
     .get(`${api.pathname}/pages/${id}/grids`).query({order_by: 'created_at', page_size: 100}).reply(200, {results: []});
 }
@@ -96,4 +96,32 @@ describe('four remote transfer directions', () => {
       expect(destinationMock.isDone()).toBe(true);
     });
   }
+
+  it('resolves configured mentions before mutation and records their verified outcome', async () => {
+    const sourceProfile = wiki('wiki-source', 'https://api.wiki-source.example', 'org-a');
+    const destinationProfile = confluence('conf-dest', 'https://conf-dest.example');
+    const sourceMock = mockWikiSource(sourceProfile, 1, 'root', 'Hello @ivan');
+    const destinationMock = mockConfluenceDestination(destinationProfile)
+      .get('/confluence/rest/api/user').query({username: 'ivan'})
+      .reply(200, {username: 'ivan', userKey: 'user-1', displayName: 'Ivan'});
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-mentions-matrix-'));
+    const config: AppConfig = {
+      profiles: {[sourceProfile.name]: sourceProfile, [destinationProfile.name]: destinationProfile},
+      timeoutMs: 5_000, concurrency: 2,
+      mentions: {mode: 'auto', textTemplate: '{source}', aliases: {}},
+      configFile: path.join(directory, 'ywtc.config.yaml'),
+    };
+    const result = await new Migrator(config, createLogger([])).run({
+      source: {type: 'remote', profile: sourceProfile, value: `${sourceProfile.webUrl}/root`},
+      destination: {type: 'remote', profile: destinationProfile, value: `${destinationProfile.baseUrl}/pages/viewpage.action?pageId=100`},
+      scope: 'page', dryRun: true, archive: false, comments: false, concurrency: 2,
+      runtimeDirectory: path.join(directory, '.states'), cacheDirectory: path.join(directory, '.states/cache'),
+      reportsDirectory: path.join(directory, '.states/reports'),
+    });
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as {summary: {mentionOutcomes: {native: number}}; pages: Array<{mentions?: Array<{outcome: string}>}>};
+    expect(report.summary.mentionOutcomes.native).toBe(1);
+    expect(report.pages[0]?.mentions).toEqual([expect.objectContaining({outcome: 'native'})]);
+    expect(sourceMock.isDone()).toBe(true);
+    expect(destinationMock.isDone()).toBe(true);
+  });
 });

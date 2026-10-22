@@ -193,3 +193,18 @@ A comment archive with no linked comment attachments and no oversized full-text 
 #### Scenario: Archive attachment is required
 - **WHEN** linked comment files, an oversized full-text fallback, or another archive payload must be attached
 - **THEN** the system SHALL invoke resource reconciliation only for the required archive objects and SHALL report attachment-specific failures independently from the comment text
+
+### Requirement: Non-notifying archived mentions
+The system SHALL preserve mentions found in archived page comments as escaped text or safe profile links and MUST NOT emit provider-native mention markup from an archive.
+
+#### Scenario: Auto mode archives a comment mention
+- **WHEN** a source comment contains a recognized mention and the global policy selects `auto`
+- **THEN** ywtc SHALL apply the configured fallback presentation, record the occurrence as a comment adaptation, and SHALL NOT create a native mention
+
+#### Scenario: Comment mention lacks template data
+- **WHEN** a comment mention cannot populate a configured placeholder
+- **THEN** ywtc SHALL preserve the original source token, record an unresolved comment mention, and keep the comment archive verifiable without targeting a user
+
+#### Scenario: Archived comments are verified
+- **WHEN** the archive comment or filesystem section is read back
+- **THEN** every source comment mention SHALL have one safe textual or linked representation and SHALL be counted separately from page-body mentions

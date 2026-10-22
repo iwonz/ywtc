@@ -278,6 +278,9 @@ try {
 
 const installedReportModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'report.js');
 const installedDiagramModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'diagrams.js');
+const installedConfigModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'config.js');
+const installedContentModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'content-model.js');
+const installedMentionModule = path.join(prefix, 'lib', 'node_modules', '@iwonz', 'ywtc', 'dist', 'mentions.js');
 process.stdout.write('Verifying packaged diagram extraction and materialization...\n');
 const installedDiagramDirectory = path.join(temporary, 'installed-diagram');
 await mkdir(installedDiagramDirectory, {recursive: true});
@@ -305,6 +308,35 @@ const diagramSmoke = `
   }
 `;
 await execFileAsync(process.execPath, ['--input-type=module', '--eval', diagramSmoke], {encoding: 'utf8'});
+process.stdout.write('Verifying packaged mention configuration and rendering...\n');
+const mentionSmoke = `
+  import {parseWorkspaceConfig} from ${JSON.stringify(pathToFileURL(installedConfigModule).toString())};
+  import {normalizePageContent, renderConfluenceStorage} from ${JSON.stringify(pathToFileURL(installedContentModule).toString())};
+  import {resolveMentionPresentations} from ${JSON.stringify(pathToFileURL(installedMentionModule).toString())};
+  const config = parseWorkspaceConfig({
+    mentions: {mode: 'template', textTemplate: '{name}', urlTemplate: 'https://people.example/{username}'},
+    connections: {
+      wiki: {
+        type: 'yandex-wiki', apiUrl: 'https://api.wiki.yandex.net/v1', webUrl: 'https://wiki.example',
+        authType: 'oauth', token: 'package-smoke-token', organization: {type: 'yandex360', id: 'organization'},
+      },
+    },
+  }, '/tmp/package-smoke-ywtc.config.yaml');
+  const page = {
+    provider: 'yandex-wiki', profile: 'wiki', id: '1', canonicalId: 'wiki:1', title: 'Mention',
+    locator: 'mention', url: 'https://wiki.example/mention', rawFormat: 'yfm', references: [], rawContent: 'Hello @{ivan}',
+  };
+  const document = normalizePageContent(page);
+  const presentations = await resolveMentionPresentations(document.mentions ?? [], config.mentions, undefined, {staticDestination: true});
+  const rendered = await renderConfluenceStorage(document, page, {
+    pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]),
+    currentPageId: page.canonicalId, mentions: presentations,
+  }, 'DOC');
+  if (!rendered.body.includes('https://people.example/ivan') || rendered.mentions?.linked !== 1) {
+    throw new Error('Packaged mention template did not survive normalization and rendering');
+  }
+`;
+await execFileAsync(process.execPath, ['--input-type=module', '--eval', mentionSmoke], {encoding: 'utf8'});
 process.stdout.write('Verifying packaged autonomous report generation...\n');
 const installedReportDirectory = path.join(temporary, 'installed-report');
 const reportSmoke = `

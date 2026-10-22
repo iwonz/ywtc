@@ -7,6 +7,56 @@ export type ExportFormat = 'markdown' | 'html';
 export type RawContentFormat = 'yfm' | 'confluence-storage';
 export type DiagramKind = 'drawio' | 'mermaid' | 'plantuml' | 'd2';
 
+export type MentionMode = 'off' | 'template' | 'auto';
+export type MentionOutcome = 'preserved' | 'native' | 'linked' | 'text' | 'unresolved' | 'failed';
+
+export interface MentionAlias {
+  username?: string;
+  userKey?: string;
+  accountId?: string;
+  id?: string;
+}
+
+export type MentionPolicy =
+  | {mode: 'off'}
+  | {
+    mode: 'template' | 'auto';
+    textTemplate: string;
+    urlTemplate?: string;
+    aliases: Record<string, MentionAlias>;
+  };
+
+export interface MentionIdentity {
+  source: string;
+  username?: string;
+  displayName?: string;
+  email?: string;
+  id?: string;
+  userKey?: string;
+  accountId?: string;
+}
+
+export interface ResolvedMentionUser {
+  username?: string;
+  displayName?: string;
+  id?: string;
+  userKey?: string;
+  accountId?: string;
+}
+
+export interface MentionPresentation {
+  outcome: MentionOutcome;
+  label: string;
+  url?: string;
+  user?: ResolvedMentionUser;
+  reason?: string;
+  retryable: boolean;
+}
+
+export type MentionResolution =
+  | {status: 'resolved'; user: ResolvedMentionUser; retryable?: false}
+  | {status: 'not-found' | 'ambiguous' | 'unsupported' | 'failed'; reason: string; retryable: boolean};
+
 export interface EmbeddedResourceDescriptor {
   type: 'yfm-data-uri';
   diagramKind: DiagramKind;
@@ -280,6 +330,7 @@ export interface AdapterCapabilities {
   readComments?: boolean;
   writeComments?: boolean;
   updateComments?: boolean;
+  resolveMentions?: boolean;
 }
 
 export interface SourceStatusExclusion {
@@ -359,6 +410,8 @@ export interface DestinationAdapter {
   createArchiveComment?(input: {page: DestinationPage; body: string}): Promise<DestinationComment>;
   updateArchiveComment?(input: {comment: DestinationComment; body: string}): Promise<DestinationComment>;
   readArchiveComment?(input: {page: DestinationPage; commentId: string}): Promise<DestinationComment>;
+  resolveMention?(identity: MentionIdentity): Promise<MentionResolution>;
+  preflightMentionLookup?(): Promise<{available: boolean; warning?: string}>;
 }
 
 export type GraphEdgeStatus = 'resolved' | 'external' | 'inaccessible' | 'broken' | 'cycle' | 'unsupported';
@@ -433,14 +486,32 @@ export interface NormalizedReference {
   anchor?: string;
 }
 
+export interface NormalizedMention {
+  id: string;
+  /** Collision-resistant parser token retained only until destination rendering. */
+  marker?: string;
+  identity: MentionIdentity;
+}
+
+export interface MentionOutcomeCounts {
+  total: number;
+  preserved: number;
+  native: number;
+  linked: number;
+  text: number;
+  unresolved: number;
+  failed: number;
+}
+
 export interface NormalizedNode {
-  type: 'document' | 'html' | 'layout' | 'layout-section' | 'layout-cell' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback' | 'tree-directive' | 'diagram';
+  type: 'document' | 'html' | 'layout' | 'layout-section' | 'layout-cell' | 'page-reference' | 'resource-reference' | 'vendor-extension' | 'fallback' | 'tree-directive' | 'diagram' | 'mention';
   value?: string;
   children?: NormalizedNode[];
   reference?: NormalizedReference;
   vendor?: ProviderKind;
   tree?: {depth?: number; sort?: 'asc' | 'desc'; sortBy?: 'title'};
   diagram?: NormalizedDiagram;
+  mention?: NormalizedMention;
   layout?: {
     source: ProviderKind;
     gap?: string;
@@ -468,6 +539,9 @@ export interface NormalizedDocument {
     reason: 'provider-null-body';
   };
   references: NormalizedReference[];
+  mentions?: NormalizedMention[];
+  /** Confirms that mention-aware normalization ran even when no mentions were found. */
+  mentionScanComplete?: true;
   diagrams?: NormalizedDiagram[];
   /** YFM with heavyweight native payloads replaced by stable resource references. */
   renderSource?: string;
@@ -483,6 +557,7 @@ export interface NormalizedDocument {
     tables: number;
     codeBlocks: number;
     diagrams?: number;
+    mentions: number;
     preservedExternalReferences: number;
   };
 }
@@ -493,6 +568,7 @@ export interface RenderContext {
   sourcePages: Map<string, SourcePage>;
   currentPageId: string;
   currentPath?: string;
+  mentions?: Map<string, MentionPresentation>;
 }
 
 export interface RenderedDocument {
@@ -504,6 +580,7 @@ export interface RenderedDocument {
   degraded: boolean;
   representedReferences: number;
   preservedExternalReferences: number;
+  mentions?: MentionOutcomeCounts;
 }
 
 export function assertTransferCapabilities(

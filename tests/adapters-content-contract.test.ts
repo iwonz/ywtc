@@ -413,4 +413,24 @@ describe('source page content contracts', () => {
     conflict = true;
     await expect(adapter.updatePage({page: mapped, title: 'Current', body: '<p>Source</p>'})).rejects.toBeInstanceOf(DestinationRevisionConflictError);
   });
+
+  it('resolves only the uniquely confirmed current Yandex Wiki user for native mentions', async () => {
+    let reads = 0;
+    const adapter = new YandexAdapter(yandexProfile, {
+      getCurrentUser: async () => {
+        reads += 1;
+        return {username: 'destination-login', identity: {uid: 'uid-1', cloud_uid: 'cloud-1'}, org: {}};
+      },
+    } as unknown as YandexWikiClient);
+
+    await expect(adapter.resolveMention!({source: '@source', username: 'destination-login'})).resolves.toEqual({
+      status: 'resolved',
+      user: {username: 'destination-login', id: 'uid-1'},
+    });
+    await expect(adapter.resolveMention!({source: '@other', username: 'other'})).resolves.toMatchObject({
+      status: 'not-found', retryable: false,
+    });
+    expect(reads).toBe(1);
+    expect(adapter.capabilities.resolveMentions).toBe(true);
+  });
 });

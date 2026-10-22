@@ -20,7 +20,7 @@ test.beforeAll(async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-report-browser-'));
   const report = new TransferReport({
     runId: '00000000-0000-4000-8000-000000000007',
-    dryRun: false, scope: 'subtree', sourceStatus: 'current', direction: 'yandex-wiki → confluence',
+    dryRun: false, scope: 'subtree', sourceStatus: 'current', direction: 'yandex-wiki → confluence', mentionMode: 'auto',
     source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Knowledge base', url: 'https://wiki.example.com/root'},
     destination: {provider: 'confluence', profile: 'docs', id: '10', url: 'https://docs.example.com/pages/10'},
     state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'existing'},
@@ -37,6 +37,10 @@ test.beforeAll(async () => {
   report.addPage(reportPage({
     sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Knowledge base', status: 'complete', links: 4, images: 1, tables: 1,
     destinationId: '11', destinationTitle: 'Knowledge base', destinationUrl: 'https://docs.example.com/pages/11',
+    mentions: [{
+      id: 'mention-0', location: 'page', source: '@ivan', outcome: 'native', label: 'Ivan Petrov',
+      destinationIdentity: {accountId: 'cloud-42'}, retryable: false,
+    }],
     resources: 1, sourceBytes: 8, transferredBytes: 8,
     resourceItems: [{
       sourceId: 'logo', sourceName: 'logo.png', kind: 'image', status: 'complete', sourceBytes: 8, transferredBytes: 8,
@@ -129,6 +133,9 @@ test('interactive report works offline through file:// with exact details and ke
   await expect(page.getByRole('dialog')).toBeHidden();
   await root.getByRole('button', {name: 'View details'}).click();
   await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByRole('tab', {name: 'Mentions'}).click();
+  await expect(page.getByRole('dialog').getByText('@ivan')).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('cloud-42')).toBeVisible();
   await page.getByRole('tab', {name: 'Comparison'}).click();
   const sourceFrame = page.getByRole('dialog').locator('iframe').first().contentFrame();
   await expect(sourceFrame.locator('.ywtc-layout-cell')).toHaveCount(2);

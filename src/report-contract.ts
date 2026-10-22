@@ -1,4 +1,4 @@
-import type {GraphEdgeStatus, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
+import type {GraphEdgeStatus, MentionMode, MentionOutcome, MentionOutcomeCounts, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
 import type {IssueCategory, IssueObjectType, MigrationIssue} from './issues.js';
 import type {CommentTransferStatus, PageTransferStatus, ResourceTransferState, RunStatus, StateLoadSource} from './state.js';
 import type {ConflictEvidence} from './state.js';
@@ -41,6 +41,19 @@ export interface TransferReportCommentItem {
   error?: string;
 }
 
+export interface TransferReportMention {
+  id: string;
+  location: 'page' | 'comment';
+  source: string;
+  sourceIdentity?: {username?: string; userKey?: string; accountId?: string; id?: string};
+  outcome: MentionOutcome;
+  label: string;
+  url?: string;
+  destinationIdentity?: {username?: string; userKey?: string; accountId?: string; id?: string};
+  reason?: string;
+  retryable: boolean;
+}
+
 export interface TransferReportPage {
   sourceCanonicalId: string;
   sourceId: string;
@@ -75,6 +88,7 @@ export interface TransferReportPage {
   normalizations?: string[];
   adaptations?: string[];
   preservedExternalReferences?: number;
+  mentions?: TransferReportMention[];
   conflictEvidence?: ConflictEvidence;
   error?: string;
   blockedByPageId?: string;
@@ -236,6 +250,11 @@ export interface TransferReportSummary {
   commentAttachments: number;
   commentBytes: number;
   commentStatuses: CommentStatusCounts;
+  mentionMode?: MentionMode;
+  pageMentions?: number;
+  commentMentions?: number;
+  mentionIdentities?: number;
+  mentionOutcomes?: MentionOutcomeCounts;
   durationMs?: number;
   pageStatuses: PageStatusCounts;
   resourceStatuses: ResourceStatusCounts;
@@ -249,6 +268,7 @@ export interface TransferReportData {
   status: RunStatus;
   dryRun: boolean;
   commentsEnabled: boolean;
+  mentionMode?: MentionMode;
   scope: TransferScope;
   sourceStatus: SourceStatus;
   selection: SourceSelection;

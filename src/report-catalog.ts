@@ -68,6 +68,11 @@ const reportListSchema = z.object({
     commentAttachments: z.number().nonnegative().optional().default(0),
     commentBytes: z.number().nonnegative().optional().default(0),
     commentStatuses: z.record(z.string(), z.number().nonnegative()).optional().default({}),
+    mentionMode: z.enum(['off', 'template', 'auto']).optional(),
+    pageMentions: z.number().nonnegative().optional().default(0),
+    commentMentions: z.number().nonnegative().optional().default(0),
+    mentionIdentities: z.number().nonnegative().optional().default(0),
+    mentionOutcomes: z.record(z.string(), z.number().nonnegative()).optional().default({}),
   }),
 });
 
@@ -122,6 +127,11 @@ export interface ReportCatalogEntry {
   commentAttachments: number;
   commentBytes: number;
   commentStatuses: Record<string, number>;
+  mentionMode?: 'off' | 'template' | 'auto';
+  pageMentions: number;
+  commentMentions: number;
+  mentionIdentities: number;
+  mentionOutcomes: Record<string, number>;
   directory: string;
   html: string;
   json: string;
@@ -240,6 +250,11 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     commentAttachments: parsed.summary.commentAttachments,
     commentBytes: parsed.summary.commentBytes,
     commentStatuses: parsed.summary.commentStatuses,
+    ...(parsed.summary.mentionMode ? {mentionMode: parsed.summary.mentionMode} : {}),
+    pageMentions: parsed.summary.pageMentions,
+    commentMentions: parsed.summary.commentMentions,
+    mentionIdentities: parsed.summary.mentionIdentities,
+    mentionOutcomes: parsed.summary.mentionOutcomes,
     directory,
     html,
     json,

@@ -8,6 +8,7 @@ import {pipeline} from 'node:stream/promises';
 import FormData from 'form-data';
 import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
+import type {MentionIdentity, MentionResolution} from '../domain.js';
 import {HttpRequestError, RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
 import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
@@ -105,6 +106,35 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       });
       return parseConfluenceResponse(confluenceUserSchema, response.data, 'reading the current Data Center user');
     });
+  }
+
+  async resolveMentionUser(identity: MentionIdentity): Promise<MentionResolution> {
+    const params = identity.userKey ? {key: identity.userKey} : identity.username ? {username: identity.username} : undefined;
+    if (!params) return {status: 'unsupported', retryable: false, reason: 'destination-exact-identity-unavailable'};
+    try {
+      return await this.readLimit(async () => {
+        const response = await this.http.request<unknown>({method: 'GET', url: '/rest/api/user', params});
+        const user = parseConfluenceResponse(confluenceUserSchema, response.data, 'resolving a Data Center mention user');
+        if ((identity.userKey && user.userKey !== identity.userKey) || (identity.username && user.username !== identity.username)) {
+          return {status: 'not-found' as const, retryable: false, reason: 'destination-user-exact-identity-mismatch'};
+        }
+        return {status: 'resolved' as const, user: {
+          ...(user.username ? {username: user.username} : {}),
+          ...(user.userKey ? {userKey: user.userKey} : {}),
+          ...(user.displayName ? {displayName: user.displayName} : {}),
+        }};
+      });
+    } catch (error) {
+      if (error instanceof HttpRequestError) {
+        if (error.status === 404) return {status: 'not-found', retryable: false, reason: 'destination-user-not-found'};
+        return {
+          status: 'failed',
+          retryable: error.status === 429 || (error.status ?? 0) >= 500,
+          reason: `destination-user-lookup-http-${error.status ?? 'network'}`,
+        };
+      }
+      throw error;
+    }
   }
 
   async preflight(): Promise<ConfluencePlatformInfo> {

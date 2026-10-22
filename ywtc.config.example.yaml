@@ -2,6 +2,23 @@ defaults:
   timeoutMs: 30000
   concurrency: 4
 
+mentions:
+  mode: off
+  # To render profile links instead:
+  # mode: template
+  # textTemplate: "{name}"
+  # urlTemplate: "https://people.example.com/{username}"
+  # aliases: {}
+  #
+  # To resolve verified native destination users with the same fallback:
+  # mode: auto
+  # textTemplate: "{name}"
+  # urlTemplate: "https://people.example.com/{username}"
+  # aliases:
+  #   "username:source-login":
+  #     username: destination-login
+  #     accountId: destination-cloud-account-id
+
 connections:
   yandex:
     type: yandex-wiki

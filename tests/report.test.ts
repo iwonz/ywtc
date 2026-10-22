@@ -146,6 +146,39 @@ describe('transfer report', () => {
     });
   });
 
+  it('reconciles mention outcomes without making a verified fallback partial', () => {
+    const report = new TransferReport({
+      runId: '10000000-0000-4000-8000-000000000097',
+      dryRun: false,
+      scope: 'page',
+      direction: 'yandex-wiki → confluence',
+      mentionMode: 'auto',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
+    });
+    report.addPage(page({
+      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete',
+      mentions: [
+        {id: 'mention-0', location: 'page', source: '@ivan', outcome: 'native', label: 'Ivan', destinationIdentity: {accountId: 'cloud-42'}, retryable: false},
+        {id: 'comment-1-0', location: 'comment', source: '@maria', outcome: 'linked', label: 'Maria', url: 'https://people.example/maria', retryable: false},
+        {id: 'mention-2', location: 'page', source: '@unknown', outcome: 'unresolved', label: '@unknown', reason: 'destination-user-not-found', retryable: false},
+      ],
+    }));
+    report.issue({
+      code: 'mention-user-unresolved', severity: 'warning', phase: 'page', category: 'mention', objectType: 'mention',
+      objectId: 'mention-2', pageId: 'wiki:1', retryable: false, message: 'Mention @unknown used a safe fallback',
+    });
+    report.finish('completed-with-warnings');
+
+    expect(report.data.pages[0]?.status).toBe('complete');
+    expect(report.data.summary).toMatchObject({
+      mentionMode: 'auto', pageMentions: 2, commentMentions: 1, mentionIdentities: 3,
+      mentionOutcomes: {total: 3, native: 1, linked: 1, unresolved: 1, failed: 0},
+      warnings: 1, errors: 0,
+    });
+  });
+
   it('merges a retry attempt into the full baseline and records object provenance', () => {
     const baseline = new TransferReport({
       runId: '10000000-0000-4000-8000-000000000001',

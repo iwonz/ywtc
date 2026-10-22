@@ -126,6 +126,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         console.log(`    files ${report.resourcesComplete}/${report.resources} complete · ${report.resourcesPartial} partial · ${report.resourcesFailed} failed · ${report.resourcesBlocked} blocked · ${report.resourcesNotStarted} not started${report.resourcesPlanned ? ` · ${report.resourcesPlanned} planned` : ''} · ${issues}`);
         console.log(`    causes ${report.rootErrors} root errors · ${report.dependentPages} dependent pages · ${report.dependentFiles} dependent files · ${report.dependentComments} dependent comment archives`);
         console.log(`    comments ${report.comments} entries · ${report.commentThreads} threads · ${report.commentAttachments} files · ${Object.entries(report.commentStatuses).map(([status, count]) => `${count} ${status}`).join(' · ')}`);
+        if ((report.mentionOutcomes.total ?? 0) > 0) {
+          const locations = [[report.pageMentions, 'page'], [report.commentMentions, 'comment']]
+            .filter(([count]) => Number(count) > 0).map(([count, label]) => `${count} ${label}`).join(' · ');
+          const outcomes = Object.entries(report.mentionOutcomes).filter(([status, count]) => status !== 'total' && count > 0).map(([status, count]) => `${count} ${status}`).join(' · ');
+          console.log(`    mentions ${report.mentionMode ?? 'off'} · ${report.mentionOutcomes.total} total / ${report.mentionIdentities} identities${locations ? ` · ${locations}` : ''}${outcomes ? ` · ${outcomes}` : ''}`);
+        }
         console.log(`    ${report.url}`);
       }
       return 0;

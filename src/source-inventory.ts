@@ -178,6 +178,7 @@ const normalizedDocumentSchema = z.object({
   raw: z.string(),
   rawFormat: z.enum(['yfm', 'confluence-storage']),
   references: z.array(z.unknown()),
+  mentionScanComplete: z.literal(true),
   warnings: z.array(z.string()),
   normalizations: z.array(z.string()),
   adaptations: z.array(z.string()),
@@ -190,6 +191,7 @@ const normalizedDocumentSchema = z.object({
     tables: z.number().int().nonnegative(),
     codeBlocks: z.number().int().nonnegative(),
     diagrams: z.number().int().nonnegative().optional(),
+    mentions: z.number().int().nonnegative().optional().default(0),
     preservedExternalReferences: z.number().int().nonnegative(),
   }).passthrough(),
 }).passthrough();

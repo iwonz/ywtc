@@ -36,6 +36,7 @@ const capabilities: AdapterCapabilities = {
   readComments: true,
   writeComments: true,
   updateComments: true,
+  resolveMentions: true,
 };
 
 function canonical(profile: ConfluenceConnectionProfile, id: string): string {
@@ -129,6 +130,27 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
   async preflight(): Promise<{product: string; version?: string; warnings: string[]}> {
     const info = await this.client.preflight?.();
     return {product: info?.product ?? 'Confluence', ...(info?.version ? {version: info.version} : {}), warnings: []};
+  }
+
+  async resolveMention(identity: import('../domain.js').MentionIdentity): Promise<import('../domain.js').MentionResolution> {
+    return this.client.resolveMentionUser(identity);
+  }
+
+  async preflightMentionLookup(): Promise<{available: boolean; warning?: string}> {
+    try {
+      const current = await this.client.getCurrentUser();
+      const identity = {
+        source: 'current-user',
+        ...(typeof current.username === 'string' ? {username: current.username} : {}),
+        ...(typeof current.userKey === 'string' ? {userKey: current.userKey} : {}),
+        ...(typeof current.accountId === 'string' ? {accountId: current.accountId} : {}),
+      };
+      const resolution = await this.client.resolveMentionUser(identity);
+      if (resolution.status === 'resolved') return {available: true};
+      return {available: false, warning: `Mention lookup could not confirm the current Confluence user (${resolution.reason})`};
+    } catch (error) {
+      return {available: false, warning: `Mention lookup probe failed: ${error instanceof Error ? error.message : String(error)}`};
+    }
   }
 
   async resolvePage(locator: string): Promise<SourcePage> {

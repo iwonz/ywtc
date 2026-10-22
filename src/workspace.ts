@@ -10,6 +10,9 @@ export const CONFIG_TEMPLATE = `defaults:
   timeoutMs: 30000
   concurrency: 4
 
+mentions:
+  mode: off
+
 connections:
   yandex:
     type: yandex-wiki

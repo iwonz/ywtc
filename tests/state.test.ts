@@ -43,6 +43,11 @@ describe('transfer state', () => {
       retryContextPages: 4,
     });
     await store.setRunComments(run.id, {threads: 1, comments: 2, attachments: 1});
+    await store.setRunMentions(run.id, {
+      mode: 'auto', pageMentions: 2, commentMentions: 1,
+      mentionIdentities: 2,
+      outcomes: {total: 3, preserved: 0, native: 1, linked: 1, text: 0, unresolved: 1, failed: 0},
+    });
     await store.setRunSelection(run.id, {
       requestedStatus: 'current', effectiveStatus: 'current', returnedDescendants: 9, selectedDescendants: 2,
       excluded: [{id: '11', locator: 'root/obsolete', reason: 'source-status', status: 'obsolete'}],
@@ -55,6 +60,11 @@ describe('transfer state', () => {
         fingerprint: 'comments-fingerprint', destinationId: 'comment-1', destinationFingerprint: 'comment-fingerprint', destinationVersion: '3', archiveResourceId: 'archive-1',
         archiveName: 'comments.zip', archiveSha256: 'archive-hash', status: 'complete', threads: 1,
         comments: 2, participants: 2, attachments: 1, bytes: 42, updatedAt: new Date().toISOString(),
+      },
+      mentions: {
+        policyFingerprint: 'f'.repeat(64),
+        outcomes: {total: 2, preserved: 0, native: 1, linked: 0, text: 0, unresolved: 1, failed: 0},
+        updatedAt: new Date().toISOString(),
       },
       updatedAt: new Date().toISOString(),
     });
@@ -85,10 +95,12 @@ describe('transfer state', () => {
       operation: 'retry', sourceStatus: 'current', returnedDescendants: 9, selectedDescendants: 2,
       excludedPages: 1, maximumDepth: 2, commentsEnabled: true, commentThreads: 1, comments: 2,
       commentAttachments: 1, retryAttempt: 2, retrySelectedPages: 3, retrySelectedResources: 1,
-      retrySelectedComments: 2, retryContextPages: 4,
+      retrySelectedComments: 2, retryContextPages: 4, mentionMode: 'auto', pageMentions: 2,
+      commentMentions: 1, mentionIdentities: 2, mentionOutcomes: {total: 3, native: 1, linked: 1, unresolved: 1},
     });
     expect(state.pages['wiki:10']).toMatchObject({status: 'discovered', destinationFingerprint: 'page-fingerprint', destinationVersion: '8'});
     expect(state.pages['wiki:10']?.comments).toMatchObject({status: 'complete', destinationId: 'comment-1', destinationVersion: '3', comments: 2});
+    expect(state.pages['wiki:10']?.mentions).toMatchObject({policyFingerprint: 'f'.repeat(64), outcomes: {total: 2, native: 1, unresolved: 1}});
     expect(state.pages['wiki:11']).toMatchObject({
       status: 'blocked', blockedByPageId: 'wiki:10',
       resources: {attachment: {status: 'blocked', blockedByCode: 'destination-page-staging-failed'}},

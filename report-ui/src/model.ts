@@ -43,6 +43,7 @@ function pageSearchText(report: TransferReportData, page: TransferReportPage): s
     page.resourceItems.map((resource) => `${resource.sourceName} ${resource.destinationName ?? ''} ${resource.error ?? ''}`).join(' '),
     page.comments.error,
     page.comments.items?.map((comment) => `${comment.commentId} ${comment.author} ${comment.error ?? ''}`).join(' '),
+    page.mentions?.map((mention) => `${mention.source} ${mention.label} ${mention.outcome} ${mention.reason ?? ''}`).join(' '),
     issues.map((issue) => `${issue.code} ${issue.category} ${issue.message}`).join(' '),
   ].filter(Boolean).join(' ').toLocaleLowerCase();
 }

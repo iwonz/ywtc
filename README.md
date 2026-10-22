@@ -40,6 +40,7 @@ brew install ywtc
 | Текст и таблицы | Сохраняются заголовки, начертания и цвет, списки и задачи, цитаты, разделители, inline/preformatted code с языком и обычные таблицы. Destination получает нативную или семантически эквивалентную разметку. |
 | Секции и колонки | YFM `layout/block` и Confluence layouts преобразуются в нативные секции и колонки. HTML использует адаптивную сетку; Markdown сохраняет содержимое ячеек в исходном порядке. |
 | Ссылки и якоря | Ссылки внутри выбранного набора переписываются на destination; якоря сохраняются. Внешние ссылки и переходы за границу набора остаются исходными. |
+| Упоминания | Yandex Wiki `@login`/`@{login}` и Confluence user markers распознаются без затрагивания email, URL, кода и исходников диаграмм. Политика workspace может сохранить запись как есть, превратить её в настраиваемый текст/ссылку либо после точной проверки пользователя создать нативное упоминание destination. Упоминания в архиве комментариев всегда остаются безопасным текстом или ссылкой и не вызывают массовых уведомлений. |
 | Файлы и изображения | Доступные через API вложения передаются потоково с проверкой размера и SHA-256. Прерванная Yandex-загрузка продолжается с подтверждённой byte-range позиции; несовместимый ответ безопасно запускает её заново. Поддерживаются любые скачиваемые файлы, включая PNG/JPEG/GIF/WebP/SVG, PDF, ZIP, DOCX, XLSX и PPTX. Коллизии имён разрешаются стабильно. |
 | Диаграммы | Mermaid, PlantUML, D2 и Draw.io распознаются до общего YFM parser. Нативный синтаксис сохраняется при доказанной поддержке destination; иначе точный source остаётся управляемым вложением или code block, а доступное SVG-представление — изображением. Полная смена представления считается adaptation, а не потерей. |
 | Специальная разметка | Notes ↔ callout macros, cuts ↔ expand, tree ↔ children, задачи, code, anchors, page/attachment links и изображения получают ближайший эквивалент. Tabs становятся секциями, доступный через API Grid — проверяемой статической таблицей. |
@@ -96,6 +97,10 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | --- | --- | --- | --- |
 | `defaults.timeoutMs` | общий | `1000..300000`; `30000` | Таймаут HTTP-запроса |
 | `defaults.concurrency` | общий | `1..64`; `4` | Общая параллельность операции |
+| `mentions.mode` | общий | `off` (default), `template`, `auto` | Сохранить упоминания как есть, применить шаблон или попытаться создать проверенное нативное упоминание |
+| `mentions.textTemplate` | `template`, `auto` | строка; `{source}` | Отображаемый текст. Доступны `{source}`, `{username}`, `{displayName}`, `{email}`, `{id}`, `{name}` |
+| `mentions.urlTemplate` | `template`, `auto` | абсолютный HTTP(S) URL; необязательно | Делает результат ссылкой; значения placeholders URL-кодируются |
+| `mentions.aliases.<source-identity>` | `auto` | объект; необязательно | Явное соответствие вида `username:source-login` → `username`, `userKey`, `accountId` или `id` destination |
 | `connections.<name>` | общий | имя `[a-z0-9._-]+` | Именованное подключение |
 | `type` | любой | `yandex-wiki` или `confluence` | Провайдер |
 | `token` | любой | непустой | OAuth, IAM, PAT или API token |
@@ -174,6 +179,8 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 
 Short-алиасы локальны для команды: `migrate -i` запускает мастер, `update -i` устанавливает обновление.
 
+Обработка упоминаний задаётся глобально в `ywtc.config.yaml`, поэтому отдельного CLI-флага нет. В `auto` нативная разметка создаётся только при однозначном provider lookup; display name не считается доказательством identity. Если пользователь не найден, проверенный fallback сохраняет страницу `complete` и добавляет warning. Доставка уведомления зависит от настроек и прав destination.
+
 ### Locators и выбор страниц
 
 - Yandex Wiki: полный URL, числовой page ID или slug вида `team/start`.
@@ -238,7 +245,7 @@ Live-run использует exclusive lock; stale lock восстанавли�
 
 Каждый запуск создаёт `<workdir>/.states/reports/<run-id>/index.html` и очищенный `report.json`, затем печатает URL и команду открытия. Используйте `--open-report`, `ywtc reports list` или `ywtc reports open [run-id|last]`; без selector `open` также выбирает последний корректный отчёт. Retry-отчёт показывает root/parent Run ID, номер попытки, выбранные страницы/files/comment archives, read-only context, переиспользованные outcomes и оставшиеся retryable/terminal проблемы.
 
-Автономный отчёт показывает только ненулевые показатели, канонические source/destination, исходную иерархию, исключённые страницы и проблемы. Обязательный inventory и независимые Grid payloads учитываются раздельно: видны переиспользованные checkpoints, recovery-попытки, точная API-операция и Grid outcome. Дерево поддерживает поиск и фильтры; детали страницы содержат доступные files и Grids, comments, side-by-side comparison и диагностику. RU/EN и system/light/dark переключаются иконками. `report.json` не содержит body страниц, тексты комментариев или preview HTML.
+Автономный отчёт показывает только ненулевые показатели, канонические source/destination, исходную иерархию, исключённые страницы и проблемы. Обязательный inventory и независимые Grid payloads учитываются раздельно: видны переиспользованные checkpoints, recovery-попытки, точная API-операция и Grid outcome. Для найденных упоминаний появляются режим, page/comment totals, уникальные identities и outcomes `preserved`, `native`, `linked`, `text`, `unresolved` или `failed`; в деталях страницы вкладка выводится только при наличии данных. Дерево поддерживает поиск и фильтры; остальные детали содержат files и Grids, comments, side-by-side comparison и диагностику. RU/EN и system/light/dark переключаются иконками. `report.json` не содержит body страниц, тексты комментариев, скрытые email или preview HTML.
 
 ### Outcomes объектов
 

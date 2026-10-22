@@ -35,6 +35,8 @@ import type {
   DestinationAdapter,
   DestinationContainer,
   DestinationPage,
+  MentionOutcomeCounts,
+  MentionPresentation,
   NormalizedDocument,
   PageGraph,
   RenderContext,
@@ -52,6 +54,7 @@ import {discoverPageGraph} from './graph.js';
 import {HttpRequestError} from './http.js';
 import {safeFilename} from './input.js';
 import {redact, type Logger} from './logger.js';
+import {mentionIdentityKey, mentionPolicyFingerprint, renderSafeCommentMentions, resolveMentionPresentations} from './mentions.js';
 import type {DirectoryLocator, RemoteLocator, ResolvedLocator} from './locators.js';
 import {profileBaseUrl, sameRemoteInstance} from './locators.js';
 import {ContinuousProgress} from './progress.js';
@@ -59,6 +62,7 @@ import {
   TransferReport,
   type MigrationReportPaths,
   type ReportInventoryStatus,
+  type TransferReportMention,
   type TransferReportPage,
   type TransferReportSummary,
 } from './report.js';
@@ -187,11 +191,11 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function sourceFingerprint(page: SourcePage): string {
+function sourceFingerprint(page: SourcePage, mentionPolicyHash = ''): string {
   const availability = page.contentAvailability
     ? `${page.contentAvailability.status}:${page.contentAvailability.sourceType}:${page.contentAvailability.reason}`
     : 'available';
-  return sha256(`${page.title}\0${page.rawContent}\0${page.version ?? ''}\0${availability}`);
+  return sha256(`${page.title}\0${page.rawContent}\0${page.version ?? ''}\0${availability}\0${mentionPolicyHash}`);
 }
 
 function sourceResourceFingerprint(resource: SourceResource): string {
@@ -333,6 +337,7 @@ async function cacheDiscoveredPages(
   scheduler: CooperativeScheduler,
   signal?: AbortSignal,
   onProgress?: (completed: number, total: number, page: SourcePage) => void,
+  mentionPolicyHash = '',
 ): Promise<Map<string, string>> {
   await mkdir(path.join(cacheDirectory, 'pages'), {recursive: true, mode: 0o700});
   const fingerprints = new Map<string, string>();
@@ -341,7 +346,7 @@ async function cacheDiscoveredPages(
   const queue = new PQueue({concurrency: Math.max(1, concurrency)});
   await Promise.all(graph.pages.map((page) => queue.add(async () => {
     await scheduler.checkpoint(signal ? {signal} : {});
-    fingerprints.set(page.canonicalId, sourceFingerprint(page));
+    fingerprints.set(page.canonicalId, sourceFingerprint(page, mentionPolicyHash));
     await writeFile(cachedPagePath(cacheDirectory, page.canonicalId), `${JSON.stringify(page)}\n`, {mode: 0o600});
     page.rawContent = '';
     completed += 1;
@@ -674,6 +679,7 @@ function reportPage(input: {
   normalizations?: string[];
   adaptations?: string[];
   preservedExternalReferences?: number;
+  mentions?: TransferReportMention[];
   resourceStates?: Record<string, ResourceTransferState>;
   resourceStatusOverride?: ResourceTransferState['status'];
   error?: string;
@@ -797,6 +803,7 @@ function reportPage(input: {
     normalizations: [...new Set([...(input.document.normalizations ?? []), ...(input.normalizations ?? [])])],
     adaptations: [...new Set([...(input.document.adaptations ?? []), ...(input.adaptations ?? [])])],
     preservedExternalReferences: input.preservedExternalReferences ?? input.document.metrics.preservedExternalReferences,
+    ...(input.mentions?.length ? {mentions: input.mentions} : {}),
     ...(input.error ? {error: input.error} : {}),
     ...(input.conflictEvidence ? {conflictEvidence: input.conflictEvidence} : {}),
     ...(input.status === 'blocked' && input.blockedBy ? input.blockedBy : {}),
@@ -894,6 +901,96 @@ function runStatus(errors: number, warnings: number, degradations: number): RunS
   return warnings + degradations > 0 ? 'completed-with-warnings' : 'completed';
 }
 
+function emptyMentionOutcomes(): MentionOutcomeCounts {
+  return {total: 0, preserved: 0, native: 0, linked: 0, text: 0, unresolved: 0, failed: 0};
+}
+
+function countMentionReportItems(items: readonly TransferReportMention[]): MentionOutcomeCounts {
+  const counts = emptyMentionOutcomes();
+  for (const item of items) {
+    counts.total += 1;
+    counts[item.outcome] += 1;
+  }
+  return counts;
+}
+
+function mentionOutcomeText(counts: MentionOutcomeCounts): string {
+  return [
+    [counts.native, 'native'],
+    [counts.linked, 'linked'],
+    [counts.text, 'text'],
+    [counts.preserved, 'preserved'],
+    [counts.unresolved, 'unresolved'],
+    [counts.failed, 'failed'],
+  ].filter(([count]) => Number(count) > 0).map(([count, label]) => `${count} ${label}`).join(' · ');
+}
+
+function pageMentionReportItems(
+  document: NormalizedDocument,
+  presentations: ReadonlyMap<string, MentionPresentation>,
+): {items: TransferReportMention[]; identities: string[]} {
+  const mentions = document.mentions ?? [];
+  return {items: mentions.map((mention) => {
+    const presentation = presentations.get(mention.id) ?? {outcome: 'preserved' as const, label: mention.identity.source, retryable: false};
+    const user = presentation.user;
+    return {
+      id: mention.id,
+      location: 'page',
+      source: mention.identity.source,
+      sourceIdentity: {
+        ...(mention.identity.username ? {username: mention.identity.username} : {}),
+        ...(mention.identity.userKey ? {userKey: mention.identity.userKey} : {}),
+        ...(mention.identity.accountId ? {accountId: mention.identity.accountId} : {}),
+        ...(mention.identity.id ? {id: mention.identity.id} : {}),
+      },
+      outcome: presentation.outcome,
+      label: presentation.label,
+      ...(presentation.url ? {url: presentation.url} : {}),
+      ...(user ? {destinationIdentity: {
+        ...(user.username ? {username: user.username} : {}),
+        ...(user.userKey ? {userKey: user.userKey} : {}),
+        ...(user.accountId ? {accountId: user.accountId} : {}),
+        ...(user.id ? {id: user.id} : {}),
+      }} : {}),
+      ...(presentation.reason ? {reason: presentation.reason} : {}),
+      retryable: presentation.retryable,
+    };
+  }), identities: mentions.map((mention) => mentionIdentityKey(mention.identity))};
+}
+
+function commentMentionReportItems(
+  inventory: CommentInventory | undefined,
+  policy: NonNullable<AppConfig['mentions']>,
+): {items: TransferReportMention[]; identities: string[]} {
+  const items: TransferReportMention[] = [];
+  const identities: string[] = [];
+  const visit = (entry: CommentInventory['threads'][number]['root']): void => {
+    const rendered = renderSafeCommentMentions(entry.body, policy);
+    for (const [index, mention] of rendered.mentions.entries()) {
+      identities.push(mentionIdentityKey(mention.identity));
+      items.push({
+        id: `comment-${entry.id}-${index}`,
+        location: 'comment',
+        source: mention.identity.source,
+        sourceIdentity: {
+          ...(mention.identity.username ? {username: mention.identity.username} : {}),
+          ...(mention.identity.userKey ? {userKey: mention.identity.userKey} : {}),
+          ...(mention.identity.accountId ? {accountId: mention.identity.accountId} : {}),
+          ...(mention.identity.id ? {id: mention.identity.id} : {}),
+        },
+        outcome: mention.presentation.outcome,
+        label: mention.presentation.label,
+        ...(mention.presentation.url ? {url: mention.presentation.url} : {}),
+        ...(mention.presentation.reason ? {reason: mention.presentation.reason} : {}),
+        retryable: false,
+      });
+    }
+    for (const reply of entry.replies) visit(reply);
+  };
+  for (const thread of inventory?.threads ?? []) visit(thread.root);
+  return {items, identities};
+}
+
 function runOutcomeCounts(summary: TransferReportSummary, pages: number) {
   return {
     pages,
@@ -968,6 +1065,8 @@ export class Migrator {
   private async runWithProgress(options: TransferOptions, progress: ContinuousProgress): Promise<TransferResult> {
     const sourceStatus = options.sourceStatus ?? 'all';
     const commentsEnabled = options.comments ?? true;
+    const mentionPolicy = this.config.mentions ?? {mode: 'off'};
+    const mentionPolicyHash = mentionPolicyFingerprint(mentionPolicy);
     const source = this.adapterFactory(options.source.profile, this.config);
     const destination = options.destination.type === 'remote'
       ? this.adapterFactory(options.destination.profile, this.config)
@@ -1027,6 +1126,7 @@ export class Migrator {
       secrets: secretValues(this.config),
       dryRun: options.dryRun,
       commentsEnabled,
+      mentionMode: mentionPolicy.mode,
       scope: options.scope,
       sourceStatus,
       direction: `${source.kind} → ${options.destination.type === 'directory' ? options.destination.format : destination!.kind}`,
@@ -1195,6 +1295,7 @@ export class Migrator {
           unit: 'pages',
           queued: Math.max(0, total - completed),
         }),
+        mentionPolicyHash,
       );
     } catch (error) {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
@@ -1260,12 +1361,14 @@ export class Migrator {
 
     const resourcesByPage = new Map<string, SourceResource[]>();
     const commentsByPage = new Map<string, CommentInventory>();
+    const mentionPresentationsByPage = new Map<string, Map<string, MentionPresentation>>();
+    const mentionReportItemsByPage = new Map<string, TransferReportMention[]>();
     const inventoryResults = new Map<string, PageInventoryResult>();
     const inventoryFailures = new Map<string, SourceInventoryOperationError>();
     const commentFailures = new Map<string, SourceInventoryOperationError>();
     let reusedInventoryCount = 0;
     let freshInventoryCount = 0;
-    const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, diagrams: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
+    const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, diagrams: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, pageMentions: 0, commentMentions: 0, mentionIdentities: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
     const retryFullPageIds = new Set(options.retry?.plan.retryPageIds.filter((pageId) => {
       const plan = options.retry?.plan.pages[pageId];
@@ -1571,6 +1674,64 @@ export class Migrator {
       const message = `Source inventory incomplete: ${retained}/${graph.pages.length} pages checkpointed; ${inventoryFailures.size} required failure(s) remain after ${inventoryRecoveryAttempts} recovery attempt(s); destination mutations: 0.${first?.error ? ` First failure: ${inventoryFailureMessage(first.page, first.error)}.` : ''} Retry this run to resume the retained checkpoints.`;
       throw new MigrationRunError(message, reportPaths, stateLocation.filename);
     }
+
+    const mentionLookupCache = new Map<string, Promise<import('./domain.js').MentionResolution>>();
+    const mentionIdentities = new Set<string>();
+    const mentionOutcomes = emptyMentionOutcomes();
+    let mentionPagesCompleted = 0;
+    progress.measure({phase: 'Mention resolution', completed: 0, total: graph.pages.length, unit: 'pages', queued: graph.pages.length});
+    for (const page of graph.pages) {
+      await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
+      const result = inventoryResults.get(page.canonicalId);
+      if (!result) continue;
+      const presentations = await resolveMentionPresentations(
+        result.document.mentions ?? [],
+        mentionPolicy,
+        destination,
+        {staticDestination: options.destination.type === 'directory', lookupCache: mentionLookupCache},
+      );
+      const pageMentionData = pageMentionReportItems(result.document, presentations);
+      const commentMentionData = commentsEnabled ? commentMentionReportItems(result.comments, mentionPolicy) : {items: [], identities: []};
+      const pageItems = pageMentionData.items;
+      const commentItems = commentMentionData.items;
+      const allItems = [...pageItems, ...commentItems];
+      mentionPresentationsByPage.set(page.canonicalId, presentations);
+      mentionReportItemsByPage.set(page.canonicalId, allItems);
+      inventory.pageMentions += pageItems.length;
+      inventory.commentMentions += commentItems.length;
+      for (const identity of [...pageMentionData.identities, ...commentMentionData.identities]) mentionIdentities.add(identity);
+      for (const item of allItems) {
+        mentionOutcomes.total += 1;
+        mentionOutcomes[item.outcome] += 1;
+        if (item.outcome !== 'unresolved' && item.outcome !== 'failed') continue;
+        report.issue({
+          code: item.outcome === 'failed' ? 'mention-transfer-failed' : 'mention-user-unresolved',
+          severity: item.outcome === 'failed' ? 'degradation' : 'warning',
+          phase: item.location === 'comment' ? 'comment' : 'page',
+          category: 'mention',
+          objectType: 'mention',
+          objectId: item.id,
+          pageId: page.canonicalId,
+          retryable: item.retryable,
+          message: `${page.title}: mention ${item.source} was preserved through a safe fallback${item.reason ? ` (${item.reason})` : ''}`,
+        });
+      }
+      report.updatePage(page.canonicalId, {mentions: allItems});
+      mentionPagesCompleted += 1;
+      progress.measure({
+        phase: 'Mention resolution', completed: mentionPagesCompleted, total: graph.pages.length, unit: 'pages',
+        detail: mentionOutcomeText(mentionOutcomes) || 'no mentions found',
+        queued: Math.max(0, graph.pages.length - mentionPagesCompleted),
+      });
+    }
+    inventory.mentionIdentities = mentionIdentities.size;
+    await store.setRunMentions(run.id, {
+      mode: mentionPolicy.mode,
+      pageMentions: inventory.pageMentions,
+      commentMentions: inventory.commentMentions,
+      mentionIdentities: inventory.mentionIdentities,
+      outcomes: mentionOutcomes,
+    });
     if (options.retry) {
       for (const pageId of options.retry.plan.retryPageIds) {
         const pagePlan = options.retry.plan.pages[pageId];
@@ -1648,6 +1809,11 @@ export class Migrator {
           status: 'discovered',
           resources: resourceStates,
           ...(commentState ? {comments: commentState} : {}),
+          mentions: {
+            policyFingerprint: mentionPolicyHash,
+            outcomes: countMentionReportItems(mentionReportItemsByPage.get(page.canonicalId) ?? []),
+            updatedAt: new Date().toISOString(),
+          },
           degradations: [],
           updatedAt: new Date().toISOString(),
         });
@@ -1655,7 +1821,10 @@ export class Migrator {
         progress.measure({phase: 'Preparing transfer state', completed: preparedStatePages, total: graph.pages.length, unit: 'pages', queued: graph.pages.length - preparedStatePages});
       }
     }
-    const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids)${inventory.diagrams > 0 ? ` · ${inventory.diagrams} diagrams` : ''} · ${inventory.codeBlocks} code blocks · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
+    const mentionSummary = mentionOutcomes.total > 0
+      ? ` · ${mentionOutcomes.total} mentions / ${inventory.mentionIdentities} identities (${mentionOutcomeText(mentionOutcomes)})`
+      : '';
+    const planSummary = `Plan ready: root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${graph.pages.length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids)${inventory.diagrams > 0 ? ` · ${inventory.diagrams} diagrams` : ''} · ${inventory.codeBlocks} code blocks${mentionSummary} · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
     status(planSummary);
     this.logger.info(planSummary);
 
@@ -1664,7 +1833,7 @@ export class Migrator {
     try {
       if (options.destination.type === 'directory') {
         progress.phase(`Filesystem export · preparing ${graph.pages.length} pages`);
-        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress, scheduler);
+        const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage, mentionPresentationsByPage, mentionReportItemsByPage, mentionPolicyHash, progress, scheduler);
         output = result.directory;
         archive = result.archive;
         const exportEntry = path.join(result.directory, options.destination.format === 'html' ? 'index.html' : 'index.md');
@@ -1684,6 +1853,9 @@ export class Migrator {
           sourceFingerprints,
           resourcesByPage,
           commentsByPage,
+          mentionPresentationsByPage,
+          mentionReportItemsByPage,
+          mentionPolicyHash,
           progress,
           scheduler,
         });
@@ -1748,6 +1920,9 @@ export class Migrator {
     sourceFingerprints: Map<string, string>,
     resourcesByPage: Map<string, SourceResource[]>,
     commentsByPage: Map<string, CommentInventory>,
+    mentionPresentationsByPage: Map<string, Map<string, MentionPresentation>>,
+    mentionReportItemsByPage: Map<string, TransferReportMention[]>,
+    mentionPolicyHash: string,
     progress: ContinuousProgress,
     scheduler: CooperativeScheduler,
   ): Promise<FilesystemExportResult> {
@@ -1807,6 +1982,8 @@ export class Migrator {
       }} : {}),
       resourcesByPage,
       commentsByPage,
+      mentionPresentationsByPage,
+      mentionPolicy: this.config.mentions ?? {mode: 'off'},
       commentsEnabled: options.comments ?? true,
       ...(options.retry ? {retryPageIds: new Set(options.retry.plan.retryPageIds)} : {}),
       ...(options.retry ? {retryResourceIds} : {}),
@@ -1867,6 +2044,11 @@ export class Migrator {
           ...(manifestPage.comments.error ? {lastError: manifestPage.comments.error} : {}),
           updatedAt: new Date().toISOString(),
         }} : {}),
+        mentions: {
+          policyFingerprint: mentionPolicyHash,
+          outcomes: countMentionReportItems(mentionReportItemsByPage.get(page.canonicalId) ?? []),
+          updatedAt: new Date().toISOString(),
+        },
         updatedAt: new Date().toISOString(),
       });
       const parentManifestPage = manifestPage?.parentId
@@ -1887,6 +2069,7 @@ export class Migrator {
         ...(manifestPage?.warnings ? {warnings: manifestPage.warnings} : {}),
         ...(manifestPage?.adaptations ? {adaptations: manifestPage.adaptations} : {}),
         preservedExternalReferences: manifestPage?.preservedExternalReferences ?? 0,
+        ...(mentionReportItemsByPage.get(page.canonicalId)?.length ? {mentions: mentionReportItemsByPage.get(page.canonicalId)!} : {}),
         commentsEnabled: options.comments ?? true,
         ...(commentsByPage.get(page.canonicalId) ? {commentInventory: commentsByPage.get(page.canonicalId)} : {}),
         ...(manifestPage?.comments ? {commentState: {
@@ -2093,6 +2276,7 @@ export class Migrator {
         attachmentNames,
         pages: input.destinationPages,
         sourcePages: input.sourcePages,
+        mentionPolicy: this.config.mentions ?? {mode: 'off'},
         presentation,
       });
       const archiveState = zip ? {
@@ -2116,6 +2300,7 @@ export class Migrator {
           attachmentNames,
           pages: input.destinationPages,
           sourcePages: input.sourcePages,
+          mentionPolicy: this.config.mentions ?? {mode: 'off'},
         });
         const fullArchiveName = `ywtc-comments-${safeFilename(page.id)}-${fingerprint.slice(0, 12)}.md`;
         const fullArchivePath = path.join(input.cacheDirectory, 'comments', sha256(page.canonicalId).slice(0, 16), fullArchiveName);
@@ -2303,10 +2488,13 @@ export class Migrator {
     sourceFingerprints: Map<string, string>;
     resourcesByPage: Map<string, SourceResource[]>;
     commentsByPage: Map<string, CommentInventory>;
+    mentionPresentationsByPage: Map<string, Map<string, MentionPresentation>>;
+    mentionReportItemsByPage: Map<string, TransferReportMention[]>;
+    mentionPolicyHash: string;
     progress: ContinuousProgress;
     scheduler: CooperativeScheduler;
   }): Promise<void> {
-    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage, progress: liveProgress, scheduler} = input;
+    const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage, mentionPresentationsByPage, mentionReportItemsByPage, mentionPolicyHash, progress: liveProgress, scheduler} = input;
     const destinationPages = new Map<string, DestinationPage>();
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
     const promotedContextIds = new Set<string>();
@@ -2482,6 +2670,7 @@ export class Migrator {
             resources: sourceResourceBindings(cachedPage, resources),
             sourcePages,
             currentPageId: page.canonicalId,
+            mentions: mentionPresentationsByPage.get(page.canonicalId) ?? new Map(),
           },
         });
         await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
@@ -3110,6 +3299,7 @@ export class Migrator {
           resources: bindings,
           sourcePages,
           currentPageId: page.canonicalId,
+          mentions: mentionPresentationsByPage.get(page.canonicalId) ?? new Map(),
         };
         liveProgress.update(contentOperation, `Rendering final content → ${page.title}`);
         await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
@@ -3324,6 +3514,11 @@ export class Migrator {
           ...(verified.version ? {destinationVersion: verified.version} : {}),
           status: options.dryRun ? 'planned' : partial ? 'partial' : 'complete',
           comments: commentState,
+          mentions: {
+            policyFingerprint: mentionPolicyHash,
+            outcomes: countMentionReportItems(mentionReportItemsByPage.get(page.canonicalId) ?? []),
+            updatedAt: new Date().toISOString(),
+          },
           degradations: [...new Set([...renderedDegradations, ...resourceProblems, ...verificationDegradations])],
           adaptations: [...new Set([...rendered.adaptations, ...verificationAdaptations])],
           ...(lastResourceProblem ? {lastError: lastResourceProblem} : {}),
@@ -3349,6 +3544,7 @@ export class Migrator {
           normalizations: rendered.normalizations,
           adaptations: [...rendered.adaptations, ...verificationAdaptations],
           preservedExternalReferences: rendered.preservedExternalReferences,
+          ...(mentionReportItemsByPage.get(page.canonicalId)?.length ? {mentions: mentionReportItemsByPage.get(page.canonicalId)!} : {}),
           commentsEnabled: options.comments ?? true,
           ...(commentInventory ? {commentInventory} : {}),
           commentState,
@@ -3374,6 +3570,7 @@ export class Migrator {
                   resources: sourceResourceBindings(cachedPage, resources),
                   sourcePages,
                   currentPageId: page.canonicalId,
+                  mentions: mentionPresentationsByPage.get(page.canonicalId) ?? new Map(),
                 },
               });
               recoveryExpectedBody = bootstrap.body;

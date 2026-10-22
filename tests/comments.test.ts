@@ -96,4 +96,27 @@ describe('comment archives', () => {
       destinationDirectory: path.join(temporary, 'invalid'),
     })).rejects.toThrow(/integrity check failed/);
   });
+
+  it('renders comment mentions as safe template links without native destination markers', () => {
+    const yandex = normalizeCommentForest([
+      {id: '1', author: {providerId: 'u1'}, body: 'Ping @ivan and `@code`'},
+    ], 'yfm');
+    const yandexBody = renderCommentArchive(yandex, 'confluence', {
+      sourceUrl: 'https://wiki.example.com/page',
+      mentionPolicy: {mode: 'template', textTemplate: '{username}', urlTemplate: 'https://people.example/{username}', aliases: {}},
+    });
+    expect(yandexBody).toContain('https://people.example/ivan');
+    expect(yandexBody).toContain('@code');
+    expect(yandexBody).not.toContain('ri:user');
+
+    const confluence = normalizeCommentForest([
+      {id: '2', author: {providerId: 'u2'}, body: '<p>Hello <ac:link><ri:user ri:username="maria"/><ac:plain-text-link-body>Maria</ac:plain-text-link-body></ac:link></p>'},
+    ], 'confluence-storage');
+    const confluenceBody = renderCommentArchive(confluence, 'yandex-wiki', {
+      sourceUrl: 'https://confluence.example/pages/1',
+      mentionPolicy: {mode: 'template', textTemplate: '{name}', urlTemplate: 'https://people.example/{username}', aliases: {}},
+    });
+    expect(confluenceBody).toContain('[Maria](https://people.example/maria)');
+    expect(confluenceBody).not.toContain('ri:user');
+  });
 });

@@ -221,6 +221,18 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
     console.log(`  Inventory ${result.summary.inventoryReusedPages ?? 0} reused · ${result.summary.inventoryFreshPages ?? 0} fresh · ${result.summary.inventoryRecoveryAttempts ?? 0} recovery attempts${result.summary.inventoryRemainingFailures ? ` · ${result.summary.inventoryRemainingFailures} remaining failures` : ''}`);
   }
   console.log(`  Comments ${result.summary.comments} entries · ${result.summary.commentThreads} threads · ${result.summary.commentParticipants} participants · ${result.summary.commentAttachments} files · ${result.summary.commentBytes} bytes`);
+  if ((result.summary.mentionOutcomes?.total ?? 0) > 0) {
+    const mentions = result.summary.mentionOutcomes!;
+    const outcomes = [
+      [mentions.native, 'native'], [mentions.linked, 'linked'], [mentions.text, 'text'],
+      [mentions.preserved, 'preserved'], [mentions.unresolved, 'unresolved'], [mentions.failed, 'failed'],
+    ].filter(([count]) => Number(count) > 0).map(([count, label]) => `${count} ${label}`).join(' · ');
+    const locations = [
+      [result.summary.pageMentions ?? 0, 'page'],
+      [result.summary.commentMentions ?? 0, 'comment'],
+    ].filter(([count]) => Number(count) > 0).map(([count, label]) => `${count} ${label}`).join(' · ');
+    console.log(`  Mentions ${result.summary.mentionMode ?? 'off'} · ${mentions.total} total / ${result.summary.mentionIdentities ?? 0} identities${locations ? ` · ${locations}` : ''}${outcomes ? ` · ${outcomes}` : ''}`);
+  }
   console.log(`  Quality ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.adaptations} adaptations · ${result.summary.normalizations} safe normalizations · ${result.summary.preservedExternalReferences} external references preserved`);
   if (result.output) console.log(`  Output  ${result.output}`);
   if (result.archive) console.log(`  Archive ${result.archive}`);

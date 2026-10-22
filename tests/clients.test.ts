@@ -48,6 +48,44 @@ describe('provider clients', () => {
     expect(api.isDone()).toBe(true);
   });
 
+  it('resolves exact Data Center and Cloud mention users without display-name guessing', async () => {
+    const dcApi = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
+      .get('/confluence/rest/api/user').query({username: 'ivan'}).reply(200, {username: 'ivan', userKey: 'u-1', displayName: 'Ivan'});
+    await expect(new DataCenterConfluenceClient(dc, 5_000, limits).resolveMentionUser({source: '@ivan', username: 'ivan'}))
+      .resolves.toEqual({status: 'resolved', user: {username: 'ivan', userKey: 'u-1', displayName: 'Ivan'}});
+    expect(dcApi.isDone()).toBe(true);
+
+    const cloud: ConfluenceConnectionProfile = {
+      name: 'cloud-mentions', type: 'confluence', deployment: 'cloud', authType: 'api-token', baseUrl: 'https://mentions.atlassian.net',
+      token: 'token', email: 'person@example.com', limits,
+    };
+    const cloudApi = nock('https://mentions.atlassian.net')
+      .get('/wiki/rest/api/user').query({accountId: 'cloud-42'}).reply(200, {accountId: 'cloud-42', displayName: 'Ivan'});
+    await expect(new CloudConfluenceClient(cloud, 5_000, limits).resolveMentionUser({source: 'Ivan', accountId: 'cloud-42'}))
+      .resolves.toEqual({status: 'resolved', user: {accountId: 'cloud-42', displayName: 'Ivan'}});
+    expect(cloudApi.isDone()).toBe(true);
+  });
+
+  it('reports unsupported exact mention lookup rather than choosing by display name', async () => {
+    await expect(new DataCenterConfluenceClient(dc, 5_000, limits).resolveMentionUser({source: 'Ivan', displayName: 'Ivan'}))
+      .resolves.toEqual({status: 'unsupported', retryable: false, reason: 'destination-exact-identity-unavailable'});
+  });
+
+  it('does not accept mismatched users and classifies lookup authorization failures', async () => {
+    const api = nock('https://conf.example.test')
+      .get('/confluence/rest/api/user').query({username: 'ivan'}).reply(200, {username: 'other', userKey: 'u-2'})
+      .get('/confluence/rest/api/user').query({username: 'private'}).reply(403, {message: 'Forbidden'});
+    const client = new DataCenterConfluenceClient(dc, 5_000, limits);
+
+    await expect(client.resolveMentionUser({source: '@ivan', username: 'ivan'})).resolves.toEqual({
+      status: 'not-found', retryable: false, reason: 'destination-user-exact-identity-mismatch',
+    });
+    await expect(client.resolveMentionUser({source: '@private', username: 'private'})).resolves.toEqual({
+      status: 'failed', retryable: false, reason: 'destination-user-lookup-http-403',
+    });
+    expect(api.isDone()).toBe(true);
+  });
+
   it.each(['7.9.0', '8.9.0', '9.5.2', '10.0.0', '11.0.0'])('accepts Data Center %s platform responses with additive fields', async (version) => {
     const api = nock('https://conf.example.test')
       .get('/confluence/rest/api/settings/systemInfo')

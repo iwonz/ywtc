@@ -16,10 +16,11 @@ export type IssueCategory =
   | 'conflict'
   | 'attachment-image'
   | 'comment'
+  | 'mention'
   | 'filtering'
   | 'dependency'
   | 'unknown';
-export type IssueObjectType = 'run' | 'page' | 'resource' | 'comment';
+export type IssueObjectType = 'run' | 'page' | 'resource' | 'comment' | 'mention';
 
 export interface MigrationIssue {
   code: string;

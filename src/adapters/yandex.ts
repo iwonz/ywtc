@@ -11,6 +11,8 @@ import type {
   DestinationContainer,
   DestinationPage,
   DiscoveredPage,
+  MentionIdentity,
+  MentionResolution,
   PageReference,
   SourceAdapter,
   SourceStatus,
@@ -39,6 +41,7 @@ const capabilities: AdapterCapabilities = {
   readComments: true,
   writeComments: true,
   updateComments: false,
+  resolveMentions: true,
 };
 
 function pageUrl(profile: YandexConnectionProfile, slug: string): string {
@@ -293,11 +296,49 @@ function destinationComment(pageId: string, value: import('../types.js').YandexC
 export class YandexAdapter implements SourceAdapter, DestinationAdapter {
   readonly kind = 'yandex-wiki' as const;
   readonly capabilities = capabilities;
+  private currentUser?: Promise<Awaited<ReturnType<YandexWikiClient['getCurrentUser']>>>;
 
   constructor(public readonly profile: YandexConnectionProfile, private readonly client: YandexWikiClient) {}
 
+  async resolveMention(identity: MentionIdentity): Promise<MentionResolution> {
+    this.currentUser ??= this.client.getCurrentUser();
+    const user = await this.currentUser;
+    const identifiers = new Set([
+      user.username,
+      user.identity.uid,
+      user.identity.cloud_uid,
+    ].filter((value): value is string => Boolean(value)));
+    const requested = [identity.username, identity.id, identity.accountId, identity.userKey]
+      .filter((value): value is string => Boolean(value));
+    if (requested.length === 0) {
+      return {status: 'unsupported', reason: 'yandex-mention-identity-unavailable', retryable: false};
+    }
+    if (!requested.some((value) => identifiers.has(value))) {
+      return {status: 'not-found', reason: 'yandex-user-not-confirmed-by-current-user-api', retryable: false};
+    }
+    return {
+      status: 'resolved',
+      user: {
+        username: user.username,
+        ...(user.identity.uid ? {id: user.identity.uid} : {}),
+      },
+    };
+  }
+
   async preflight(): Promise<{product: string; warnings: string[]}> {
     return {product: 'Yandex Wiki Public API v1', warnings: []};
+  }
+
+  async preflightMentionLookup(): Promise<{available: boolean; warning?: string}> {
+    try {
+      this.currentUser ??= this.client.getCurrentUser();
+      const current = await this.currentUser;
+      return current.username
+        ? {available: true, warning: 'Yandex Wiki can verify only the current token owner; other users use the configured mention fallback.'}
+        : {available: false, warning: 'Yandex Wiki current-user API returned no username; mentions use the configured fallback.'};
+    } catch (error) {
+      return {available: false, warning: `Yandex Wiki mention lookup probe failed: ${error instanceof Error ? error.message : String(error)}`};
+    }
   }
 
   async resolvePage(locator: string): Promise<SourcePage> {
