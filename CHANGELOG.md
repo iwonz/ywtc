@@ -2,6 +2,23 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.2.3](https://github.com/iwonz/ywtc/compare/v4.2.2...v4.2.3) (2026-10-22)
+
+
+### Bug Fixes
+
+* **cli:** keep large transfer progress responsive ([2a82985](https://github.com/iwonz/ywtc/commit/2a82985a73c653b59f43df26638c2b8a82bd9e03))
+
+
+### Continuous Integration
+
+* **release:** rerun checks after commit metadata repair ([3f3596e](https://github.com/iwonz/ywtc/commit/3f3596e8fdd473a9687cafa0021139be1de89e20))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.2.2 ([a792535](https://github.com/iwonz/ywtc/commit/a792535d8946951e24f3ee877dbfdeaa300055c3))
+
 ## [4.2.2](https://github.com/iwonz/ywtc/compare/v4.2.1...v4.2.2) (2026-10-22)
 
 
