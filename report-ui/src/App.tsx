@@ -609,6 +609,7 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
   const excluded = node?.excluded;
   const issues = node ? payload.report.issues.filter((issue) =>
     (issue.pageId === node.id || issue.blockedByPageId === node.id)
+    && issue.lifecycle !== 'resolved'
     && issue.severity !== 'adaptation'
     && issue.severity !== 'normalization') : [];
   const preview = node ? payload.previews[node.id] : undefined;

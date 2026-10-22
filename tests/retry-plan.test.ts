@@ -162,4 +162,40 @@ describe('targeted retry planner', () => {
     expect(plan.retryPageIds).toEqual(['root']);
     expect(plan.discoveryIncomplete).toBe(true);
   });
+
+  it('does not retry complete objects because of recovered historical diagnostics', () => {
+    const complete = page('complete');
+    const data = report([complete], [
+      issue({
+        code: 'destination-consistency-retry', pageId: 'complete', severity: 'normalization',
+        phase: 'verification', retryable: false,
+      }),
+      issue({
+        code: 'destination-mapping-recovered', pageId: 'complete', severity: 'normalization',
+        phase: 'page', retryable: false,
+      }),
+    ]);
+
+    const plan = buildRetryPlan(data);
+
+    expect(plan.pages.complete?.decision).toBe('resolved');
+    expect(plan.retryPageIds).toEqual([]);
+    expect(plan.remainingRetryable).toBe(0);
+  });
+
+  it('does not select a resolved retryable issue from the current report lineage', () => {
+    const partial = page('partial', {status: 'partial'});
+    const data = report([partial], [
+      issue({
+        code: 'destination-content-verification-failed', pageId: 'partial', severity: 'warning',
+        phase: 'verification', retryable: true, lifecycle: 'resolved',
+      }),
+    ]);
+
+    const plan = buildRetryPlan(data);
+
+    expect(plan.retryPageIds).toEqual([]);
+    expect(plan.pages.partial?.decision).toBe('terminal');
+    expect(plan.remainingRetryable).toBe(0);
+  });
 });

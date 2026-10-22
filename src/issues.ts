@@ -1,6 +1,7 @@
 import {stripAnsi} from './content-model.js';
 
 export type IssueSeverity = 'normalization' | 'adaptation' | 'degradation' | 'warning' | 'blocked' | 'error';
+type IssueLifecycle = 'active' | 'resolved';
 type IssuePhase = 'discovery' | 'inventory' | 'page' | 'resource' | 'comment' | 'verification' | 'report';
 export type IssueCategory =
   | 'network'
@@ -36,6 +37,7 @@ export interface MigrationIssue {
   blockedByCode?: string;
   retryable: boolean;
   occurrences: number;
+  lifecycle?: IssueLifecycle;
 }
 
 export type IssueInput = Omit<MigrationIssue, 'message' | 'occurrences'> & {message: string};
@@ -64,7 +66,7 @@ export class IssueCollector {
       if (message && previous.message !== message) previous.message = message;
       return previous;
     }
-    const issue: MigrationIssue = {...input, message, occurrences: 1};
+    const issue: MigrationIssue = {...input, message, lifecycle: input.lifecycle ?? 'active', occurrences: 1};
     this.values.set(key, issue);
     return issue;
   }
@@ -74,10 +76,26 @@ export class IssueCollector {
   }
 
   count(severity: IssueSeverity): number {
-    return this.list().filter((issue) => issue.severity === severity).length;
+    return this.list().filter((issue) => issue.lifecycle !== 'resolved' && issue.severity === severity).length;
   }
 
   countRetryableFailures(): number {
-    return this.list().filter((issue) => issue.retryable && (issue.severity === 'warning' || issue.severity === 'error')).length;
+    return this.list().filter((issue) => issue.lifecycle !== 'resolved' && issue.retryable && (issue.severity === 'warning' || issue.severity === 'error')).length;
+  }
+
+  countResolved(): number {
+    return this.list().filter((issue) => issue.lifecycle === 'resolved').length;
+  }
+
+  resolve(input: {pageId?: string; resourceId?: string; commentId?: string; codes: readonly string[]}): void {
+    const codes = new Set(input.codes);
+    for (const issue of this.values.values()) {
+      if (!codes.has(issue.code)) continue;
+      if (input.pageId !== undefined && issue.pageId !== input.pageId) continue;
+      if (input.resourceId !== undefined && issue.resourceId !== input.resourceId) continue;
+      if (input.commentId !== undefined && issue.commentId !== input.commentId) continue;
+      issue.lifecycle = 'resolved';
+      issue.retryable = false;
+    }
   }
 }

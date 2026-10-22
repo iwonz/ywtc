@@ -33,4 +33,28 @@ describe('bounded Diplodoc input', () => {
     expect(output.result.html).toContain('After');
     expect(output.logs.warn).toContainEqual(expect.stringContaining(BOUNDED_YFM_DIAGNOSTIC));
   });
+
+  it('preserves literal deployment templates without evaluating them as YFM variables', () => {
+    const content = [
+      'Host: {{ .Values.hostname }}',
+      'Password: {{ password }}',
+      '{%- if .Values.enabled %}',
+      'enabled',
+      '{%- end %}',
+      '{% for user in users %}',
+      '{{ user.email }}',
+      '{% endfor %}',
+    ].join('\n');
+
+    const output = transformYfm(content, {linkify: false});
+
+    expect(output.result.html).toContain('{{ .Values.hostname }}');
+    expect(output.result.html).toContain('{{ password }}');
+    expect(output.result.html).toContain('{%- if .Values.enabled %}');
+    expect(output.result.html).toContain('{%- end %}');
+    expect(output.result.html).toContain('{% for user in users %}');
+    expect(output.result.html).toContain('{{ user.email }}');
+    expect(output.result.html).toContain('{% endfor %}');
+    expect([...(output.logs.warn ?? []), ...(output.logs.error ?? [])].join(' ')).not.toMatch(/variable|cannot eval|block must be closed/i);
+  });
 });

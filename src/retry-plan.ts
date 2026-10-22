@@ -33,12 +33,12 @@ export interface RetryExecution {
 
 const currentRetryableCodes = new Set([
   'destination-content-verification-failed',
-  'destination-mapping-recovered',
   'page-transfer-failed',
   'source-discovery-failed',
 ]);
 
 function retryable(issue: TransferReportIssue): boolean {
+  if (issue.lifecycle === 'resolved') return false;
   if (issue.code === 'destination-ownership-ambiguity' || issue.category === 'conflict') return false;
   return issue.retryable || currentRetryableCodes.has(issue.code) || issue.category === 'network' || issue.category === 'rate-limit';
 }

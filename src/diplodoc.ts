@@ -23,6 +23,7 @@ export interface PreparedYfmInput {
   content: string;
   diagnostics: string[];
   boundedTokens: number;
+  literalTemplates?: Array<{token: string; value: string}>;
 }
 
 function isWhitespace(character: string): boolean {
@@ -46,13 +47,48 @@ function payloadKind(token: string): 'inline data' | 'lexical' {
   return boundedPrefix.includes('data:') && boundedPrefix.includes(';base64,') ? 'inline data' : 'lexical';
 }
 
+function protectLiteralTemplateSyntax(content: string): {content: string; literals: Array<{token: string; value: string}>} {
+  const literals: Array<{token: string; value: string}> = [];
+  const protect = (value: string): string => {
+    let token = `YWTC_LITERAL_TEMPLATE_${literals.length}_${value.length}_TOKEN`;
+    while (content.includes(token)) token += '_';
+    literals.push({token, value});
+    return token;
+  };
+  const externalControl = /^\{%-?\s*(?:if|else|elif|endif|for|endfor|range|with|endwith|define|end|assign|capture|endcapture|case|when|endcase|unless|endunless|macro|endmacro|set|raw|endraw)\b/i;
+  const variablesProtected = content.replace(/\{\{[\s\S]*?\}\}/g, protect);
+  const protectedContent = variablesProtected.replace(/\{%-?[\s\S]*?-?%\}/g, (value) => (
+    externalControl.test(value) ? protect(value) : value
+  ));
+  return {content: protectedContent, literals};
+}
+
+function restoreLiteralTemplates(html: string, literals: PreparedYfmInput['literalTemplates']): string {
+  if (!literals) return html;
+  const escapeHtml = (value: string): string => value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+  let restored = html;
+  for (const literal of literals) restored = restored.replaceAll(literal.token, escapeHtml(literal.value));
+  return restored;
+}
+
 /**
  * Diplodoc and its Markdown plugins contain synchronous regular-expression
  * paths. Keep untrusted, whitespace-free payloads out of those paths while
  * leaving the original source untouched for fingerprints and raw snapshots.
  */
 export function prepareYfmInput(content: string, maximumTokenChars = MAX_YFM_LEXICAL_TOKEN_CHARS): PreparedYfmInput {
-  if (!content || maximumTokenChars < 1) return {content, diagnostics: [], boundedTokens: 0};
+  if (!content || maximumTokenChars < 1) {
+    const protectedInput = protectLiteralTemplateSyntax(content);
+    return {
+      content: protectedInput.content,
+      diagnostics: [],
+      boundedTokens: 0,
+      ...(protectedInput.literals.length > 0 ? {literalTemplates: protectedInput.literals} : {}),
+    };
+  }
   const output: string[] = [];
   const diagnostics: string[] = [];
   let cursor = 0;
@@ -74,9 +110,23 @@ export function prepareYfmInput(content: string, maximumTokenChars = MAX_YFM_LEX
     visitToken(index);
     tokenStart = index + 1;
   }
-  if (boundedTokens === 0) return {content, diagnostics, boundedTokens};
+  if (boundedTokens === 0) {
+    const protectedInput = protectLiteralTemplateSyntax(content);
+    return {
+      content: protectedInput.content,
+      diagnostics,
+      boundedTokens,
+      ...(protectedInput.literals.length > 0 ? {literalTemplates: protectedInput.literals} : {}),
+    };
+  }
   output.push(content.slice(cursor));
-  return {content: output.join(''), diagnostics, boundedTokens};
+  const protectedInput = protectLiteralTemplateSyntax(output.join(''));
+  return {
+    content: protectedInput.content,
+    diagnostics,
+    boundedTokens,
+    ...(protectedInput.literals.length > 0 ? {literalTemplates: protectedInput.literals} : {}),
+  };
 }
 
 function loadDiplodocTransform(): DiplodocTransform {
@@ -114,6 +164,10 @@ export function transformYfm(content: string, options?: OptionsType): OutputType
     if (prepared.diagnostics.length > 0) logs.warn = [...(logs.warn ?? []), ...prepared.diagnostics];
     return {
       ...output,
+      result: {
+        ...output.result,
+        html: restoreLiteralTemplates(output.result.html, prepared.literalTemplates),
+      },
       logs,
     };
   } finally {

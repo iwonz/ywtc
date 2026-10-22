@@ -10,12 +10,11 @@ import {
   appendGridSnapshots,
   assertDestinationContent,
   DestinationContentVerificationError,
-  emptyRendererFallbackReason,
   normalizePageContent,
   normalizedPreviewHtml,
-  rawContentFallback,
   renderedPreviewHtml,
   renderConfluenceStorage,
+  renderWithSafeStructuralFallback,
   renderYfm,
   setSourceResourceBinding,
   sourceResourceBindings,
@@ -30,7 +29,7 @@ import {
   verifyCommentArchive,
 } from './comments.js';
 import {ConfirmedDestinationMissingError, type ConsistencyRetryOptions, verifyConfirmedDestinationPage} from './consistency.js';
-import {DestinationOwnershipConflictError, DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from './domain.js';
+import {DestinationOwnershipConflictError, DestinationPageCreateRejectedError, DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from './domain.js';
 import type {
   CommentInventory,
   DestinationAdapter,
@@ -45,6 +44,7 @@ import type {
   SourceResource,
   SourceStatus,
   TransferScope,
+  UploadedResource,
 } from './domain.js';
 import {assertTransferCapabilities} from './domain.js';
 import {FilesystemExporter, type FilesystemExportResult} from './filesystem-export.js';
@@ -400,6 +400,7 @@ function sourceDerivedTextMatches(expectedBody: string, actualBody: string | und
 }
 
 const REVISION_RETRY_DELAYS_MS = [500, 1_000, 2_000] as const;
+const CREATE_CONSISTENCY_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000] as const;
 
 async function revisionDelay(
   attempt: number,
@@ -433,6 +434,10 @@ async function updateMappedPage(input: {
     try {
       const result = await input.destination.updatePage({page: current, title, body: input.body});
       const confirmed = await verifyConfirmedDestinationPage(input.destination, result, input.consistencyOptions);
+      input.report.resolveIssues({
+        pageId: input.sourcePage.canonicalId,
+        codes: ['destination-update-retry', 'destination-revision-retry'],
+      });
       return {
         page: confirmed,
         updated: true,
@@ -496,7 +501,9 @@ async function reparentMappedPage(input: {
     if (current.parentId === input.parent.id) return current;
     try {
       const moved = await input.destination.reparentPage({page: current, parent: input.parent});
-      return verifyConfirmedDestinationPage(input.destination, moved, input.consistencyOptions);
+      const confirmed = await verifyConfirmedDestinationPage(input.destination, moved, input.consistencyOptions);
+      input.report.resolveIssues({pageId: input.sourcePage.canonicalId, codes: ['destination-revision-retry']});
+      return confirmed;
     } catch (error) {
       if (!(error instanceof DestinationRevisionConflictError) || attempt >= REVISION_RETRY_DELAYS_MS.length) throw error;
       const delay = await revisionDelay(attempt, input.consistencyOptions);
@@ -518,6 +525,10 @@ function ambiguousCreateOutcome(error: unknown): boolean {
     && (error.status === undefined || error.status >= 500);
 }
 
+function confirmedDependencyNotFound(error: unknown): boolean {
+  return error instanceof HttpRequestError && error.status === 404;
+}
+
 async function createPageWithAllocatedTitle(input: {
   destination: DestinationAdapter;
   parent: DestinationContainer | DestinationPage;
@@ -528,7 +539,7 @@ async function createPageWithAllocatedTitle(input: {
   report: TransferReport;
 }): Promise<{page: DestinationPage; reused: boolean}> {
   const candidates = destinationTitleCandidates(input.sourcePage, input.preferredTitle);
-  for (const [index, title] of candidates.entries()) {
+  candidateLoop: for (const [index, title] of candidates.entries()) {
     let child: DestinationPage | undefined;
     try {
       child = input.destination.findRecoverablePage
@@ -537,10 +548,10 @@ async function createPageWithAllocatedTitle(input: {
     } catch (error) {
       input.report.issue({
         code: 'destination-recovery-lookup-failed',
-        severity: 'warning',
+        severity: 'normalization',
         phase: 'page',
         pageId: input.sourcePage.canonicalId,
-        retryable: true,
+        retryable: false,
         message: `${input.sourcePage.title}: parent-scoped recovery lookup failed for "${title}"; authoritative creation will be attempted: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
@@ -551,22 +562,69 @@ async function createPageWithAllocatedTitle(input: {
       ? await input.destination.findTitleConflict(input.parent, title)
       : undefined);
     if (occupied) continue;
-    let created: DestinationPage;
-    try {
-      created = await input.destination.createPage({container: input.parent, title, body: input.bootstrap.body});
-    } catch (error) {
-      if (error instanceof DestinationTitleConflictError) continue;
-      if (ambiguousCreateOutcome(error)) {
-        const recovered = input.destination.findRecoverablePage
-          ? await input.destination.findRecoverablePage(input.parent, title)
-          : await input.destination.findChild(input.parent, title);
-        if (recovered && sourceDerivedTextMatches(input.bootstrap.body, recovered.content, input.destination.kind, input.sourcePage)) {
-          return {page: recovered, reused: true};
+    let created: DestinationPage | undefined;
+    for (let attempt = 0; !created; attempt += 1) {
+      try {
+        created = await input.destination.createPage({container: input.parent, title, body: input.bootstrap.body});
+      } catch (error) {
+        if (error instanceof DestinationTitleConflictError) continue candidateLoop;
+        if (error instanceof HttpRequestError && (error.status === 401 || error.status === 403)) {
+          try {
+            await verifyConfirmedDestinationPage(input.destination, input.parent as DestinationPage, input.consistencyOptions);
+          } catch (parentError) {
+            if (parentError instanceof HttpRequestError && (parentError.status === 401 || parentError.status === 403)) {
+              throw new DestinationPageCreateRejectedError(
+                'parent-permission-denied',
+                parentError.status,
+                `Destination parent ${input.parent.id} cannot be read with the configured credentials; page creation was not attempted again`,
+                {cause: error},
+              );
+            }
+            throw parentError;
+          }
+          throw new DestinationPageCreateRejectedError(
+            'create-permission-or-policy',
+            error.status,
+            `Destination parent ${input.parent.id} is readable, but the provider rejected page creation; check create permission and destination content policy`,
+            {cause: error},
+          );
         }
+        if (ambiguousCreateOutcome(error) || confirmedDependencyNotFound(error)) {
+          const recovered = input.destination.findRecoverablePage
+            ? await input.destination.findRecoverablePage(input.parent, title)
+            : await input.destination.findChild(input.parent, title);
+          if (recovered && sourceDerivedTextMatches(input.bootstrap.body, recovered.content, input.destination.kind, input.sourcePage)) {
+            input.report.resolveIssues({
+              pageId: input.sourcePage.canonicalId,
+              codes: ['destination-recovery-lookup-failed', 'destination-create-consistency-retry'],
+            });
+            return {page: recovered, reused: true};
+          }
+        }
+        const baseDelay = confirmedDependencyNotFound(error) ? CREATE_CONSISTENCY_RETRY_DELAYS_MS[attempt] : undefined;
+        if (baseDelay === undefined) throw error;
+        await verifyConfirmedDestinationPage(input.destination, input.parent, input.consistencyOptions);
+        const random = input.consistencyOptions.random ?? Math.random;
+        const delay = Math.max(1, Math.round(baseDelay * (0.8 + random() * 0.4)));
+        input.report.issue({
+          code: 'destination-create-consistency-retry',
+          severity: 'normalization',
+          phase: 'page',
+          pageId: input.sourcePage.canonicalId,
+          retryable: false,
+          message: `${input.sourcePage.title}: destination rejected creation below a confirmed parent with a temporary not-found response; retry ${attempt + 1} after ${delay} ms`,
+        });
+        await (input.consistencyOptions.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))))(delay);
       }
-      throw error;
+    }
+    if (!created) {
+      throw new Error(`Destination did not return a page while creating ${input.sourcePage.title}`);
     }
     created = await verifyConfirmedDestinationPage(input.destination, created, input.consistencyOptions);
+    input.report.resolveIssues({
+      pageId: input.sourcePage.canonicalId,
+      codes: ['destination-recovery-lookup-failed', 'destination-create-consistency-retry'],
+    });
     if (created.parentId !== input.parent.id) {
       throw new Error(`Destination hierarchy verification failed for ${input.sourcePage.title}: expected parent ${input.parent.id}, received ${created.parentId ?? 'none'}`);
     }
@@ -869,17 +927,15 @@ async function renderRemoteDocument(input: {
   page: SourcePage;
   context: RenderContext;
 }): Promise<RenderedDocument> {
-  try {
-    const rendered = input.destination.kind === 'confluence'
+  return renderWithSafeStructuralFallback({
+    document: input.document,
+    page: input.page,
+    context: input.context,
+    provider: input.destination.kind,
+    preferred: async () => input.destination.kind === 'confluence'
       ? await renderConfluenceStorage(input.document, input.page, input.context, input.container.space ?? '')
-      : await renderYfm(input.document, input.context);
-    if (!rendered.body.trim() && !input.document.semanticallyEmpty) {
-      return rawContentFallback(input.page, input.destination.kind, emptyRendererFallbackReason(input.document));
-    }
-    return rendered;
-  } catch (error) {
-    return rawContentFallback(input.page, input.destination.kind, error instanceof Error ? error.message : String(error));
-  }
+      : await renderYfm(input.document, input.context),
+  });
 }
 
 export class Migrator {
@@ -1957,9 +2013,13 @@ export class Migrator {
       }
       current ??= await destination.findArchiveComment?.(destinationPage, fingerprint);
 
-      let remoteResources = await destination.listUploadedResources(destinationPage);
+      let remoteResources: UploadedResource[] | undefined;
+      const listRemoteResources = async (refresh = false): Promise<UploadedResource[]> => {
+        if (refresh || !remoteResources) remoteResources = await destination.listUploadedResources(destinationPage);
+        return remoteResources;
+      };
       const remoteMatches = async (
-        remote: (typeof remoteResources)[number],
+        remote: UploadedResource,
         file: {path: string; size: number; sha256: string},
         trustedMapping: boolean,
       ): Promise<boolean> => {
@@ -1974,8 +2034,9 @@ export class Migrator {
         }
       };
       const uploadArchive = async (file: {path: string; name: string; size: number; sha256: string}, mappedId?: string, mimeType?: string) => {
-        const mapped = mappedId ? remoteResources.find((resource) => resource.id === mappedId) : undefined;
-        const byName = remoteResources.find((resource) => resource.name.toLocaleLowerCase() === file.name.toLocaleLowerCase());
+        let listedResources = await listRemoteResources();
+        const mapped = mappedId ? listedResources.find((resource) => resource.id === mappedId) : undefined;
+        const byName = listedResources.find((resource) => resource.name.toLocaleLowerCase() === file.name.toLocaleLowerCase());
         const reusable = mapped && await remoteMatches(mapped, file, true)
           ? mapped
           : byName && await remoteMatches(byName, file, false) ? byName : undefined;
@@ -1987,7 +2048,7 @@ export class Migrator {
           const uploadName = attempt === 0 && !mapped && !byName
             ? file.name
             : `${base}-${file.sha256.slice(0, Math.min(file.sha256.length, 8 + attempt * 2))}${extension}`;
-          const occupied = remoteResources.find((resource) => resource.name.toLocaleLowerCase() === uploadName.toLocaleLowerCase());
+          const occupied = listedResources.find((resource) => resource.name.toLocaleLowerCase() === uploadName.toLocaleLowerCase());
           if (occupied && await remoteMatches(occupied, file, false)) return occupied;
           if (occupied) continue;
           try {
@@ -1998,12 +2059,12 @@ export class Migrator {
               size: file.size,
               ...(mimeType ? {mimeType} : {}),
             });
-            remoteResources.push(uploaded);
+            listedResources.push(uploaded);
             return uploaded;
           } catch (error) {
             lastError = error;
-            remoteResources = await destination.listUploadedResources(destinationPage);
-            const uncertain = remoteResources.find((resource) => resource.name.toLocaleLowerCase() === uploadName.toLocaleLowerCase());
+            listedResources = await listRemoteResources(true);
+            const uncertain = listedResources.find((resource) => resource.name.toLocaleLowerCase() === uploadName.toLocaleLowerCase());
             if (uncertain && await remoteMatches(uncertain, file, false)) return uncertain;
           }
         }
@@ -2446,13 +2507,14 @@ export class Migrator {
               ...this.consistencyOptions,
               onRetry: (attempt, delayMs) => report.issue({
                 code: 'destination-consistency-retry',
-                severity: 'warning',
+                severity: 'normalization',
                 phase: 'verification',
                 pageId: page.canonicalId,
-                retryable: true,
+                retryable: false,
                 message: `${page.title}: destination page ${mapped.id} returned 404; consistency retry ${attempt} in ${delayMs} ms`,
               }),
             });
+            report.resolveIssues({pageId: page.canonicalId, codes: ['destination-consistency-retry']});
           } catch (error) {
             if (!(error instanceof ConfirmedDestinationMissingError) || options.dryRun) throw error;
             if (page.projectedParentId) {
@@ -2466,7 +2528,7 @@ export class Migrator {
             mappingRecovered = true;
             report.issue({
               code: 'destination-mapping-recovered',
-              severity: 'warning',
+              severity: 'normalization',
               phase: 'page',
               pageId: page.canonicalId,
               retryable: false,
@@ -2612,8 +2674,15 @@ export class Migrator {
         if (options.signal?.aborted) throw options.signal.reason ?? error;
         const message = `${page.title}: ${error instanceof Error ? error.message : String(error)}`;
         const ownershipConflict = error instanceof DestinationOwnershipConflictError ? error : undefined;
+        const createRejected = error instanceof DestinationPageCreateRejectedError ? error : undefined;
         const failureStatus: PageTransferStatus = ownershipConflict ? 'conflict' : 'failed';
-        const failureCode = ownershipConflict ? 'destination-ownership-ambiguity' : 'destination-page-staging-failed';
+        const failureCode = ownershipConflict
+          ? 'destination-ownership-ambiguity'
+          : createRejected?.reason === 'parent-permission-denied'
+            ? 'destination-parent-permission-denied'
+            : createRejected
+              ? 'destination-page-create-rejected'
+              : 'destination-page-staging-failed';
         stagingFailures.set(page.canonicalId, {
           status: failureStatus,
           message,
@@ -2626,7 +2695,8 @@ export class Migrator {
           severity: 'error',
           phase: 'page',
           pageId: page.canonicalId,
-          retryable: failureStatus !== 'conflict',
+          ...(createRejected ? {category: 'permissions' as const} : {}),
+          retryable: failureStatus !== 'conflict' && !createRejected,
           message,
         });
         const savedState = store.value.pages[page.canonicalId];
@@ -2764,6 +2834,42 @@ export class Migrator {
           lastError: detail,
           updatedAt: new Date().toISOString(),
         };
+        await store.setPage({...state, status: 'partial', lastError: detail, updatedAt: new Date().toISOString()});
+      };
+      const recordResourceVerificationUnavailable = async (resource: SourceResource, detail: string): Promise<void> => {
+        const previous = state.resources[resource.id];
+        if (!previous?.destinationId) {
+          await recordResourceFailure(resource, detail);
+          return;
+        }
+        if (!failedResourceIds.has(resource.id)) {
+          failedResourceIds.add(resource.id);
+          resourceProblems.push(detail);
+          report.issue({
+            code: 'resource-verification-unavailable',
+            severity: 'error',
+            phase: 'verification',
+            pageId: page.canonicalId,
+            resourceId: resource.id,
+            retryable: true,
+            message: `${page.title}: ${detail}`,
+          });
+        }
+        state.resources[resource.id] = {
+          ...previous,
+          status: 'partial',
+          lastError: detail,
+          updatedAt: new Date().toISOString(),
+        };
+        setSourceResourceBinding(bindings, cachedPage, resources, resource, {
+          kind: 'uploaded',
+          resource: {
+            id: previous.destinationId,
+            name: previous.destinationName,
+            ...(previous.destinationUrl ? {url: previous.destinationUrl} : {}),
+            ...(previous.size !== undefined ? {size: previous.size} : {}),
+          },
+        });
         await store.setPage({...state, status: 'partial', lastError: detail, updatedAt: new Date().toISOString()});
       };
       try {
@@ -2977,8 +3083,7 @@ export class Migrator {
           } catch (error) {
             for (const resource of transferableResources) {
               if (state.resources[resource.id]?.status !== 'complete') continue;
-              setSourceResourceBinding(bindings, cachedPage, resources, resource, fallbackBinding(resource));
-              await recordResourceFailure(resource, `Destination resource verification failed for ${resource.name}: ${error instanceof Error ? error.message : String(error)}`);
+              await recordResourceVerificationUnavailable(resource, `Destination resource verification could not read ${resource.name}: ${error instanceof Error ? error.message : String(error)}`);
             }
           }
         }

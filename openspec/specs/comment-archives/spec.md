@@ -2,7 +2,9 @@
 
 ## Purpose
 Preserve accessible page discussions as verifiable, resumable archives across remote providers and portable filesystem exports without impersonating source authors or silently losing referenced files.
+
 ## Requirements
+
 ### Requirement: Provider-neutral page comment inventory
 When comments are enabled, the system SHALL inventory all accessible footer and inline comments attached to each selected page, including nested replies, author fields exposed to the token, timestamps, resolution/deletion status, and inline source context.
 
@@ -180,3 +182,14 @@ Comment ZIP, full-text archive, and snapshot attachments SHALL use the same repe
 #### Scenario: Archive upload response is ambiguous
 - **WHEN** an archive upload response is lost or reports a duplicate name
 - **THEN** the system SHALL refresh attachments, reuse only a size-and-hash match, and otherwise retry a deterministic alternate name without reporting ownership conflict
+
+### Requirement: Attachment-independent comment archives
+A comment archive with no linked comment attachments and no oversized full-text fallback SHALL be created, updated, and verified without listing, reading, uploading, or downloading page attachments.
+
+#### Scenario: Page comments contain no attachment references
+- **WHEN** the complete rendered archive fits the destination comment and no comment body links a page attachment
+- **THEN** the system SHALL transfer and verify the comment archive without requiring attachment-read or attachment-write permission
+
+#### Scenario: Archive attachment is required
+- **WHEN** linked comment files, an oversized full-text fallback, or another archive payload must be attached
+- **THEN** the system SHALL invoke resource reconciliation only for the required archive objects and SHALL report attachment-specific failures independently from the comment text

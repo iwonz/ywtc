@@ -9,6 +9,7 @@ export interface DestinationPageReference {
   sourceId: number;
   slug: string;
   destinationTitle: string;
+  destinationId?: string;
 }
 
 export interface ConversionContext {
@@ -246,7 +247,8 @@ function anchorMacro(anchor: string): string {
 function storageLink(target: LinkTarget, body: string, plainText: string): string {
   if (target.type === 'page') {
     const anchor = target.anchor ? ` ac:anchor="${escapeAttribute(target.anchor)}"` : '';
-    return `<ac:link${anchor}><ri:page ri:content-title="${escapeAttribute(target.page.destinationTitle)}"/><ac:link-body>${body || escapeXml(plainText)}</ac:link-body></ac:link>`;
+    const contentId = target.page.destinationId ? ` ri:content-id="${escapeAttribute(target.page.destinationId)}"` : '';
+    return `<ac:link${anchor}><ri:page${contentId} ri:content-title="${escapeAttribute(target.page.destinationTitle)}"/><ac:link-body>${body || escapeXml(plainText)}</ac:link-body></ac:link>`;
   }
   if (target.type === 'attachment') {
     return `<ac:link><ri:attachment ri:filename="${escapeAttribute(target.filename)}"/><ac:plain-text-link-body><![CDATA[${cdata(plainText || target.filename)}]]></ac:plain-text-link-body></ac:link>`;

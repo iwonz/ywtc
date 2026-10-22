@@ -38,7 +38,7 @@ function digest(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boolean; onArchiveUpload?: () => void} = {}) {
+function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boolean; onArchiveUpload?: () => void; commentsWithoutAttachments?: boolean} = {}) {
   const root: SourcePage = {
     provider: 'yandex-wiki', profile: 'source', id: '1', canonicalId: 'source:yandex-wiki:1', title: 'Root', locator: 'root',
     url: 'https://wiki.example.test/root', rawContent: 'Page body', rawFormat: 'yfm', references: [],
@@ -47,7 +47,7 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
     provider: 'yandex-wiki', id: 'r1', pageId: '1', name: 'spec.pdf', preferredName: 'spec.pdf',
     referenceAliases: ['files/spec.pdf'], size: 10, mimeType: 'application/pdf', kind: 'attachment',
   };
-  let commentText = 'Decision [spec](files/spec.pdf)';
+  let commentText = options.commentsWithoutAttachments ? 'Decision without files' : 'Decision [spec](files/spec.pdf)';
   let commentReads = 0;
   let commentCreates = 0;
   let commentUpdates = 0;
@@ -57,6 +57,7 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
   let page: DestinationPage | undefined;
   let archiveComment: DestinationComment | undefined;
   let commentRevisionConflicts = 0;
+  let uploadedResourceLists = 0;
   const uploaded = new Map<string, {resource: UploadedResource; bytes: Buffer}>();
   const inventory = (): CommentInventory => normalizeCommentForest([
     {id: 'c1', author: {providerId: 'u1', displayName: 'Иван', username: 'ivan'}, createdAt: '2026-01-01', body: commentText},
@@ -72,7 +73,7 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
     supportsSourceStatus: () => true,
     getDescendants: async () => ({pages: [], returned: 0, excluded: [], effectiveStatus: 'all' as const, notes: []}),
     resolveReference: async () => undefined,
-    listResources: async () => [resource],
+    listResources: async () => options.commentsWithoutAttachments ? [] : [resource],
     readComments: async () => {
       commentReads += 1;
       if (commentReadFailures > 0) {
@@ -110,7 +111,10 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
       if (name.endsWith('.zip')) options.onArchiveUpload?.();
       return result;
     },
-    listUploadedResources: async () => [...uploaded.values()].map((item) => item.resource),
+    listUploadedResources: async () => {
+      uploadedResourceLists += 1;
+      return [...uploaded.values()].map((item) => item.resource);
+    },
     downloadUploadedResource: async ({resource: item, destination: filename}) => {
       const stored = uploaded.get(item.id)!;
       await mkdir(path.dirname(filename), {recursive: true});
@@ -156,7 +160,7 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
     },
     manuallyEditComment() { if (archiveComment) archiveComment = {...archiveComment, body: `${archiveComment.body} manual`, fingerprint: digest(`${archiveComment.body} manual`)}; },
     setCommentRevisionConflicts(count: number) { commentRevisionConflicts = count; },
-    counts: () => ({commentReads, commentCreates, commentUpdates, uploads: uploaded.size}),
+    counts: () => ({commentReads, commentCreates, commentUpdates, uploads: uploaded.size, uploadedResourceLists}),
     page: () => page,
     commentBody: () => archiveComment?.body,
     uploadedNames: () => [...uploaded.values()].map((item) => item.resource.name),
@@ -179,6 +183,18 @@ async function setup() {
 }
 
 describe('comment migration pipeline', () => {
+  it('does not require attachment APIs for a comment archive without attachment payloads', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture({commentsWithoutAttachments: true});
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, createLogger([]), factory).run(options);
+
+    expect(result.status).toBe('completed');
+    expect(result.summary).toMatchObject({complete: 1, commentAttachments: 0, commentStatuses: {complete: 1}});
+    expect(adapters.counts()).toMatchObject({commentCreates: 1, uploads: 0, uploadedResourceLists: 0});
+  });
+
   it('archives comments by default, reuses unchanged data, and authoritatively updates mapped Confluence archives', async () => {
     const {config, options} = await setup();
     const adapters = fixture();

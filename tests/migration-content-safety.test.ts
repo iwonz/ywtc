@@ -67,7 +67,12 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
   let normalizeBootstrapBody = false;
   let globalTitleConflict = false;
   let failAttachmentListing = false;
+  let failAttachmentListingAfter: number | undefined;
+  let attachmentLists = 0;
   let createTitleConflicts = 0;
+  let transientCreateFailures = 0;
+  let createPermissionDenied = false;
+  let createAttempts = 0;
   let ambiguousCreate = false;
   let stripLinksOnRead = false;
   let stripLinksOnNextUpdatedRead = false;
@@ -137,6 +142,14 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
       return [...pages.values()].find((candidate) => candidate.parentId === selectedContainer.id && candidate.title === title);
     },
     createPage: async ({container: selectedContainer, title, body}: {container: DestinationContainer | DestinationPage; title: string; body: string}) => {
+      createAttempts += 1;
+      if (transientCreateFailures > 0) {
+        transientCreateFailures -= 1;
+        throw new HttpRequestError('No space with key', 404, 'POST', '/content');
+      }
+      if (createPermissionDenied) {
+        throw new HttpRequestError('HTTP request failed: status=403: request forbidden', 403, 'POST', '/content');
+      }
       if (createTitleConflicts > 0) {
         createTitleConflicts -= 1;
         throw new DestinationTitleConflictError(title, 400);
@@ -170,6 +183,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
       return moved;
     },
     verifyPage: async (selected: DestinationPage) => {
+      if (selected.id === container.id) return {...container};
       if (missingIds.has(selected.id)) throw new HttpRequestError('No content found', 404);
       let verified = pages.get(selected.id) ?? current!;
       const reads = verificationReads.get(selected.id) ?? 0;
@@ -209,7 +223,10 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
       return value;
     },
     listUploadedResources: async (selected: DestinationPage) => {
-      if (failAttachmentListing) throw new Error('attachment listing forbidden');
+      attachmentLists += 1;
+      if (failAttachmentListing || (failAttachmentListingAfter !== undefined && attachmentLists > failAttachmentListingAfter)) {
+        throw new Error('attachment listing forbidden');
+      }
       return [...(uploaded.get(selected.id)?.values() ?? [])];
     },
   } as unknown as DestinationAdapter;
@@ -224,7 +241,10 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setNormalizeBootstrapBody: (value: boolean) => { normalizeBootstrapBody = value; },
     setGlobalTitleConflict: (value: boolean) => { globalTitleConflict = value; },
     setFailAttachmentListing: (value: boolean) => { failAttachmentListing = value; },
+    setFailAttachmentListingAfter: (value: number | undefined) => { failAttachmentListingAfter = value; },
     setCreateTitleConflicts: (value: number) => { createTitleConflicts = value; },
+    setTransientCreateFailures: (value: number) => { transientCreateFailures = value; },
+    setCreatePermissionDenied: (value: boolean) => { createPermissionDenied = value; },
     setAmbiguousCreate: () => { ambiguousCreate = true; },
     setStripLinksOnRead: (value: boolean) => { stripLinksOnRead = value; },
     setStripLinksOnNextUpdatedRead: () => { stripLinksOnNextUpdatedRead = true; },
@@ -242,7 +262,7 @@ function fixture(descendants: SourcePage[] = [], fixtureRoot: SourcePage = root,
     setAllCurrentMissing: () => { for (const id of pages.keys()) missingIds.add(id); },
     changeResourceDownloadUrl: (downloadUrl: string) => { sourceResource = {...sourceResource, downloadUrl}; },
     snapshot: () => ({
-      created, updated, reparented, downloads, sourceResolutions, destinationResolutions, current, pages: [...pages.values()],
+      created, createAttempts, updated, reparented, downloads, sourceResolutions, destinationResolutions, attachmentLists, current, pages: [...pages.values()],
       resourceReads: Object.fromEntries(resourceReads),
       uploaded: [...uploaded.values()].reduce((total, items) => total + items.size, 0),
     }),
@@ -269,6 +289,34 @@ async function setup() {
 }
 
 describe('source-derived remote page safety', () => {
+  it('recovers temporary not-found responses while creating under a confirmed destination', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture([], root, false);
+    adapters.setTransientCreateFailures(2);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5}).run(options);
+
+    expect(result).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 1, failed: 0}});
+    expect(adapters.snapshot()).toMatchObject({created: 1, createAttempts: 3});
+  });
+
+  it('classifies a create denial below a readable parent without inventing an ownership conflict', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture([], root, false);
+    adapters.setCreatePermissionDenied(true);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+
+    const result = await new Migrator(config, logger, factory, {sleep: async () => undefined, random: () => 0.5}).run(options);
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as TransferReportData;
+
+    expect(result).toMatchObject({status: 'partial', summary: {failed: 1, conflicts: 0, errors: 1}});
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'destination-page-create-rejected', category: 'permissions', retryable: false,
+    }));
+    expect(report.issues).not.toContainEqual(expect.objectContaining({code: 'destination-ownership-ambiguity'}));
+  });
+
   it('stops at the preflight barrier before locators, state, reports, or writes', async () => {
     const {config, options} = await setup();
     const instance = fixture();
@@ -758,6 +806,27 @@ describe('source-derived remote page safety', () => {
     });
   });
 
+  it('preserves confirmed upload evidence when attachment read-back is temporarily unavailable', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    adapters.setFailAttachmentListingAfter(1);
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const migrator = new Migrator(config, logger, factory);
+
+    const first = await migrator.run(options);
+    const firstReport = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+    const firstResource = firstReport.pages[0]?.resourceItems[0];
+    expect(first).toMatchObject({status: 'partial', summary: {resourcesComplete: 0, resourcesPartial: 1, resourcesFailed: 0}});
+    expect(firstResource).toMatchObject({status: 'partial', destinationId: 'uploaded-manual.pdf', destinationName: 'manual.pdf'});
+    expect(adapters.snapshot().current?.content).toContain('ri:filename="manual.pdf"');
+
+    const uploads = adapters.snapshot().uploaded;
+    adapters.setFailAttachmentListingAfter(undefined);
+    const retried = await migrator.run(options);
+    expect(retried).toMatchObject({status: 'completed', summary: {resourcesComplete: 1, resourcesPartial: 0, resourcesFailed: 0}});
+    expect(adapters.snapshot().uploaded).toBe(uploads);
+  });
+
   it('transfers an empty hierarchy page as complete and repairs its prior managed raw fallback', async () => {
     const {directory, config, options} = await setup();
     const emptyRoot: SourcePage = {...root, rawContent: '### ', references: []};
@@ -859,7 +928,7 @@ describe('source-derived remote page safety', () => {
     const oldId = adapters.snapshot().current!.id;
     adapters.setCurrentMissing();
 
-    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed-with-warnings', hasErrors: false});
+    await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false, summary: {warnings: 0}});
     expect(adapters.snapshot().created).toBe(2);
     expect(adapters.snapshot().uploaded).toBe(2);
     expect(adapters.snapshot().downloads).toBe(1);
@@ -881,12 +950,12 @@ describe('source-derived remote page safety', () => {
     adapters.setFailRecoveryLookup(true);
 
     const recovered = await migrator.run(options);
-    expect(recovered).toMatchObject({status: 'completed-with-warnings', hasErrors: false, summary: {complete: 1, failed: 0}});
+    expect(recovered).toMatchObject({status: 'completed', hasErrors: false, summary: {complete: 1, failed: 0, warnings: 0}});
     expect(adapters.snapshot()).toMatchObject({created: 2, uploaded: 2, downloads: 1});
     expect(adapters.snapshot().current).toMatchObject({parentId: container.id});
     const report = JSON.parse(await readFile(recovered.reportPaths.json, 'utf8')) as TransferReportData;
     expect(report.issues).toContainEqual(expect.objectContaining({
-      code: 'destination-recovery-lookup-failed', pageTitle: root.title, retryable: true,
+      code: 'destination-recovery-lookup-failed', pageTitle: root.title, severity: 'normalization', retryable: false,
     }));
     const stateNames = (await readdir(path.join(directory, '.states'))).filter((name) => name.endsWith('.json'));
     const state = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;
@@ -910,7 +979,7 @@ describe('source-derived remote page safety', () => {
 
     const recovered = await migrator.run(subtreeOptions);
     expect(recovered).toMatchObject({
-      status: 'completed-with-warnings', hasErrors: false,
+      status: 'completed', hasErrors: false,
       summary: {pages: 2, complete: 2, failed: 0, blocked: 0, resourcesComplete: 1},
     });
     const after = JSON.parse(await readFile(path.join(directory, '.states', stateNames[0]!), 'utf8')) as TransferState;

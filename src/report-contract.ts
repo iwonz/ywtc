@@ -204,6 +204,7 @@ export interface TransferReportSummary {
   grids: number;
   gridsComplete?: number;
   gridsFailed?: number;
+  gridStatuses?: ResourceStatusCounts;
   codeBlocks: number;
   cycles: number;
   normalizations: number;
@@ -217,6 +218,7 @@ export interface TransferReportSummary {
   dependentFiles: number;
   dependentComments: number;
   retryableFailures: number;
+  recoveredIssues?: number;
   inventoryComplete: boolean;
   inventoriedPages: number;
   inventoryFailedPages: number;

@@ -1,9 +1,16 @@
-import {mkdtemp, readFile} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {listReports} from '../src/report-catalog.js';
-import {REPORT_DATA_MARKER, TransferReport, type TransferReportData, type TransferReportPage} from '../src/report.js';
+import {
+  injectReportPayload,
+  REPORT_DATA_MARKER,
+  TransferReport,
+  type ReportPresentationPayload,
+  type TransferReportData,
+  type TransferReportPage,
+} from '../src/report.js';
 
 function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sourceCanonicalId' | 'sourceId' | 'sourceTitle' | 'status'>): TransferReportPage {
   return {
@@ -30,6 +37,83 @@ function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sou
 }
 
 describe('transfer report', () => {
+  it('injects arbitrary report data without interpreting replacement metacharacters', () => {
+    const shell = `<!doctype html><html><body><script id="data" type="application/json">${REPORT_DATA_MARKER}</script></body></html>`;
+    const dangerous = String.raw`literal $& $' $\` </script> \u2028 \u2029`;
+    const payload = {
+      report: {outputs: [{label: 'source', value: dangerous}]},
+      previews: {'wiki:1': {source: dangerous, destination: dangerous}},
+    } as unknown as ReportPresentationPayload;
+
+    const html = injectReportPayload(shell, payload);
+    const serialized = html.match(/<script id="data" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
+
+    expect(html.match(/<\/body>/g)).toHaveLength(1);
+    expect(html.match(/<\/html>/g)).toHaveLength(1);
+    expect(html).not.toContain(REPORT_DATA_MARKER);
+    expect(serialized).toBeDefined();
+    expect(JSON.parse(serialized!)).toEqual(payload);
+  });
+
+  it('defers oversized previews for complete pages instead of inflating the report shell', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-large-preview-'));
+    const report = new TransferReport({
+      runId: '10000000-0000-4000-8000-000000000099',
+      dryRun: false,
+      scope: 'page',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
+    });
+    const source = `<p>${'source-preview '.repeat(20_000)}</p>`;
+    const destination = `<p>${'destination-preview '.repeat(20_000)}</p>`;
+    report.addPage(page({sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete'}), {source, destination});
+    report.finish('completed');
+
+    const paths = await report.write(directory);
+    const html = await readFile(paths.html, 'utf8');
+    const previewDirectory = path.join(paths.directory, 'previews');
+    const previewFiles = await readdir(previewDirectory);
+
+    expect(previewFiles).toHaveLength(2);
+    expect(await readFile(path.join(previewDirectory, previewFiles.find((name) => name.endsWith('-source.txt'))!), 'utf8')).toBe(source);
+    expect(await readFile(path.join(previewDirectory, previewFiles.find((name) => name.endsWith('-destination.txt'))!), 'utf8')).toBe(destination);
+    expect(html).toContain('data-ywtc-preview-truncated');
+    expect(html).toContain('previews/');
+    expect(html).not.toContain('source-preview '.repeat(20_000));
+    expect(html).not.toContain('destination-preview '.repeat(20_000));
+  });
+
+  it('caps the aggregate embedded preview budget across large complete migrations', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-many-previews-'));
+    const report = new TransferReport({
+      runId: '10000000-0000-4000-8000-000000000098',
+      dryRun: false,
+      scope: 'subtree',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
+    });
+    for (let index = 0; index < 75; index += 1) {
+      const body = `<p>${'x'.repeat(60 * 1024)}-unique-tail-${index}</p>`;
+      report.addPage(page({sourceCanonicalId: `wiki:${index}`, sourceId: String(index), sourceTitle: `Page ${index}`, status: 'complete'}), {
+        source: body,
+        destination: body,
+      });
+    }
+    report.finish('completed');
+
+    const paths = await report.write(directory);
+    const html = await readFile(paths.html, 'utf8');
+    const previewFiles = await readdir(path.join(paths.directory, 'previews'));
+
+    expect(previewFiles.length).toBeGreaterThan(0);
+    expect(html).not.toContain('-unique-tail-74');
+    expect(html).toContain('data-ywtc-preview-truncated');
+  });
+
   it('reports Grid payload outcomes without inflating file or byte totals', () => {
     const report = new TransferReport({
       runId: '10000000-0000-4000-8000-000000000000',
@@ -41,10 +125,11 @@ describe('transfer report', () => {
       state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'new'},
     });
     report.addPage(page({
-      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'partial', grids: 2,
+      sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'partial', grids: 3,
       resourceItems: [
         {sourceId: 'grid-ok', sourceName: 'ok.grid.json', kind: 'grid', status: 'complete'},
         {sourceId: 'grid-failed', sourceName: 'failed.grid.json', kind: 'grid', status: 'failed', error: 'Service unavailable'},
+        {sourceId: 'grid-unverified', sourceName: 'unverified.grid.json', kind: 'grid', status: 'partial', error: 'Payload could not be verified'},
       ],
     }));
     report.issue({
@@ -55,7 +140,8 @@ describe('transfer report', () => {
 
     expect(report.data.summary).toMatchObject({
       resources: 0, sourceBytes: 0, bytes: 0, bytesUnknown: 0,
-      grids: 2, gridsComplete: 1, gridsFailed: 1,
+      grids: 3, gridsComplete: 1, gridsFailed: 1,
+      gridStatuses: {planned: 0, 'not-started': 0, blocked: 0, complete: 1, partial: 1, failed: 1},
       resourcesComplete: 0, resourcesFailed: 0,
     });
   });
@@ -131,6 +217,31 @@ describe('transfer report', () => {
     expect(report.data.issues).toEqual([
       expect.objectContaining({code: 'content-warning-unresolved-yfm-variable', severity: 'degradation', occurrences: 2}),
     ]);
+  });
+
+  it('retains recovered diagnostics without counting or retrying them as unresolved failures', () => {
+    const report = new TransferReport({
+      runId: '00000000-0000-4000-8000-000000000019',
+      dryRun: false,
+      scope: 'page',
+      direction: 'yandex-wiki → confluence',
+      source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example.com/root'},
+      destination: {provider: 'confluence', profile: 'docs', id: '10'},
+      state: {id: 'state-id', path: '/tmp/state.json', mode: 'automatic', source: 'existing'},
+    });
+    report.addPage(page({sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete'}));
+    report.issue({
+      code: 'destination-consistency-retry', severity: 'warning', phase: 'verification', pageId: 'wiki:1',
+      retryable: true, message: 'temporary read-after-write failure',
+    });
+    report.resolveIssues({pageId: 'wiki:1', codes: ['destination-consistency-retry']});
+    report.finish('completed');
+
+    expect(report.data.issues).toContainEqual(expect.objectContaining({
+      code: 'destination-consistency-retry', lifecycle: 'resolved', retryable: false,
+    }));
+    expect(report.data.summary).toMatchObject({errors: 0, warnings: 0, retryableFailures: 0, recoveredIssues: 1});
+    expect(report.data.warnings).toEqual([]);
   });
 
   it('reconciles source inventory, exact outcomes, issue context, HTML, JSON, and catalog counts', async () => {

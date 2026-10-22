@@ -343,9 +343,9 @@ function storageToSemanticHtml(storage: string, warnings: string[], adaptations:
   });
   $('ac\\:link').each((_index, element) => {
     const link = $(element);
-    const page = link.children('ri\\:page');
-    const attachment = link.children('ri\\:attachment').attr('ri:filename');
-    const label = link.children('ac\\:link-body, ac\\:plain-text-link-body').text().trim()
+    const page = link.find('ri\\:page').first();
+    const attachment = link.find('ri\\:attachment').first().attr('ri:filename');
+    const label = link.find('ac\\:link-body, ac\\:plain-text-link-body').first().text().trim()
       || page.attr('ri:content-title') || attachment || 'Link';
     const href = page.length
       ? `page:${page.attr('ri:content-id') ?? page.attr('ri:content-title') ?? ''}`
@@ -859,6 +859,47 @@ export function rawContentFallback(page: SourcePage, provider: SourcePage['provi
     representedReferences: page.references.length,
     preservedExternalReferences: 0,
   };
+}
+
+export async function renderWithSafeStructuralFallback(input: {
+  document: NormalizedDocument;
+  page: SourcePage;
+  context: RenderContext;
+  provider: SourcePage['provider'];
+  preferred: () => Promise<RenderedDocument>;
+}): Promise<RenderedDocument> {
+  let reason: string;
+  try {
+    const rendered = await input.preferred();
+    if (rendered.body.trim() || input.document.semanticallyEmpty) return rendered;
+    reason = emptyRendererFallbackReason(input.document);
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error);
+  }
+
+  try {
+    const structural = input.provider === 'confluence'
+      ? await renderStaticHtml(input.document, input.context)
+      : await renderMarkdown(input.document, input.context);
+    if (structural.body.trim()) {
+      const adaptation = `Preferred provider rendering was unavailable; a safe structural renderer preserved the normalized content (${reason})`;
+      const adaptations = [...new Set([...structural.adaptations, adaptation])];
+      return {
+        ...structural,
+        adaptations,
+        notices: transformationNotices({
+          normalizations: structural.normalizations,
+          adaptations,
+          degradations: structural.warnings,
+        }),
+      };
+    }
+  } catch (error) {
+    const structuralReason = error instanceof Error ? error.message : String(error);
+    reason = `${reason}; safe structural renderer failed: ${structuralReason}`;
+  }
+
+  return rawContentFallback(input.page, input.provider, reason);
 }
 
 export function emptyRendererFallbackReason(document: NormalizedDocument): string {
@@ -1404,10 +1445,11 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       const destination = source ? context.pages.get(source.canonicalId) : undefined;
       if (destination && 'title' in destination) {
         const destinationSpace = 'provider' in destination ? destination.space : undefined;
-        $(element)
+        const rewritten = $(element)
           .attr('ri:content-title', destination.title)
-          .attr('ri:space-key', destinationSpace ?? spaceKey)
-          .removeAttr('ri:content-id');
+          .attr('ri:space-key', destinationSpace ?? spaceKey);
+        if ('provider' in destination) rewritten.attr('ri:content-id', destination.id);
+        else rewritten.removeAttr('ri:content-id');
       }
     });
     return {
@@ -1421,7 +1463,7 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       preservedExternalReferences: preservedExternalImageCount(document, context),
     };
   }
-  const pagesBySlug = new Map<string, {sourceId: number; slug: string; destinationTitle: string}>();
+  const pagesBySlug = new Map<string, {sourceId: number; slug: string; destinationTitle: string; destinationId?: string}>();
   for (const source of context.sourcePages.values()) {
     const destination = context.pages.get(source.canonicalId);
     if (!destination || !('title' in destination)) continue;
@@ -1430,6 +1472,7 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       sourceId: Number.isFinite(numericId) ? numericId : 0,
       slug: source.locator,
       destinationTitle: destination.title,
+      ...('provider' in destination ? {destinationId: destination.id} : {}),
     });
   }
   const attachments = new Map<string, string>();

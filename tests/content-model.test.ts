@@ -12,6 +12,7 @@ import {
   renderConfluenceStorage,
   renderMarkdown,
   renderStaticHtml,
+  renderWithSafeStructuralFallback,
   renderYfm,
   setSourceResourceBinding,
   sourceResourceBindings,
@@ -51,9 +52,10 @@ describe('normalized content pipeline', () => {
     expect(rendered.degraded).toBe(true);
   });
 
-  it('isolates Diplodoc diagnostics between source pages', () => {
-    const unresolved = normalizePageContent(source('Hello {{ missing_value }}'));
-    expect(unresolved.warnings.join(' ')).toMatch(/missing_value|variable/i);
+  it('preserves literal template variables without leaking diagnostics between pages', () => {
+    const literal = normalizePageContent(source('Hello {{ missing_value }}'));
+    expect(literal.warnings).toEqual([]);
+    expect(normalizedPreviewHtml(literal)).toContain('{{ missing_value }}');
 
     const clean = normalizePageContent(source('# Clean page\n\nContent'));
     expect(clean.warnings).toEqual([]);
@@ -80,6 +82,32 @@ describe('normalized content pipeline', () => {
     expect(html.body).not.toContain('<script');
   });
 
+  it('uses a safe structural renderer before raw fallback when the preferred renderer is empty', async () => {
+    const page = source('# Preserved heading\n\nPreserved body');
+    const document = normalizePageContent(page);
+    const context: RenderContext = {
+      pages: new Map(), resources: new Map(),
+      sourcePages: new Map([[page.canonicalId, page]]), currentPageId: page.canonicalId,
+    };
+
+    const rendered = await renderWithSafeStructuralFallback({
+      document,
+      page,
+      context,
+      provider: 'confluence',
+      preferred: async () => ({
+        body: '', warnings: [], normalizations: [], adaptations: [], notices: [],
+        degraded: false, representedReferences: 0, preservedExternalReferences: 0,
+      }),
+    });
+
+    expect(rendered.body).toContain('Preserved heading');
+    expect(rendered.body).toContain('Preserved body');
+    expect(rendered.body).not.toContain('Source content fallback');
+    expect(rendered.degraded).toBe(false);
+    expect(rendered.adaptations).toContainEqual(expect.stringContaining('safe structural renderer'));
+  });
+
   it('converts between Storage and YFM and rewrites selected page references', async () => {
     const page = source('<p>See <ac:link><ri:page ri:content-id="2" ri:content-title="Child"/><ac:link-body>Child</ac:link-body></ac:link></p>', 'confluence-storage');
     const child = {...page, id: '2', canonicalId: 'source:2', title: 'Child'};
@@ -90,6 +118,21 @@ describe('normalized content pipeline', () => {
     const document = normalizePageContent(page);
     expect((await renderYfm(document, context)).body).toContain('https://conf.example/pages/2');
     expect((await renderConfluenceStorage(document, page, context, 'DOC')).body).toContain('ri:content-title="Child"');
+  });
+
+  it('verifies mapped Confluence links by immutable destination identity', async () => {
+    const page = source('[Child](/child)');
+    const child = {...source(''), id: '2', canonicalId: 'source:2', title: 'Child', locator: 'child', url: 'https://wiki.example.com/child'};
+    const context: RenderContext = {
+      pages: new Map([[child.canonicalId, destination]]), resources: new Map(),
+      sourcePages: new Map([[page.canonicalId, page], [child.canonicalId, child]]), currentPageId: page.canonicalId,
+    };
+    const rendered = await renderConfluenceStorage(normalizePageContent(page), page, context, 'DOC');
+    const providerNormalized = rendered.body.replace('ri:content-title="Child"', 'ri:content-title="Renamed by provider"');
+
+    expect(rendered.body).toContain('ri:content-id="2"');
+    expect(verifyDestinationContent(rendered.body, providerNormalized, 'confluence', page)).toEqual({status: 'complete', differences: [], adaptations: []});
+    expect(verifyDestinationContent(rendered.body, providerNormalized.replace('ri:content-id="2"', 'ri:content-id="3"'), 'confluence', page).status).toBe('failed');
   });
 
   it('preserves same-vendor macros without turning parser fallbacks into false degradation', async () => {

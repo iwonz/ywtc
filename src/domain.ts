@@ -122,6 +122,22 @@ export class DestinationRevisionConflictError extends Error {
   }
 }
 
+export type DestinationPageCreateRejectionReason =
+  | 'parent-permission-denied'
+  | 'create-permission-or-policy';
+
+export class DestinationPageCreateRejectedError extends Error {
+  constructor(
+    readonly reason: DestinationPageCreateRejectionReason,
+    readonly status: number,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'DestinationPageCreateRejectedError';
+  }
+}
+
 export type OwnershipConflictReason =
   | 'duplicate-source-mapping'
   | 'immutable-id-mismatch'

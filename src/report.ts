@@ -46,6 +46,23 @@ export type {
 } from './report-contract.js';
 
 export const REPORT_DATA_MARKER = '{"__ywtc_report_payload__":true}';
+const MAX_EMBEDDED_COMPLETE_PREVIEW_BYTES = 128 * 1024;
+const MAX_TOTAL_EMBEDDED_COMPLETE_PREVIEW_BYTES = 8 * 1024 * 1024;
+const PREVIEW_EXCERPT_CHARACTERS = 16 * 1024;
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function deferredPreview(value: string, relativePath: string): string {
+  const excerpt = value.slice(0, PREVIEW_EXCERPT_CHARACTERS);
+  return `<section data-ywtc-preview-truncated="true"><p>Preview shortened for report performance. Full sanitized preview: <a href="${escapeHtmlText(relativePath)}" target="_blank" rel="noopener noreferrer">${escapeHtmlText(relativePath)}</a></p><pre>${escapeHtmlText(excerpt)}</pre></section>`;
+}
 
 function countRecord<T extends string>(values: readonly T[]): Record<T, number> {
   return Object.fromEntries(values.map((value) => [value, 0])) as Record<T, number>;
@@ -85,6 +102,7 @@ function emptySummary(): TransferReportSummary {
     grids: 0,
     gridsComplete: 0,
     gridsFailed: 0,
+    gridStatuses: countRecord(resourceStatuses),
     codeBlocks: 0,
     cycles: 0,
     normalizations: 0,
@@ -98,6 +116,7 @@ function emptySummary(): TransferReportSummary {
     dependentFiles: 0,
     dependentComments: 0,
     retryableFailures: 0,
+    recoveredIssues: 0,
     inventoryComplete: false,
     inventoriedPages: 0,
     inventoryFailedPages: 0,
@@ -146,6 +165,7 @@ function issueObjectType(issue: MigrationIssue): IssueObjectType {
 }
 
 function issueAction(issue: MigrationIssue, category: IssueCategory): string {
+  if (issue.lifecycle === 'resolved') return 'Recovered automatically; no action is required.';
   if (issue.severity === 'blocked') return 'Resolve the upstream page error, then repeat the same migration; this object will resume automatically.';
   if (issue.retryable) return 'Repeat the same migration to retry this object.';
   if (issue.severity === 'degradation') return 'Data remains represented; compare the source and destination previews.';
@@ -222,7 +242,7 @@ function transformationIssueCode(kind: 'normalization' | 'adaptation' | 'warning
 export function injectReportPayload(shell: string, payload: ReportPresentationPayload): string {
   const occurrences = shell.split(REPORT_DATA_MARKER).length - 1;
   if (occurrences !== 1) throw new Error(`Compiled report shell must contain exactly one data marker; found ${occurrences}`);
-  return shell.replace(REPORT_DATA_MARKER, serializePayload(payload));
+  return shell.replace(REPORT_DATA_MARKER, () => serializePayload(payload));
 }
 
 let shellPromise: Promise<string> | undefined;
@@ -462,6 +482,10 @@ export class TransferReport {
     this.issueCollector.add({...input, message: sanitizedString(input.message, this.secrets)});
   }
 
+  resolveIssues(input: {pageId?: string; resourceId?: string; commentId?: string; codes: readonly string[]}): void {
+    this.issueCollector.resolve(input);
+  }
+
   warning(message: string): void {
     this.issue({code: `warning:${message}`, severity: 'warning', phase: 'report', retryable: false, message});
   }
@@ -534,10 +558,11 @@ export class TransferReport {
         action: issueAction(issue, category),
       };
     });
-    this.data.warnings = this.data.issues.filter((issue) => issue.severity === 'warning').map((issue) => issue.message);
-    this.data.errors = this.data.issues.filter((issue) => issue.severity === 'error').map((issue) => issue.message);
+    this.data.warnings = this.data.issues.filter((issue) => issue.lifecycle !== 'resolved' && issue.severity === 'warning').map((issue) => issue.message);
+    this.data.errors = this.data.issues.filter((issue) => issue.lifecycle !== 'resolved' && issue.severity === 'error').map((issue) => issue.message);
     const pageStatusCounts = countRecord(pageStatuses);
     const resourceStatusCounts = countRecord(resourceStatuses);
+    const gridStatusCounts = countRecord(resourceStatuses);
     const traversalStatusCounts = countRecord(edgeStatuses);
     const commentStatusCounts = countRecord(commentStatuses);
     for (const page of this.data.pages) pageStatusCounts[page.status] += 1;
@@ -545,6 +570,7 @@ export class TransferReport {
     const resources = allResources.filter((resource) => resource.kind !== 'grid');
     const grids = allResources.filter((resource) => resource.kind === 'grid');
     for (const resource of resources) resourceStatusCounts[resource.status] += 1;
+    for (const grid of grids) gridStatusCounts[grid.status] += 1;
     for (const edge of this.data.edges) traversalStatusCounts[edge.status] += 1;
     for (const page of this.data.pages) commentStatusCounts[page.comments.status] += 1;
     const started = Date.parse(this.data.startedAt);
@@ -586,6 +612,7 @@ export class TransferReport {
       grids: this.data.pages.reduce((total, page) => total + page.grids, 0),
       gridsComplete: grids.filter((resource) => resource.status === 'complete').length,
       gridsFailed: grids.filter((resource) => resource.status === 'failed').length,
+      gridStatuses: gridStatusCounts,
       codeBlocks: this.data.pages.reduce((total, page) => total + page.codeBlocks, 0),
       cycles: traversalStatusCounts.cycle,
       normalizations: this.issueCollector.count('normalization'),
@@ -599,6 +626,7 @@ export class TransferReport {
       dependentFiles: resourceStatusCounts.blocked,
       dependentComments: commentStatusCounts.blocked,
       retryableFailures: this.issueCollector.countRetryableFailures(),
+      recoveredIssues: this.issueCollector.countResolved(),
       inventoryComplete: this.data.pages.length > 0 && inventoriedPages === this.data.pages.length,
       inventoriedPages,
       inventoryFailedPages,
@@ -620,7 +648,8 @@ export class TransferReport {
     };
     const pageOutcomes = Object.values(pageStatusCounts).reduce((total, value) => total + value, 0);
     const resourceOutcomes = Object.values(resourceStatusCounts).reduce((total, value) => total + value, 0);
-    if (pageOutcomes !== this.data.summary.pages || resourceOutcomes !== this.data.summary.resources) {
+    const gridOutcomes = Object.values(gridStatusCounts).reduce((total, value) => total + value, 0);
+    if (pageOutcomes !== this.data.summary.pages || resourceOutcomes !== this.data.summary.resources || gridOutcomes !== this.data.summary.grids) {
       throw new Error('Report outcome invariant failed: source inventory does not reconcile with exclusive outcomes');
     }
     if (this.data.retry && !this.data.dryRun) {
@@ -640,7 +669,34 @@ export class TransferReport {
     const shell = await loadReportShell();
     const safeData = sanitizedValue(this.data, this.secrets) as TransferReportData;
     const safePreviews = sanitizedValue(Object.fromEntries(this.previews), this.secrets) as Record<string, PreviewPair>;
+    const pageById = new Map(safeData.pages.map((page) => [page.sourceCanonicalId, page]));
+    const deferred: Array<{filename: string; content: string}> = [];
+    let embeddedCompletePreviewBytes = 0;
+    for (const [pageId, preview] of Object.entries(safePreviews)) {
+      if (pageById.get(pageId)?.status !== 'complete') continue;
+      const pairBytes = Buffer.byteLength(preview.source) + Buffer.byteLength(preview.destination);
+      const deferPair = Buffer.byteLength(preview.source) > MAX_EMBEDDED_COMPLETE_PREVIEW_BYTES
+        || Buffer.byteLength(preview.destination) > MAX_EMBEDDED_COMPLETE_PREVIEW_BYTES
+        || embeddedCompletePreviewBytes + pairBytes > MAX_TOTAL_EMBEDDED_COMPLETE_PREVIEW_BYTES;
+      if (!deferPair) {
+        embeddedCompletePreviewBytes += pairBytes;
+        continue;
+      }
+      const prefix = createHash('sha256').update(pageId).digest('hex').slice(0, 16);
+      for (const side of ['source', 'destination'] as const) {
+        const content = preview[side];
+        const filename = `${prefix}-${side}.txt`;
+        const relativePath = `previews/${filename}`;
+        deferred.push({filename, content});
+        preview[side] = deferredPreview(content, relativePath);
+      }
+    }
     const payload: ReportPresentationPayload = {report: safeData, previews: safePreviews};
+    if (deferred.length > 0) {
+      const previewsDirectory = path.join(directory, 'previews');
+      await mkdir(previewsDirectory, {recursive: true, mode: 0o700});
+      await Promise.all(deferred.map(({filename, content}) => writeFile(path.join(previewsDirectory, filename), content, {mode: 0o600})));
+    }
     await writeFile(jsonTemporary, `${JSON.stringify(safeData, null, 2)}\n`, {mode: 0o600});
     await writeFile(htmlTemporary, injectReportPayload(shell, payload), {mode: 0o600});
     await rename(jsonTemporary, json);

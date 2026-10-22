@@ -1,5 +1,7 @@
 import {defineConfig} from '@playwright/test';
 
+const browserChannel = process.env.PLAYWRIGHT_CHANNEL;
+
 export default defineConfig({
   testDir: './tests/browser',
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{ext}',
@@ -9,7 +11,7 @@ export default defineConfig({
   reporter: process.env.CI ? 'line' : 'list',
   use: {
     browserName: 'chromium',
-    channel: 'chrome',
+    ...(browserChannel ? {channel: browserChannel} : {}),
     headless: true,
   },
 });

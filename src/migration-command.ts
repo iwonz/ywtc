@@ -211,7 +211,12 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesBlocked} blocked · ${result.summary.resourcesNotStarted} not started${result.summary.resourcesPlanned ? ` · ${result.summary.resourcesPlanned} planned` : ''} · ${result.summary.bytes} transferred bytes`);
   console.log(`  Causes  ${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
   console.log(`  Content ${result.summary.links} links · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
-  if (result.summary.grids > 0) console.log(`  Grids   ${result.summary.gridsComplete ?? 0} complete · ${result.summary.gridsFailed ?? 0} failed`);
+  if (result.summary.grids > 0) {
+    const gridStatuses = result.summary.gridStatuses
+      ? Object.entries(result.summary.gridStatuses).filter(([, count]) => count > 0).map(([status, count]) => `${count} ${status}`).join(' · ')
+      : `${result.summary.gridsComplete ?? 0} complete · ${result.summary.gridsFailed ?? 0} failed`;
+    console.log(`  Grids   ${gridStatuses}`);
+  }
   if (result.summary.inventoryReusedPages || result.summary.inventoryRecoveryAttempts || result.summary.inventoryRemainingFailures) {
     console.log(`  Inventory ${result.summary.inventoryReusedPages ?? 0} reused · ${result.summary.inventoryFreshPages ?? 0} fresh · ${result.summary.inventoryRecoveryAttempts ?? 0} recovery attempts${result.summary.inventoryRemainingFailures ? ` · ${result.summary.inventoryRemainingFailures} remaining failures` : ''}`);
   }
