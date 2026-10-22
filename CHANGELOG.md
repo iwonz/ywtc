@@ -2,6 +2,19 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.2.1](https://github.com/iwonz/ywtc/compare/v4.2.0...v4.2.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **migration:** isolate retryable Grid inventory failures ([6d8c4de](https://github.com/iwonz/ywtc/commit/6d8c4def058b0a8348c7f3c6a7f09b75aa9aa7d1))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.2.0 ([c826cf7](https://github.com/iwonz/ywtc/commit/c826cf79a39b67d98274600595c496ef547bd033))
+* **release:** retry after commitlint failure ([020f38c](https://github.com/iwonz/ywtc/commit/020f38cf5f5da1564db00b5bb1eeab1ed3fb8437))
+
 ## [4.2.0](https://github.com/iwonz/ywtc/compare/v4.1.6...v4.2.0) (2026-10-21)
 
 
