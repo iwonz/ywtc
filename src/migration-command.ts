@@ -33,6 +33,10 @@ function heading(label: string): void {
   console.log(`\n${paint(36, '◆')} ${paint(1, label)}`);
 }
 
+function summaryField(label: string, value: string): void {
+  console.log(`  ${label.padEnd(12)}  ${value}`);
+}
+
 function reportBearingError(error: unknown): error is Error & {reportPaths: MigrationReportPaths; stateFilename: string} {
   return error instanceof Error
     && typeof (error as {reportPaths?: unknown}).reportPaths === 'object'
@@ -46,16 +50,16 @@ async function printAndMaybeOpenReport(
 ): Promise<void> {
   const {openReportFile, reportAccessDetails} = await import('./report-catalog.js');
   const access = reportAccessDetails(paths, workdir);
-  console.log(`  Run ID  ${access.runId}`);
-  console.log(`  Report  ${access.report}`);
-  console.log(`  URL     ${access.url}`);
-  console.log(`  Open    ${access.command}`);
+  summaryField('Run ID', access.runId);
+  summaryField('Report', access.report);
+  summaryField('URL', access.url);
+  summaryField('Open', access.command);
   if (!shouldOpen) return;
   try {
     await openReportFile(paths.html);
-    console.log(`  Opened  ${access.url}`);
+    summaryField('Opened', access.url);
   } catch (error) {
-    console.log(`  ${paint(33, 'Warning')} ${error instanceof Error ? error.message : String(error)}`);
+    summaryField('Warning', paint(33, error instanceof Error ? error.message : String(error)));
   }
 }
 
@@ -177,11 +181,11 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   } catch (error) {
     if (signalCode) {
       heading('Transfer interrupted');
-      console.log(`  Status   cancelled by ${signalCode === 130 ? 'SIGINT' : 'SIGTERM'}`);
-      console.log(`  Workdir  ${workspace.root}`);
-      console.log(`  Reports  ${workspace.reportsDirectory}`);
+      summaryField('Status', `cancelled by ${signalCode === 130 ? 'SIGINT' : 'SIGTERM'}`);
+      summaryField('Workdir', workspace.root);
+      summaryField('Reports', workspace.reportsDirectory);
       if (reportBearingError(error)) await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume   ${migrationContinuationCommand(command, workspace.root, reportBearingError(error) ? error.reportPaths.runId : undefined, retry)}`);
+      summaryField('Resume', migrationContinuationCommand(command, workspace.root, reportBearingError(error) ? error.reportPaths.runId : undefined, retry));
       return {
         code: signalCode,
         workspaceRoot: workspace.root,
@@ -190,10 +194,10 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
     }
     if (reportBearingError(error)) {
       heading('Transfer failed');
-      console.log('  Status  failed');
-      console.log(`  State   ${error.stateFilename}`);
+      summaryField('Status', 'failed');
+      summaryField('State', error.stateFilename);
       await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      console.log(`  Resume  ${migrationContinuationCommand(command, workspace.root, error.reportPaths.runId, retry)}`);
+      summaryField('Resume', migrationContinuationCommand(command, workspace.root, error.reportPaths.runId, retry));
     }
     throw error;
   } finally {
@@ -202,25 +206,28 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   }
   if (!result) throw new Error('Transfer completed without a result');
   heading(result.status === 'completed' ? 'Transfer complete' : 'Transfer finished');
-  console.log(`  Status  ${result.status}`);
-  console.log(`  State   ${result.stateFilename}`);
+  summaryField('Status', result.status);
+  summaryField('State', result.stateFilename);
   await printAndMaybeOpenReport(result.reportPaths, workspace.root, command.openReport);
-  console.log(`  Source  root + ${result.summary.selectedDescendants}/${result.summary.returnedDescendants} descendants · ${result.summary.excludedPages} excluded · depth ${result.summary.maximumDepth}`);
-  console.log(`  Assets  ${result.summary.pages} pages · ${result.summary.resources} files · ${result.summary.sourceBytes} known bytes${result.summary.bytesUnknown ? ` · ${result.summary.bytesUnknown} sizes unknown` : ''}`);
-  console.log(`  Pages   ${result.summary.complete} complete · ${result.summary.partial} partial · ${result.summary.failed} failed · ${result.summary.blocked} blocked · ${result.summary.conflicts} conflicts · ${result.summary.notStartedPages} not started`);
-  console.log(`  Files   ${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesBlocked} blocked · ${result.summary.resourcesNotStarted} not started${result.summary.resourcesPlanned ? ` · ${result.summary.resourcesPlanned} planned` : ''} · ${result.summary.bytes} transferred bytes`);
-  console.log(`  Causes  ${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
-  console.log(`  Content ${result.summary.links} links${result.summary.diagrams ? ` · ${result.summary.diagrams} diagrams` : ''} · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
+
+  console.log();
+  summaryField('Source', `root + ${result.summary.selectedDescendants}/${result.summary.returnedDescendants} descendants · ${result.summary.excludedPages} excluded · depth ${result.summary.maximumDepth}`);
+  summaryField('Assets', `${result.summary.pages} pages · ${result.summary.resources} files · ${result.summary.sourceBytes} known bytes${result.summary.bytesUnknown ? ` · ${result.summary.bytesUnknown} sizes unknown` : ''}`);
+  summaryField('Content', `${result.summary.links} links${result.summary.diagrams ? ` · ${result.summary.diagrams} diagrams` : ''} · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
   if (result.summary.grids > 0) {
     const gridStatuses = result.summary.gridStatuses
       ? Object.entries(result.summary.gridStatuses).filter(([, count]) => count > 0).map(([status, count]) => `${count} ${status}`).join(' · ')
       : `${result.summary.gridsComplete ?? 0} complete · ${result.summary.gridsFailed ?? 0} failed`;
-    console.log(`  Grids   ${gridStatuses}`);
+    summaryField('Grids', gridStatuses);
   }
   if (result.summary.inventoryReusedPages || result.summary.inventoryRecoveryAttempts || result.summary.inventoryRemainingFailures) {
-    console.log(`  Inventory ${result.summary.inventoryReusedPages ?? 0} reused · ${result.summary.inventoryFreshPages ?? 0} fresh · ${result.summary.inventoryRecoveryAttempts ?? 0} recovery attempts${result.summary.inventoryRemainingFailures ? ` · ${result.summary.inventoryRemainingFailures} remaining failures` : ''}`);
+    summaryField('Inventory', `${result.summary.inventoryReusedPages ?? 0} reused · ${result.summary.inventoryFreshPages ?? 0} fresh · ${result.summary.inventoryRecoveryAttempts ?? 0} recovery attempts${result.summary.inventoryRemainingFailures ? ` · ${result.summary.inventoryRemainingFailures} remaining failures` : ''}`);
   }
-  console.log(`  Comments ${result.summary.comments} entries · ${result.summary.commentThreads} threads · ${result.summary.commentParticipants} participants · ${result.summary.commentAttachments} files · ${result.summary.commentBytes} bytes`);
+
+  console.log();
+  summaryField('Pages', `${result.summary.complete} complete · ${result.summary.partial} partial · ${result.summary.failed} failed · ${result.summary.blocked} blocked · ${result.summary.conflicts} conflicts · ${result.summary.notStartedPages} not started`);
+  summaryField('Files', `${result.summary.resourcesComplete} complete · ${result.summary.resourcesPartial} partial · ${result.summary.resourcesFailed} failed · ${result.summary.resourcesBlocked} blocked · ${result.summary.resourcesNotStarted} not started${result.summary.resourcesPlanned ? ` · ${result.summary.resourcesPlanned} planned` : ''} · ${result.summary.bytes} transferred bytes`);
+  summaryField('Comments', `${result.summary.comments} entries · ${result.summary.commentThreads} threads · ${result.summary.commentParticipants} participants · ${result.summary.commentAttachments} files · ${result.summary.commentBytes} bytes`);
   if ((result.summary.mentionOutcomes?.total ?? 0) > 0) {
     const mentions = result.summary.mentionOutcomes!;
     const outcomes = [
@@ -231,25 +238,30 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
       [result.summary.pageMentions ?? 0, 'page'],
       [result.summary.commentMentions ?? 0, 'comment'],
     ].filter(([count]) => Number(count) > 0).map(([count, label]) => `${count} ${label}`).join(' · ');
-    console.log(`  Mentions ${result.summary.mentionMode ?? 'off'} · ${mentions.total} total / ${result.summary.mentionIdentities ?? 0} identities${locations ? ` · ${locations}` : ''}${outcomes ? ` · ${outcomes}` : ''}`);
+    summaryField('Mentions', `${result.summary.mentionMode ?? 'off'} · ${mentions.total} total / ${result.summary.mentionIdentities ?? 0} identities${locations ? ` · ${locations}` : ''}${outcomes ? ` · ${outcomes}` : ''}`);
   }
-  console.log(`  Quality ${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.adaptations} adaptations · ${result.summary.normalizations} safe normalizations · ${result.summary.preservedExternalReferences} external references preserved`);
-  if (result.output) console.log(`  Output  ${result.output}`);
-  if (result.archive) console.log(`  Archive ${result.archive}`);
+
+  console.log();
+  summaryField('Causes', `${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
+  summaryField('Quality', `${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.adaptations} adaptations · ${result.summary.normalizations} safe normalizations · ${result.summary.preservedExternalReferences} external references preserved`);
+
+  if (result.output || result.archive || retry || result.hasErrors) console.log();
+  if (result.output) summaryField('Output', result.output);
+  if (result.archive) summaryField('Archive', result.archive);
   let retryIncomplete = false;
   if (retry) {
     const remainingRetryable = result.retry?.remainingRetryable ?? result.summary.retryableFailures;
     const remainingTerminal = result.retry?.remainingTerminal ?? Math.max(0,
       result.summary.partial + result.summary.failed + result.summary.blocked + result.summary.conflicts - remainingRetryable,
     );
-    console.log(`  Retry root    ${retry.rootRunId}`);
-    console.log(`  Previous run  ${retry.parentRunId}`);
-    console.log(`  Remaining     ${remainingRetryable} retryable · ${remainingTerminal} terminal`);
+    summaryField('Retry root', retry.rootRunId);
+    summaryField('Previous run', retry.parentRunId);
+    summaryField('Remaining', `${remainingRetryable} retryable · ${remainingTerminal} terminal`);
     retryIncomplete = remainingRetryable > 0 || remainingTerminal > 0;
   }
   if (result.hasErrors || retryIncomplete) {
     const continuation = migrationContinuationCommand(command, workspace.root, result.reportPaths.runId, retry);
-    console.log(`  ${retry ? 'Next' : 'Retry'}  ${continuation}`);
+    summaryField(retry ? 'Next' : 'Retry', continuation);
   }
   return {
     code: result.hasErrors || retryIncomplete ? 1 : 0,
