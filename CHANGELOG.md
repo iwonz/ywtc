@@ -2,6 +2,18 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.4.0](https://github.com/iwonz/ywtc/compare/v4.3.1...v4.4.0) (2026-10-23)
+
+
+### Features
+
+* **migration:** rewrite mapped pages without replacement ([941a8bf](https://github.com/iwonz/ywtc/commit/941a8bfc619f9653cf4164fabe732cdcd3a4c606))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.3.1 ([6fbd592](https://github.com/iwonz/ywtc/commit/6fbd592b0f7aed8ee88a08793511db207ec91ca3))
+
 ## [4.3.1](https://github.com/iwonz/ywtc/compare/v4.3.0...v4.3.1) (2026-10-23)
 
 
