@@ -121,6 +121,7 @@ export interface TransferReportPage {
 }
 
 export interface TransferInvocation {
+  rewrite?: boolean;
   source: {locator: string; profile: string};
   destination:
     | {type: 'remote'; locator: string; profile: string}

@@ -160,3 +160,14 @@ Retry planning SHALL select unresolved mention work caused by a typed transient 
 #### Scenario: Retry resolves the user
 - **WHEN** an actionable lookup later returns one verified destination user
 - **THEN** retry SHALL replace the fallback with the native mention, remove the resolved warning, and verify the updated page without duplicating destination objects
+
+### Requirement: Identity-preserving targeted rewrite
+The CLI SHALL accept `retry --rewrite` and `-R` while keeping ordinary actionable selection and restoring the source and destination invocation. Rewrite SHALL affect only selected pages and necessary in-place dependency recovery.
+
+#### Scenario: Operator requests targeted rewrite
+- **WHEN** retry selects actionable objects with rewrite enabled
+- **THEN** mapped selected pages SHALL be rebuilt in place without recreating any destination page or selecting unrelated complete pages
+
+#### Scenario: Origin invocation used rewrite
+- **WHEN** retry restores an invocation that recorded rewrite
+- **THEN** its identity-preserving no-create policy SHALL remain enabled even when the operator omits the flag

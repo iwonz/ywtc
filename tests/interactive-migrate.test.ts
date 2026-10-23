@@ -192,6 +192,7 @@ describe('interactive migration wizard', () => {
         sourceProfile: 'confluence',
         destination: 'team/archive',
         destinationProfile: 'yandex',
+        rewrite: true,
         scope: 'linked',
         comments: false,
       }),
@@ -199,7 +200,7 @@ describe('interactive migration wizard', () => {
       execute,
     });
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({
-      sourceProfile: 'confluence', destinationProfile: 'yandex', scope: 'linked', comments: false, dryRun: false,
+      sourceProfile: 'confluence', destinationProfile: 'yandex', scope: 'linked', comments: false, dryRun: false, rewrite: true,
     }));
     expect(prompter.initialValues).toContainEqual({id: 'migration.source.locator', value: 'https://conf.example.com/confluence/pages/viewpage.action?pageId=20'});
   });

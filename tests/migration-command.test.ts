@@ -17,6 +17,10 @@ function command(dryRun: boolean): ReadyMigrationCommand {
 }
 
 describe('migration continuation commands', () => {
+  it('retains rewrite in a preview continuation command', () => {
+    expect(migrationContinuationCommand({...command(true), rewrite: true}, '/tmp/ywtc')).toContain('--rewrite');
+  });
+
   it('uses a quieter heartbeat for durable non-TTY logs', () => {
     expect(progressHeartbeatInterval(true)).toBe(2_500);
     expect(progressHeartbeatInterval(false)).toBe(15_000);

@@ -38,6 +38,17 @@ async function config(source = yaml) {
 }
 
 describe('CLI and named profiles', () => {
+  it('parses identity-preserving rewrite and rejects fresh or filesystem combinations', () => {
+    for (const flag of ['--rewrite', '-R']) {
+      expect(parseCliArguments(['migrate', '-s', 'root', '-d', '100', flag])).toMatchObject({rewrite: true, fresh: false});
+      expect(parseCliArguments(['retry', '11111111-1111-4111-8111-111111111111', flag])).toMatchObject({rewrite: true});
+    }
+    expect(() => parseCliArguments(['migrate', '-s', 'root', '-d', '100', '--rewrite', '--fresh'])).toThrow(/--rewrite.*--fresh/);
+    expect(() => parseCliArguments(['migrate', '-s', 'root', '-d', './site', '--rewrite', '-f', 'html'])).toThrow(/--rewrite.*remote/);
+    expect(cliHelp('migrate')).toContain('-R, --rewrite');
+    expect(cliHelp('retry')).toContain('-R, --rewrite');
+  });
+
   it('parses interactive initialization and documents the TTY contract', () => {
     expect(parseCliArguments(['init', '--interactive', '--workdir', '~/guided'])).toEqual({
       command: 'init', interactive: true, workdir: '~/guided',

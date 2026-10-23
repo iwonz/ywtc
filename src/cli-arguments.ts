@@ -34,6 +34,7 @@ export type CliCommand =
     workdir?: string;
     dryRun: boolean;
     fresh: boolean;
+    rewrite?: boolean;
     concurrency?: number;
     stateFilename?: string;
     openReport: boolean;
@@ -41,7 +42,7 @@ export type CliCommand =
   }
   | {command: 'reports-list'; workdir?: string}
   | {command: 'reports-open'; runId?: string; workdir?: string}
-  | {command: 'retry'; runId: string; workdir?: string; dryRun: boolean; openReport: boolean; concurrency?: number}
+  | {command: 'retry'; runId: string; workdir?: string; dryRun: boolean; openReport: boolean; concurrency?: number; rewrite?: boolean}
   | {command: 'update'; install: boolean; via?: 'npm' | 'brew'};
 
 const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -124,6 +125,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('-w, --workdir <path>', 'workspace (configured CWD, then ~/.ywtc)')
     .option('-n, --dry-run', 'discover and render without destination writes', false)
     .option('-F, --fresh', 'ignore mappings and preserve existing live state as a backup', false)
+    .option('-R, --rewrite', 'rebuild and overwrite mapped remote pages in place; never create replacements', false)
     .option('-o, --open-report', 'open the generated HTML report in the system browser', false)
     .option('-j, --concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
     .option('-r, --state <path>', 'state path inside workdir')
@@ -134,6 +136,8 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       const destinationProfile = nonEmpty(options.destinationProfile, '--destination-profile');
       const workdir = nonEmpty(options.workdir, '--workdir');
       const stateFilename = nonEmpty(options.state, '--state');
+      if (options.rewrite && options.fresh) throw new Error('--rewrite cannot be combined with --fresh.');
+      if (options.rewrite && options.format) throw new Error('--rewrite requires a remote destination, not --format.');
       if (!options.interactive && (!source || !destination)) {
         throw new Error('migrate requires both --source and --destination unless --interactive is used.');
       }
@@ -147,6 +151,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
         archive: options.archive,
         dryRun: options.dryRun,
         fresh: options.fresh,
+        ...(options.rewrite ? {rewrite: true} : {}),
         openReport: options.openReport,
         interactive: options.interactive,
         ...(source ? {source} : {}),
@@ -166,6 +171,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('-w, --workdir <path>', 'workspace containing the report and state')
     .option('-n, --dry-run', 'plan the targeted retry without destination writes', false)
     .option('-o, --open-report', 'open the generated retry report in the system browser', false)
+    .option('-R, --rewrite', 'rebuild selected mapped remote pages in place; never create replacements', false)
     .option('-j, --concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
     .action((runIdValue: string, options) => {
       const runId = nonEmpty(runIdValue, 'run-id')!;
@@ -173,6 +179,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       const workdir = nonEmpty(options.workdir, '--workdir');
       onCommand({
         command: 'retry', runId, dryRun: options.dryRun, openReport: options.openReport,
+        ...(options.rewrite ? {rewrite: true} : {}),
         ...(workdir ? {workdir} : {}),
         ...(options.concurrency !== undefined ? {concurrency: options.concurrency} : {}),
       });

@@ -18,6 +18,7 @@ const issueSchema = z.object({
   code: z.string(), severity: z.string(), phase: z.string(), retryable: z.boolean(), occurrences: z.number(), message: z.string(),
 }).passthrough();
 const invocationSchema = z.object({
+  rewrite: z.boolean().optional(),
   source: z.object({locator: z.string(), profile: z.string()}).strict(),
   destination: z.discriminatedUnion('type', [
     z.object({type: z.literal('remote'), locator: z.string(), profile: z.string()}).strict(),

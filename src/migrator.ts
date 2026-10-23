@@ -97,6 +97,7 @@ export interface TransferOptions {
   dryRun: boolean;
   archive: boolean;
   fresh?: boolean;
+  rewrite?: boolean;
   concurrency: number;
   stateFilename?: string;
   runtimeDirectory: string;
@@ -427,6 +428,7 @@ async function updateMappedPage(input: {
   sourcePage: SourcePage;
   consistencyOptions: ConsistencyRetryOptions;
   report: TransferReport;
+  force?: boolean;
 }): Promise<{page: DestinationPage; updated: boolean; normalized: boolean; verification: ReturnType<typeof verifyDestinationContent>}> {
   let current = input.current;
   let title = input.title;
@@ -434,7 +436,7 @@ async function updateMappedPage(input: {
   let forbiddenRetried = false;
   for (let attempt = 0; ; attempt += 1) {
     const verification = verifyDestinationContent(input.body, current.content, input.destination.kind, input.sourcePage);
-    if (verification.status === 'complete' && current.title === title) {
+    if (!input.force && verification.status === 'complete' && current.title === title) {
       return {page: current, updated: false, normalized: current.content !== input.body, verification};
     }
     try {
@@ -1063,6 +1065,8 @@ export class Migrator {
   }
 
   private async runWithProgress(options: TransferOptions, progress: ContinuousProgress): Promise<TransferResult> {
+    if (options.rewrite && options.fresh) throw new Error('--rewrite cannot be combined with --fresh.');
+    if (options.rewrite && options.destination.type !== 'remote') throw new Error('--rewrite requires a remote destination.');
     const sourceStatus = options.sourceStatus ?? 'all';
     const commentsEnabled = options.comments ?? true;
     const mentionPolicy = this.config.mentions ?? {mode: 'off'};
@@ -1135,6 +1139,7 @@ export class Migrator {
         ? {provider: 'filesystem', id: options.destination.path, format: options.destination.format}
         : {provider: destination!.kind, profile: destination!.profile.name, id: container!.id, url: container!.url},
       invocation: {
+        ...(options.rewrite ? {rewrite: true} : {}),
         source: {locator: options.source.value, profile: options.source.profile.name},
         destination: options.destination.type === 'directory'
           ? {type: 'directory', path: options.destination.path, format: options.destination.format}
@@ -1177,7 +1182,7 @@ export class Migrator {
       scope: options.scope,
       sourceStatus,
       commentsEnabled,
-      fresh: options.fresh ?? false,
+      fresh: Boolean(options.fresh || options.rewrite),
     });
     await sourceInventoryStore.savePage(root);
     report.registerPages([{...root, depth: 0}]);
@@ -1419,7 +1424,7 @@ export class Migrator {
         if (options.signal?.aborted) throw options.signal.reason ?? new Error('Transfer cancelled');
         await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
         const sourcePage = await loadCachedPage(options.cacheDirectory, page.canonicalId);
-        const checkpoint = retryFullPageIds.has(page.canonicalId)
+        const checkpoint = options.rewrite || retryFullPageIds.has(page.canonicalId)
           ? undefined
           : await sourceInventoryStore.loadComplete(sourcePage);
         let result: PageInventoryResult;
@@ -1831,6 +1836,12 @@ export class Migrator {
     let output: string | undefined;
     let archive: string | undefined;
     try {
+      if (options.rewrite) {
+        const unmapped = graph.pages.filter((page) => !store.value.pages[page.canonicalId]?.destinationId);
+        if (unmapped.length > 0) {
+          throw new Error(`--rewrite requires existing destination mappings for every selected page; ${unmapped.length} mapping(s) are missing. Run an ordinary migration to establish mappings first.`);
+        }
+      }
       if (options.destination.type === 'directory') {
         progress.phase(`Filesystem export · preparing ${graph.pages.length} pages`);
         const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage, mentionPresentationsByPage, mentionReportItemsByPage, mentionPolicyHash, progress, scheduler);
@@ -2708,7 +2719,7 @@ export class Migrator {
             });
             report.resolveIssues({pageId: page.canonicalId, codes: ['destination-consistency-retry']});
           } catch (error) {
-            if (!(error instanceof ConfirmedDestinationMissingError) || options.dryRun) throw error;
+            if (!(error instanceof ConfirmedDestinationMissingError) || options.dryRun || options.rewrite) throw error;
             if (page.projectedParentId) {
               await verifyConfirmedDestinationPage(destination, parent as DestinationPage, this.consistencyOptions);
             }
@@ -2744,6 +2755,9 @@ export class Migrator {
           }
           if (!mappingRecovered && created.parentId !== parent.id) {
             const oldPage = created;
+            if (options.rewrite && (!destination.capabilities.reparentPages || !destination.reparentPage)) {
+              throw new Error(`--rewrite cannot repair parent for mapped page ${created.id} without changing its ID; destination does not support moving pages.`);
+            }
             if (options.dryRun) {
               report.addHierarchyRepair({
                 sourceCanonicalId: page.canonicalId,
@@ -2823,6 +2837,7 @@ export class Migrator {
             ...(container.space ? {space: container.space} : {}),
           };
         } else {
+          if (options.rewrite) throw new Error(`--rewrite cannot create a replacement for ${page.canonicalId}; no existing destination mapping.`);
           const allocation = await allocatePage(title);
           created = allocation.page;
           if (allocation.reused) {
@@ -3427,6 +3442,7 @@ export class Migrator {
             sourcePage: cachedPage,
             consistencyOptions: this.consistencyOptions,
             report,
+            ...(options.rewrite ? {force: true} : {}),
           });
           verified = update.page;
           recoveryExpectedBody = rendered.body;

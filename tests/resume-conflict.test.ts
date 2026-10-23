@@ -1,4 +1,4 @@
-import {mkdtemp, readdir, readFile} from 'node:fs/promises';
+import {mkdtemp, readdir, readFile, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
@@ -11,6 +11,7 @@ import type {
   SourcePage,
 } from '../src/domain.js';
 import {DestinationRevisionConflictError} from '../src/domain.js';
+import {HttpRequestError} from '../src/http.js';
 import type {Logger} from '../src/logger.js';
 import type {RemoteLocator} from '../src/locators.js';
 import {Migrator} from '../src/migrator.js';
@@ -110,6 +111,92 @@ async function setup() {
 }
 
 describe('resume, conflicts, and cancellation', () => {
+  it('rewrites an identical mapped page as a new version without changing its ID', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    const migrator = new Migrator(config, logger, factory);
+    const first = await migrator.run(options);
+    await migrator.run(options);
+    expect(adapters.counts()).toEqual({created: 1, updated: 0});
+    const rewritten = await migrator.run({...options, rewrite: true});
+    expect(rewritten).toMatchObject({status: 'completed', stateId: first.stateId, summary: {complete: 1, inventoryFreshPages: 1, inventoryReusedPages: 0}});
+    expect(adapters.counts()).toEqual({created: 1, updated: 1});
+    expect(adapters.page()).toMatchObject({id: '200', version: '2'});
+    const report = JSON.parse(await readFile(rewritten.reportPaths.json, 'utf8'));
+    expect(report.invocation.rewrite).toBe(true);
+  });
+
+  it('requires existing mappings before rewrite performs any destination mutation', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    await expect(new Migrator(config, logger, factory).run({...options, rewrite: true})).rejects.toThrow(/--rewrite.*mapping/);
+    expect(adapters.counts()).toEqual({created: 0, updated: 0});
+  });
+
+  it('does not recreate a missing mapped page in rewrite mode', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    const migrator = new Migrator(config, logger, factory, {sleep: async () => undefined});
+    const first = await migrator.run(options);
+    adapters.destination.verifyPage = async () => {throw new HttpRequestError('not found', 404);};
+    await expect(migrator.run({...options, rewrite: true})).resolves.toMatchObject({summary: {failed: 1}});
+    expect(adapters.counts()).toEqual({created: 1, updated: 0});
+    const state = JSON.parse(await readFile(first.stateFilename, 'utf8'));
+    expect(state.pages[root.canonicalId].destinationId).toBe('200');
+  });
+
+  it('previews a rewrite without changing existing state or destination', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    const migrator = new Migrator(config, logger, factory);
+    const first = await migrator.run(options);
+    const before = await readFile(first.stateFilename, 'utf8');
+    await migrator.run({...options, rewrite: true, dryRun: true});
+    expect(await readFile(first.stateFilename, 'utf8')).toBe(before);
+    expect(adapters.counts()).toEqual({created: 1, updated: 0});
+  });
+
+  it('refreshes an otherwise reusable inventory generation without discarding page mappings', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    let inventories = 0;
+    adapters.source.listResources = async () => {inventories += 1; return [];};
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    const migrator = new Migrator(config, logger, factory);
+    const first = await migrator.run(options);
+    const filename = path.join(options.cacheDirectory, 'inventory', first.stateId, 'manifest.json');
+    const manifest = JSON.parse(await readFile(filename, 'utf8'));
+    await writeFile(filename, JSON.stringify({...manifest, lifecycle: 'ready'}));
+    await migrator.run({...options, rewrite: true});
+    expect(inventories).toBe(2);
+    expect(JSON.parse(await readFile(filename, 'utf8')).generation).not.toBe(manifest.generation);
+    expect(adapters.counts()).toEqual({created: 1, updated: 1});
+  });
+
+  it('fails unsupported in-place reparent without creating a replacement', async () => {
+    const {config, options} = await setup();
+    const adapters = fixture();
+    const factory = (profile: ConnectionProfile) => profile.name === 'source' ? adapters.source : adapters.destination;
+    const migrator = new Migrator(config, logger, factory);
+    await migrator.run(options);
+    const verify = adapters.destination.verifyPage;
+    adapters.destination.verifyPage = async (page) => ({...await verify(page), parentId: 'wrong-parent'});
+    await expect(migrator.run({...options, rewrite: true})).resolves.toMatchObject({summary: {failed: 1}});
+    expect(adapters.counts()).toEqual({created: 1, updated: 0});
+  });
+
+  it('rejects incompatible rewrite options before adapter creation', async () => {
+    const {config, options} = await setup();
+    const factory = () => {throw new Error('unexpected adapter creation');};
+    const migrator = new Migrator(config, logger, factory);
+    await expect(migrator.run({...options, rewrite: true, fresh: true})).rejects.toThrow(/--rewrite.*--fresh/);
+    await expect(migrator.run({...options, rewrite: true, destination: {type: 'directory', path: '/tmp/export', format: 'html'}})).rejects.toThrow(/--rewrite.*remote/);
+  });
+
   it('resumes a mapped page without duplication and replaces destination edits from source', async () => {
     const {config, options} = await setup();
     const adapters = fixture();

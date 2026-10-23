@@ -50,6 +50,18 @@ async function writeReport(reports: string, runId: string, value: Record<string,
 }
 
 describe('retry report lineage', () => {
+  it('retains an optional identity-preserving rewrite policy in invocation evidence', async () => {
+    const target = await workspace();
+    await writeReport(target.reports, rootRun, report(rootRun, target.state, {invocation: {
+      rewrite: true,
+      source: {locator: 'root', profile: 'wiki'},
+      destination: {type: 'remote', locator: '100', profile: 'docs'},
+      scope: 'subtree', sourceStatus: 'all', comments: true, archive: false,
+      state: {mode: 'automatic', path: target.state},
+    }}));
+    expect((await resolveRetryBaseline(target.reports, rootRun, target.root)).invocation.rewrite).toBe(true);
+  });
+
   it('reconstructs current pre-retry reports and follows the newest live result in a lineage', async () => {
     const target = await workspace();
     await writeReport(target.reports, rootRun, report(rootRun, target.state));

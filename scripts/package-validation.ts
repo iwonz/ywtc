@@ -81,6 +81,7 @@ if (!initHelp.stdout.includes('--interactive') || !initHelp.stdout.includes('TTY
   throw new Error('Installed ywtc init help does not document the interactive TTY wizard');
 }
 const migrateHelp = await execFileAsync(executable, ['migrate', '--help'], {encoding: 'utf8'});
+if (!migrateHelp.stdout.includes('-R, --rewrite')) throw new Error('Installed ywtc migrate help is missing identity-preserving rewrite');
 for (const option of [
   '-i, --interactive', '-s, --source', '-d, --destination', '-S, --source-profile', '-D, --destination-profile',
   '-m, --scope', '-t, --source-status', '-C, --comments', '-N, --no-comments', '-f, --format', '-a, --archive',
@@ -89,6 +90,7 @@ for (const option of [
   if (!migrateHelp.stdout.includes(option)) throw new Error(`Installed ywtc migrate help is missing ${option}`);
 }
 const retryHelp = await execFileAsync(executable, ['retry', '--help'], {encoding: 'utf8'});
+if (!retryHelp.stdout.includes('-R, --rewrite')) throw new Error('Installed ywtc retry help is missing identity-preserving rewrite');
 for (const option of ['-w, --workdir', '-n, --dry-run', '-o, --open-report', '-j, --concurrency']) {
   if (!retryHelp.stdout.includes(option)) throw new Error(`Installed ywtc retry help is missing ${option}`);
 }

@@ -88,6 +88,7 @@ function resumeCommand(command: ReadyMigrationCommand, workdir: string, retry?: 
     ...(command.format ? [`--format ${command.format}`] : []),
     ...(command.archive ? ['--archive'] : []),
     ...(command.dryRun ? ['--dry-run'] : []),
+    ...(command.rewrite ? ['--rewrite'] : []),
     ...(command.comments ? [] : ['--no-comments']),
     ...(command.stateFilename ? [`--state ${JSON.stringify(command.stateFilename)}`] : []),
     `--workdir ${JSON.stringify(workdir)}`,
@@ -136,6 +137,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   console.log(`  Source state ${command.sourceStatus}`);
   console.log(`  Comments     ${command.comments ? 'enabled' : 'disabled'}`);
   console.log(`  Mode         ${command.dryRun ? paint(33, 'dry-run · read-only') : paint(35, 'live')}`);
+  if (command.rewrite) console.log('  Rewrite      existing destination IDs only · no page creation');
   if (retry) {
     console.log(`  Retry root   ${retry.rootRunId}`);
     console.log(`  Previous run ${retry.parentRunId}`);
@@ -159,6 +161,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
           dryRun: command.dryRun,
           archive: command.archive,
           fresh: command.fresh,
+          ...(command.rewrite ? {rewrite: true} : {}),
           concurrency: command.concurrency ?? config.concurrency,
           runtimeDirectory: workspace.statesDirectory,
           cacheDirectory: workspace.cacheDirectory,

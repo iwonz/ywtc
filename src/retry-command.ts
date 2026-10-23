@@ -51,6 +51,9 @@ export async function runRetryCommand(command: RetryCliCommand): Promise<number>
   }
 
   const invocation = baseline.invocation;
+  if ((command.rewrite || invocation.rewrite) && invocation.destination.type !== 'remote') {
+    throw new Error('--rewrite requires a remote destination, not a filesystem export.');
+  }
   const ready: ReadyMigrationCommand = {
     command: 'migrate',
     source: invocation.source.locator,
@@ -64,6 +67,7 @@ export async function runRetryCommand(command: RetryCliCommand): Promise<number>
     workdir: workspace.root,
     dryRun: command.dryRun,
     fresh: false,
+    ...(command.rewrite || invocation.rewrite ? {rewrite: true} : {}),
     ...(command.concurrency !== undefined ? {concurrency: command.concurrency} : {}),
     stateFilename: invocation.state.path,
     openReport: command.openReport,

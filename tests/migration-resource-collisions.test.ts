@@ -115,5 +115,9 @@ describe('migration resource name collisions', () => {
     await expect(migrator.run(options)).resolves.toMatchObject({status: 'completed', hasErrors: false});
     expect(uploaded).toHaveLength(2);
     expect(downloads).toBe(2);
+    await expect(migrator.run({...options, rewrite: true})).resolves.toMatchObject({status: 'completed', hasErrors: false});
+    expect(current?.id).toBe('200');
+    expect(uploaded).toHaveLength(2);
+    expect(downloads).toBe(2);
   });
 });

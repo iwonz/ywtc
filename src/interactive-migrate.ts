@@ -429,6 +429,7 @@ function readyCommand(draft: MigrationDraft, input: ParsedMigrationCommand, dryR
     workdir: draft.workspace.root,
     dryRun,
     fresh: input.fresh,
+    ...(input.rewrite ? {rewrite: true} : {}),
     openReport: input.openReport,
     ...(input.concurrency !== undefined ? {concurrency: input.concurrency} : {}),
     ...(input.stateFilename ? {stateFilename: input.stateFilename} : {}),
