@@ -2,6 +2,31 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.3.0](https://github.com/iwonz/ywtc/compare/v4.2.4...v4.3.0) (2026-10-22)
+
+
+### Features
+
+* **migration:** configure mention transfer ([5bd6ce8](https://github.com/iwonz/ywtc/commit/5bd6ce82a00d88fe11a423ffb64d46d2511e55c1))
+* **migration:** preserve diagrams and resume large assets ([d3bdc19](https://github.com/iwonz/ywtc/commit/d3bdc195db242322d6aa5ae633dafe35deaf23f8))
+
+
+### Bug Fixes
+
+* **ci:** install Playwright Chromium before checks ([e539bab](https://github.com/iwonz/ywtc/commit/e539babf414c9dbcb21f4b748e254c2efc6d7833))
+* **migration:** harden large migration correctness ([a5e6bba](https://github.com/iwonz/ywtc/commit/a5e6bba82ffae93441be4ab39a761bc77e69b041))
+
+
+### Documentation
+
+* define status conditions and consolidate maintenance contracts ([c1c74e5](https://github.com/iwonz/ywtc/commit/c1c74e5e314c4f47157ae4c762c7cb16bdec3cf3))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.2.4 ([98d1f51](https://github.com/iwonz/ywtc/commit/98d1f51057a1e2a76c57e584eadb8e7f241ec729))
+* **release:** retry after commitlint failure ([c18f895](https://github.com/iwonz/ywtc/commit/c18f89577efe039039bdfd212cb735e47ee48e99))
+
 ## [4.2.4](https://github.com/iwonz/ywtc/compare/v4.2.3...v4.2.4) (2026-10-22)
 
 
