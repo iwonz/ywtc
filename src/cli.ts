@@ -84,7 +84,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     console.log(`  Source    ${paint(32, `${result.source.product}${result.source.version ? ` ${result.source.version}` : ''}`)} · ${result.source.title}`);
     console.log(`  Dest      ${paint(32, `${result.destination.product}${result.destination.version ? ` ${result.destination.version}` : ''}`)}`);
     console.log(`  Scope     ${result.pages} pages · ${result.links} links · status ${result.sourceStatus}`);
-    console.log(`  Tree      ${result.returnedDescendants} descendants returned · ${result.selectedDescendants} selected · ${result.excludedPages} excluded · depth ${result.maximumDepth}`);
+    console.log(`  ${result.sourceKind === 'space' ? 'Space   ' : 'Tree    '}  ${result.returnedDescendants} ${result.sourceKind === 'space' ? 'pages' : 'descendants'} returned · ${result.selectedDescendants} selected · ${result.excludedPages} excluded · depth ${result.maximumDepth}`);
     console.log(`  Comments  ${result.comments.enabled ? `${result.comments.entries} entries · ${result.comments.threads} threads · destination write ${result.comments.destinationWrite}` : 'disabled'}`);
     for (const warning of result.warnings) console.log(`  ${paint(33, 'Warning')}   ${warning}`);
     return 0;
@@ -123,7 +123,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         const issues = `${report.errors} errors · ${report.warnings} warnings · ${report.degradations} degradations · ${report.adaptations ?? 0} adaptations`;
         console.log(`  ${report.runId}  ${report.finishedAt ?? report.startedAt}  ${report.status}`);
         if (report.retry) console.log(`    retry ${report.retry.attempt} · root ${report.retry.rootRunId} · parent ${report.retry.parentRunId}`);
-        console.log(`    ${report.direction} · ${report.scope} · source status ${report.sourceStatus} · ${report.selectedDescendants}/${report.returnedDescendants} descendants selected · ${report.excludedPages} excluded · depth ${report.maximumDepth}`);
+        console.log(`    ${report.direction} · ${report.scope} · source status ${report.sourceStatus} · ${report.selectedDescendants}/${report.returnedDescendants} ${report.sourceKind === 'space' ? 'space pages' : 'descendants'} selected · ${report.excludedPages} excluded · depth ${report.maximumDepth}`);
         console.log(`    source ${report.pages} pages · ${report.hierarchyGaps} hierarchy gaps · ${report.hierarchyRepairs} repaired · ${report.inventoryComplete ? 'inventory complete' : 'inventory incomplete'}`);
         if (report.inventoryReusedPages || report.inventoryRecoveryAttempts || report.inventoryRemainingFailures) {
           console.log(`    inventory ${report.inventoryReusedPages} reused · ${report.inventoryFreshPages} fresh · ${report.inventoryRecoveryAttempts} recovery attempts${report.inventoryRemainingFailures ? ` · ${report.inventoryRemainingFailures} remaining failures` : ''}`);

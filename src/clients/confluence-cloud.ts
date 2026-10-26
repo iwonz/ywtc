@@ -10,7 +10,7 @@ import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluenceSpace, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
 import {
   cloudCommentSchema,
   type CloudCommentPayload,
@@ -136,6 +136,37 @@ export class CloudConfluenceClient implements ConfluenceApi {
         ...(page._links.self ? {self: page._links.self} : {}),
       }} : {}),
     };
+  }
+
+  async getSpace(key: string): Promise<ConfluenceSpace> {
+    const space = await this.getSpaceByKey(key);
+    if (space.key !== key) throw new Error('Confluence source space key differs from the requested key');
+    return {id: space.id, key: space.key, name: space.name ?? space.key, ...(space.homepageId ? {homepageId: space.homepageId} : {})};
+  }
+
+  async getSpacePages(space: ConfluenceSpace, signal?: AbortSignal): Promise<ConfluencePage[]> {
+    const results = new Map<string, ConfluencePage>();
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      if (signal?.aborted) throw signal.reason ?? new Error('Space discovery cancelled');
+      if (cursor) {
+        if (seen.has(cursor)) throw new Error('Confluence Cloud space pagination cursor repeated');
+        seen.add(cursor);
+      }
+      const response = await this.readLimit(() => this.http.request<unknown>({method: 'GET', url: `/api/v2/spaces/${encodeURIComponent(space.id)}/pages`, ...(signal ? {signal} : {}), params: {'body-format': 'storage', limit: 100, ...(cursor ? {cursor} : {})}}));
+      const batch = parseConfluenceList(cloudPageSchema, response.data, 'listing Confluence Cloud source space pages');
+      let added = 0;
+      for (const item of batch.results) {
+        if (item.spaceId !== space.id) throw new Error('Confluence page belongs to another source space');
+        if (!results.has(item.id)) added += 1;
+        results.set(item.id, await this.normalizePage(item));
+      }
+      const next = batch._links?.next;
+      cursor = next ? new URL(next, `${this.baseUrl}/`).searchParams.get('cursor') ?? undefined : undefined;
+      if (next && (!cursor || added === 0)) throw new Error('Confluence Cloud space pagination made no progress');
+    } while (cursor);
+    return [...results.values()];
   }
 
   async getPage(id: string): Promise<ConfluencePage> {

@@ -40,7 +40,7 @@ const reportSchema = z.object({
   source: z.object({provider: z.enum(['yandex-wiki', 'confluence']), profile: z.string(), rootId: z.string(), title: z.string(), url: z.string()}).passthrough(),
   destination: z.object({provider: z.enum(['yandex-wiki', 'confluence', 'filesystem']), profile: z.string().optional(), id: z.string(), url: z.string().optional(), format: z.string().optional()}).passthrough(),
   state: z.object({id: z.string(), path: z.string(), mode: z.enum(['automatic', 'explicit']), source: z.string()}).passthrough(),
-  invocation: invocationSchema.optional(), retry: retrySchema.optional(), pages: z.array(pageSchema), excludedPages: z.array(z.unknown()),
+  invocation: invocationSchema.optional(), retry: retrySchema.optional(), container: pageSchema.optional(), pages: z.array(pageSchema), excludedPages: z.array(z.unknown()),
   edges: z.array(z.unknown()), hierarchyRepairs: z.array(z.unknown()), warnings: z.array(z.string()), errors: z.array(z.string()),
   issues: z.array(issueSchema), outputs: z.array(z.object({label: z.string(), value: z.string()})), summary: z.object({
     inventoryComplete: z.boolean(), inventoryRemainingFailures: z.number().optional().default(0), complete: z.number(), partial: z.number(),

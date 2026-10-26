@@ -341,6 +341,7 @@ export class TransferReport {
   }
 
   seedRetryBaseline(baseline: TransferReportData, attemptedPageIds: ReadonlySet<string>): void {
+    if (baseline.container) this.data.container = structuredClone(baseline.container);
     this.data.selection = structuredClone(baseline.selection);
     this.data.excludedPages = structuredClone(baseline.excludedPages);
     this.data.edges = structuredClone(baseline.edges);
@@ -371,6 +372,15 @@ export class TransferReport {
 
   registerPages(pages: DiscoveredPage[]): void {
     for (const page of pages) {
+      if (page.sourceSpace) {
+        if (!this.data.container) {
+          const real = {...page};delete real.sourceSpace;
+          this.registerPages([real]);
+          this.data.container = this.data.pages.pop()!;
+          this.data.container.comments.status = 'skipped';
+        }
+        continue;
+      }
       if (this.data.pages.some((item) => item.sourceCanonicalId === page.canonicalId)) continue;
       this.data.pages.push({
         sourceCanonicalId: page.canonicalId,
@@ -416,6 +426,10 @@ export class TransferReport {
   }
 
   updatePage(sourceCanonicalId: string, update: Partial<TransferReportPage>): void {
+    if (this.data.container?.sourceCanonicalId === sourceCanonicalId) {
+      this.data.container = {...this.data.container, ...update};
+      return;
+    }
     const index = this.data.pages.findIndex((page) => page.sourceCanonicalId === sourceCanonicalId);
     if (index < 0) throw new Error(`Report page ${sourceCanonicalId} is not registered`);
     this.data.pages[index] = {...this.data.pages[index]!, ...update};
@@ -434,7 +448,8 @@ export class TransferReport {
     page.normalizations = [...new Set(page.normalizations ?? [])];
     page.adaptations = [...new Set(page.adaptations ?? [])];
     const index = this.data.pages.findIndex((item) => item.sourceCanonicalId === page.sourceCanonicalId);
-    if (index >= 0) this.data.pages[index] = {...this.data.pages[index]!, ...page};
+    if (this.data.container?.sourceCanonicalId === page.sourceCanonicalId) this.data.container = {...this.data.container, ...page};
+    else if (index >= 0) this.data.pages[index] = {...this.data.pages[index]!, ...page};
     else this.data.pages.push(page);
     if (previews) this.previews.set(page.sourceCanonicalId, previews);
     if (this.data.selection.excluded.length > 0) this.data.excludedPages = reportExcludedPages(this.data.selection, this.data);
@@ -505,7 +520,7 @@ export class TransferReport {
   private finalizeOutcomes(status: RunStatus): void {
     if (this.data.dryRun) return;
     const interrupted = status === 'cancelled' || status === 'interrupted';
-    for (const page of this.data.pages) {
+    for (const page of [...(this.data.container ? [this.data.container] : []), ...this.data.pages]) {
       if (['discovered', 'planned', 'skeleton-created'].includes(page.status)) page.status = 'not-started';
       const dependencyBlocked = page.status === 'blocked' || page.status === 'failed' || page.status === 'conflict';
       const blockedByPageId = page.blockedByPageId ?? page.sourceCanonicalId;
@@ -539,7 +554,7 @@ export class TransferReport {
     this.data.status = status;
     this.data.finishedAt = new Date().toISOString();
     this.finalizeOutcomes(status);
-    const pageById = new Map(this.data.pages.map((page) => [page.sourceCanonicalId, page]));
+    const pageById = new Map([...(this.data.container ? [this.data.container] : []), ...this.data.pages].map((page) => [page.sourceCanonicalId, page]));
     this.data.issues = this.issueCollector.list().map((issue): TransferReportIssue => {
       const page = issue.pageId ? pageById.get(issue.pageId) : undefined;
       const resource = issue.resourceId ? page?.resourceItems.find((item) => item.sourceId === issue.resourceId) : undefined;
@@ -639,7 +654,7 @@ export class TransferReport {
       dependentComments: commentStatusCounts.blocked,
       retryableFailures: this.issueCollector.countRetryableFailures(),
       recoveredIssues: this.issueCollector.countResolved(),
-      inventoryComplete: this.data.pages.length > 0 && inventoriedPages === this.data.pages.length,
+      inventoryComplete: (this.data.pages.length > 0 || this.data.source.kind === 'space' && this.data.container?.inventoryStatus === 'complete') && inventoriedPages === this.data.pages.length,
       inventoriedPages,
       inventoryFailedPages,
       inventoryReusedPages: this.data.summary.inventoryReusedPages ?? 0,

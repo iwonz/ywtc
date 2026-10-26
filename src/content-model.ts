@@ -30,6 +30,7 @@ import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
 import {escapeMentionMarkdown, protectYfmMentions, protectConfluenceMentions as extractConfluenceMentions} from './mentions.js';
 import {safeLinkifyMatches} from './safe-linkify.js';
+import {confluenceSpaceKey} from './source-roots.js';
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -1352,6 +1353,16 @@ function relativeTarget(currentPath: string | undefined, targetPath: string): st
   return relative || path.posix.basename(targetPath);
 }
 
+function matchesSourceSpace(page: SourcePage, href: string, current?: SourcePage): boolean {
+  if (!page.sourceSpace) return false;
+  try {
+    const base = new URL(page.url);
+    base.pathname = base.pathname.replace(/\/(?:display|spaces|wiki\/spaces)\/.*$/, '');
+    const target = new URL(href, current?.url ?? page.url);
+    return confluenceSpaceKey(target.toString(), base.toString()) === page.sourceSpace.key;
+  } catch {return false;}
+}
+
 function rewritePortableHtml(html: string, context: RenderContext): string {
   const $ = load(html, null, false);
   $('a').each((_index, element) => {
@@ -1363,6 +1374,7 @@ function rewritePortableHtml(html: string, context: RenderContext): string {
     const yandexSlug = current?.provider === 'yandex-wiki' ? resolveYandexReferenceSlug(current, href) : undefined;
     const pageCandidate = [...context.sourcePages.values()].find((page) => (
       page.url === href
+      || matchesSourceSpace(page, href, current)
       || page.locator === href
       || href.endsWith(`/${page.locator}`)
       || (pageToken !== undefined && (page.id === pageToken || page.title === pageToken))
@@ -1577,6 +1589,13 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       const raw = $.html(element);
       warnings.push(`Active or embedded element <${element.tagName}> was preserved as inert source text`);
       $(element).replaceWith(`<pre><code>${escapeHtml(raw)}</code></pre>`);
+    });
+    $('a[href]').each((_index, element) => {
+      const href = $(element).attr('href')!;
+      const current = context.sourcePages.get(context.currentPageId);
+      const source = [...context.sourcePages.values()].find(candidate => matchesSourceSpace(candidate, href, current));
+      const destination = source ? context.pages.get(source.canonicalId) : undefined;
+      if (destination && 'url' in destination) $(element).attr('href', destination.url);
     });
     $('ac\\:image').each((_index, element) => {
       const image = $(element);

@@ -263,6 +263,7 @@ export interface TransferReportSummary {
 }
 
 export interface TransferReportData {
+  container?: TransferReportPage;
   runId: string;
   startedAt: string;
   finishedAt?: string;
@@ -274,7 +275,7 @@ export interface TransferReportData {
   sourceStatus: SourceStatus;
   selection: SourceSelection;
   direction: string;
-  source: {provider: ProviderKind; profile: string; rootId: string; title: string; url: string};
+  source: {provider: ProviderKind; profile: string; rootId: string; title: string; url: string; kind?: 'page' | 'space'};
   destination: {provider: ProviderKind | 'filesystem'; profile?: string; id: string; url?: string; format?: string};
   invocation?: TransferInvocation;
   retry?: TransferRetryMetadata;

@@ -9,6 +9,7 @@ import type {MigrationReportPaths} from './report.js';
 const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const reportListSchema = z.object({
+  source: z.object({kind: z.enum(['page', 'space']).optional()}).passthrough().optional(),
   runId: z.string().regex(runIdPattern),
   startedAt: z.string(),
   finishedAt: z.string().optional(),
@@ -77,6 +78,7 @@ const reportListSchema = z.object({
 });
 
 export interface ReportCatalogEntry {
+  sourceKind?: 'space';
   runId: string;
   startedAt: string;
   finishedAt?: string;
@@ -200,6 +202,7 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
   const parsed = reportListSchema.parse(JSON.parse(await readFile(json, 'utf8')));
   if (parsed.runId !== directoryName) throw new Error('report run ID does not match its directory');
   return {
+    ...(parsed.source?.kind === 'space' ? {sourceKind: 'space' as const} : {}),
     runId: parsed.runId,
     startedAt: parsed.startedAt,
     ...(parsed.finishedAt ? {finishedAt: parsed.finishedAt} : {}),

@@ -12,6 +12,7 @@ interface RetryPagePlan {
 }
 
 export interface RetryPlan {
+  retryContainer?: boolean;
   pages: Record<string, RetryPagePlan>;
   retryPageIds: string[];
   contextPageIds: string[];
@@ -74,6 +75,9 @@ export function buildRetryPlan(report: TransferReportData): RetryPlan {
   const plans = new Map<string, RetryPagePlan>();
   const byId = new Map(report.pages.map((page) => [page.sourceCanonicalId, page]));
   let terminal = 0;
+  const containerId = report.container?.sourceCanonicalId;
+  const retryContainer = Boolean(report.container && (report.container.status === 'not-started' || (['failed', 'partial', 'blocked'].includes(report.container.status) && actionableIssues(issuesForPage(report, report.container.sourceCanonicalId), 'page').length > 0)));
+  if (report.container && report.container.status !== 'complete' && !retryContainer) terminal += 1;
 
   for (const page of report.pages) {
     const issues = issuesForPage(report, page.sourceCanonicalId);
@@ -120,7 +124,7 @@ export function buildRetryPlan(report: TransferReportData): RetryPlan {
       const plan = plans.get(page.sourceCanonicalId)!;
       if (plan.decision !== 'terminal' || page.status !== 'blocked') continue;
       const blocker = page.blockedByPageId ? plans.get(page.blockedByPageId) : undefined;
-      if (blocker?.decision !== 'retry') continue;
+      if (blocker?.decision !== 'retry' && !(retryContainer && page.blockedByPageId === containerId)) continue;
       plan.decision = 'retry';
       plan.retryPage = true;
       plan.resourceIds = [...new Set([
@@ -156,12 +160,13 @@ export function buildRetryPlan(report: TransferReportData): RetryPlan {
 
   const selectedPlans = [...plans.values()].filter((plan) => plan.decision === 'retry');
   return {
+    ...(retryContainer ? {retryContainer: true} : {}),
     pages: Object.fromEntries(plans),
     retryPageIds: selectedPlans.map((plan) => plan.pageId),
     contextPageIds: [...contexts],
     selectedResourceIds: Object.fromEntries(selectedPlans.filter((plan) => plan.resourceIds.length > 0).map((plan) => [plan.pageId, plan.resourceIds])),
     selectedCommentPageIds: selectedPlans.filter((plan) => plan.retryComments).map((plan) => plan.pageId),
-    remainingRetryable: selectedPlans.length,
+    remainingRetryable: selectedPlans.length + (retryContainer ? 1 : 0),
     remainingTerminal: terminal,
     carriedForward: [...plans.values()].filter((plan) => plan.decision === 'resolved' || plan.decision === 'context').length,
     discoveryIncomplete: !report.summary.inventoryComplete || (report.summary.inventoryRemainingFailures ?? 0) > 0,

@@ -40,6 +40,7 @@ export interface ExportManifestPage {
 }
 
 export interface ExportManifest {
+  container?: ExportManifestPage;
   tool: 'ywtc';
   identity: string;
   format: ExportFormat;
@@ -84,6 +85,7 @@ const manifestPageSchema = z.object({
 }).strict();
 
 const exportManifestSchema = z.object({
+  container: manifestPageSchema.optional(),
   tool: z.literal('ywtc'),
   identity: z.string(),
   format: z.enum(['markdown', 'html']),
@@ -91,6 +93,18 @@ const exportManifestSchema = z.object({
   rootId: z.string(),
   pages: z.array(manifestPageSchema),
 }).strict();
+
+function manifestPages(manifest: ExportManifest): ExportManifestPage[] {
+  return [...(manifest.container ? [manifest.container] : []), ...manifest.pages];
+}
+
+function separateContainer(manifest: ExportManifest, graph: PageGraph): void {
+  if (!graph.pages.some(page => page.sourceSpace)) return;
+  const container = manifest.pages.find(page => page.sourceCanonicalId === graph.rootId);
+  if (!container) throw new Error('Space export is missing its generated index');
+  manifest.container = container;
+  manifest.pages = manifest.pages.filter(page => page.sourceCanonicalId !== graph.rootId);
+}
 
 export interface FilesystemExportResult {
   directory: string;
@@ -152,8 +166,8 @@ function manifestMatchesGraph(
   graph: PageGraph,
   pagePaths: ReadonlyMap<string, string>,
 ): boolean {
-  if (manifest.pages.length !== graph.pages.length) return false;
-  const pages = new Map(manifest.pages.map((page) => [page.sourceCanonicalId, page]));
+  if (manifestPages(manifest).length !== graph.pages.length) return false;
+  const pages = new Map(manifestPages(manifest).map((page) => [page.sourceCanonicalId, page]));
   return graph.pages.every((page) => {
     const previous = pages.get(page.canonicalId);
     return previous?.title === page.title
@@ -190,11 +204,11 @@ async function verifyGeneratedTree(directory: string, manifest: ExportManifest):
   const expected = [
     '.ywtc-export.json',
     ...(manifest.format === 'html' ? ['assets/site.css'] : []),
-    ...manifest.pages.flatMap((page) => [page.path, ...page.resources.map((resource) => resource.path)]),
-    ...manifest.pages.flatMap((page) => page.comments.archivePath ? [page.comments.archivePath] : []),
+    ...manifestPages(manifest).flatMap((page) => [page.path, ...page.resources.map((resource) => resource.path)]),
+    ...manifestPages(manifest).flatMap((page) => page.comments.archivePath ? [page.comments.archivePath] : []),
   ];
   await Promise.all(expected.map((relative) => access(path.join(directory, relative))));
-  for (const page of manifest.pages) {
+  for (const page of manifestPages(manifest)) {
     const filename = path.join(directory, page.path);
     const content = await readFile(filename, 'utf8');
     const references = manifest.format === 'html'
@@ -271,6 +285,7 @@ export class FilesystemExporter {
           ...(input.commentsByPage?.get(page.canonicalId)?.fingerprint ? {fingerprint: input.commentsByPage.get(page.canonicalId)!.fingerprint} : {}),
         },
       }));
+      separateContainer(manifest, input.graph);
       return {directory: input.directory, mode: 'planned', manifest, warnings, errors};
     }
 
@@ -287,7 +302,7 @@ export class FilesystemExporter {
       && manifestMatchesGraph(previousManifest, input.graph, pagePaths);
     if (patchExisting) {
       await cp(input.directory, staging, {recursive: true, errorOnExist: true});
-      manifest.pages = structuredClone(previousManifest.pages);
+      manifest.pages = structuredClone(manifestPages(previousManifest));
       for (const previous of previousManifest.pages) {
         if (pagePaths.has(previous.sourceCanonicalId)) pagePaths.set(previous.sourceCanonicalId, previous.path);
       }
@@ -314,7 +329,7 @@ export class FilesystemExporter {
       await Promise.all(pagesToProcess.map((page) => queue.add(async () => {
         if (input.signal?.aborted) throw input.signal.reason ?? new Error('Export cancelled');
         await input.onActivity?.(`Preparing export page · ${page.title}`);
-        const resources = input.resourcesByPage?.get(page.canonicalId) ?? await this.source.listResources(page);
+        const resources = page.sourceSpace ? [] : input.resourcesByPage?.get(page.canonicalId) ?? await this.source.listResources(page);
         resourcesByPage.set(page.canonicalId, resources);
         const pageResources = sourceResourceBindings(page, resources);
         const nameAllocator = new DestinationNameAllocator();
@@ -464,9 +479,12 @@ export class FilesystemExporter {
           ...(input.mentionPresentationsByPage?.get(page.canonicalId) ? {mentions: input.mentionPresentationsByPage.get(page.canonicalId)!} : {}),
         };
         const rendered = input.format === 'html' ? await renderStaticHtml(document, context) : await renderMarkdown(document, context);
+        const spaceIndex = page.sourceSpace && input.format === 'markdown'
+          ? input.graph.pages.filter(candidate => !candidate.sourceSpace).map(candidate => `${'  '.repeat(Math.max(0, candidate.depth - 1))}- [${candidate.title.replace(/[[\]\\]/g, '\\$&')}](${relativeHref(relative, pagePaths.get(candidate.canonicalId)!)})`).join('\n')
+          : '';
         const output = input.format === 'html'
           ? htmlPage(page.title, navigationFor(relative), `${rendered.body}${commentBodies.get(page.canonicalId) ?? ''}`, relativeHref(relative, 'assets/site.css'))
-          : `# ${page.title}\n\n${rendered.body}${commentBodies.has(page.canonicalId) ? `\n\n## Комментарии\n\n${commentBodies.get(page.canonicalId)}` : ''}`;
+          : `# ${page.title}\n\n${spaceIndex || rendered.body}${commentBodies.has(page.canonicalId) ? `\n\n## Комментарии\n\n${commentBodies.get(page.canonicalId)}` : ''}`;
         await mkdir(path.dirname(path.join(staging, relative)), {recursive: true});
         await writeFile(path.join(staging, relative), output, {mode: 0o600});
         const manifestPage = manifest.pages.find((item) => item.sourceCanonicalId === page.canonicalId)!;
@@ -488,6 +506,7 @@ export class FilesystemExporter {
         await mkdir(path.join(staging, 'assets'), {recursive: true});
         await writeFile(path.join(staging, 'assets/site.css'), SITE_CSS, {mode: 0o600});
       }
+      separateContainer(manifest, input.graph);
       await writeFile(path.join(staging, '.ywtc-export.json'), `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o600});
       await input.onActivity?.('Verifying generated export tree');
       await verifyGeneratedTree(staging, manifest);

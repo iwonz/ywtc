@@ -2,6 +2,7 @@ export type Locale = 'ru' | 'en';
 
 const dictionaries = {
   en: {
+    spaceContainer: 'Space section',
     report: 'Transfer report', source: 'Source', destination: 'Destination', status: 'Status', started: 'Started', finished: 'Finished',
     scope: 'Scope', sourceStatus: 'Source status', dryRun: 'Dry run', live: 'Live transfer', summary: 'Summary', metric: 'Metric', quality: 'Quality', next: 'next',
     pages: 'Pages', files: 'Files', comments: 'Comments', mentions: 'Mentions', identities: 'identities', data: 'Data volume', found: 'found', selected: 'selected', excluded: 'excluded',
@@ -25,6 +26,7 @@ const dictionaries = {
     degradation: 'Degradation', adaptation: 'Adaptation', normalization: 'Safe normalization', externalReferences: 'external references preserved', technical: 'Technical diagnostics', technicalDetails: 'Technical details', resultLink: 'Open result', notAvailable: 'Not available',
   },
   ru: {
+    spaceContainer: 'Раздел пространства',
     report: 'Отчёт о переносе', source: 'Источник', destination: 'Назначение', status: 'Статус', started: 'Начало', finished: 'Завершение',
     scope: 'Охват', sourceStatus: 'Статус source', dryRun: 'Проверочный запуск', live: 'Перенос', summary: 'Краткая сводка', metric: 'Параметр', quality: 'Качество', next: 'далее',
     pages: 'Страницы', files: 'Файлы', comments: 'Комментарии', mentions: 'Упоминания', identities: 'идентификаторов', data: 'Объём данных', found: 'найдено', selected: 'выбрано', excluded: 'исключено',

@@ -226,6 +226,8 @@ export interface YandexWikiApi {
 }
 
 export interface ConfluenceApi {
+  getSpace?(key: string): Promise<ConfluenceSpace>;
+  getSpacePages?(space: ConfluenceSpace, signal?: AbortSignal): Promise<ConfluencePage[]>;
   getCurrentUser(): Promise<Record<string, unknown>>;
   preflight?(): Promise<ConfluencePlatformInfo>;
   resolveTarget(input: string): Promise<ConfluencePage>;
@@ -262,4 +264,11 @@ export interface ConfluenceApi {
   getComment(commentId: string): Promise<ConfluenceComment>;
   createComment(input: {pageId: string; storage: string}): Promise<ConfluenceComment>;
   updateComment(input: {commentId: string; storage: string; version?: number}): Promise<ConfluenceComment>;
+}
+
+export interface ConfluenceSpace {
+  id: string;
+  key: string;
+  name: string;
+  homepageId?: string;
 }

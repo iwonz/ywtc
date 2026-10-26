@@ -348,6 +348,8 @@ const mentionsServer = createServer((request, response) => {
   mentionsRequests.push(`${request.method} ${request.url}`);
   response.setHeader('Content-Type', 'application/json');
   if (request.url?.startsWith('/rest/api/settings/systemInfo')) response.end(JSON.stringify({version: '9.5.2'}));
+  else if (request.url?.startsWith('/rest/api/space/~user/content/page')) response.end(JSON.stringify({results: ['1', '2'].map(id => ({id, type: 'page', title: `Personal ${id}`, status: 'current', space: {id: '7', key: '~user'}, version: {number: 1}, ancestors: [], body: {storage: {value: `<p>Hello <ac:link><ri:user ri:username="user${id}"/></ac:link></p>`, representation: 'storage'}}}))}));
+  else if (request.url?.startsWith('/rest/api/space/~user')) response.end(JSON.stringify({id: '7', key: '~user', name: 'Personal notes'}));
   else if (request.url?.startsWith('/rest/api/content/1')) response.end(JSON.stringify({id: '1', type: 'page', title: 'Mentions', status: 'current', space: {key: 'DOC'}, version: {number: 1}, ancestors: [], body: {storage: {value: '<p>Hello <ac:link><ri:user ri:username="ivan"/></ac:link></p>', representation: 'storage'}}, _links: {webui: '/pages/1'}}));
   else {response.statusCode = 500;response.end(JSON.stringify({message: 'Unexpected endpoint in source-only export'}));}
 });
@@ -369,6 +371,12 @@ try {
   await execFileAsync(process.execPath, ['--input-type=module', '--eval', accept], {encoding: 'utf8'});
   if (mentionsRequests.some(value => !value.startsWith('GET ') || /attachment|grid|comment/.test(value))) throw new Error(`Export used non-source endpoints: ${mentionsRequests.join(', ')}`);
   if ((await readdir(mentionsWorkspace)).includes('.states')) throw new Error('Mentions export mutated migration state');
+  const spaceOutput = path.join(temporary, 'installed-personal-mentions');
+  await execFileAsync(executable, ['mentions', 'export', '-s', `${instance}/spaces/viewspace.action?key=~user`, '-N', '-w', mentionsWorkspace, '-o', spaceOutput], {encoding: 'utf8'});
+  const personal = JSON.parse(await readFile(path.join(spaceOutput, 'decisions.json'), 'utf8'));
+  if (personal.entries.length !== 2 || personal.inventory.selectedPages !== 2 || !personal.inventory.complete) throw new Error('Packaged personal space export omitted an independent branch or counted its container');
+  if (mentionsRequests.some(value => !value.startsWith('GET ') || /attachment|grid|comment|content\/space/.test(value))) throw new Error('Packaged personal export crossed its source-only boundary');
+  if ((await readdir(mentionsWorkspace)).includes('.states')) throw new Error('Personal mention export mutated migration state');
 } finally {await new Promise<void>((resolve, reject) => mentionsServer.close(error => error ? reject(error) : resolve()));}
 process.stdout.write('Verifying packaged autonomous report generation...\n');
 const installedReportDirectory = path.join(temporary, 'installed-report');

@@ -165,6 +165,7 @@ export interface StateRun {
 }
 
 export interface TransferState {
+  container?: PageTransferState;
   identity: TransferIdentity;
   createdAt: string;
   updatedAt: string;
@@ -407,6 +408,7 @@ const runSchema = z.object({
 }).strict();
 
 const transferStateSchema = z.object({
+  container: pageStateSchema.optional(),
   identity: transferIdentitySchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -631,8 +633,13 @@ export class StateStore {
   }
 
   async setPage(page: PageTransferState): Promise<void> {
-    this.value.pages[page.sourceCanonicalId] = page;
+    if (this.value.identity.source.objectId.startsWith('space:') && page.sourceId === this.value.identity.source.objectId) this.value.container = page;
+    else this.value.pages[page.sourceCanonicalId] = page;
     if (!this.readOnly) await this.save();
+  }
+
+  page(id: string): PageTransferState | undefined {
+    return this.value.container?.sourceCanonicalId === id ? this.value.container : this.value.pages[id];
   }
 
   async finalizeOutcomes(pageIds: string[], status: RunStatus, dryRun: boolean): Promise<void> {
@@ -640,7 +647,7 @@ export class StateStore {
     const interrupted = status === 'cancelled' || status === 'interrupted';
     const updatedAt = new Date().toISOString();
     for (const pageId of pageIds) {
-      const page = this.value.pages[pageId];
+      const page = this.page(pageId);
       if (!page) continue;
       if (['discovered', 'planned', 'skeleton-created'].includes(page.status)) page.status = 'not-started';
       const dependencyBlocked = page.status === 'blocked' || page.status === 'failed' || page.status === 'conflict';

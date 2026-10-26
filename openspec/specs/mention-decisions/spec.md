@@ -76,3 +76,14 @@ The editor SHALL work through file URLs with embedded initial JSON, search, all/
 #### Scenario: Coverage is incomplete or empty
 - **WHEN** an imported catalog has inventory failures or no entries
 - **THEN** the editor SHALL show the actual coverage limitation or a concise empty state without inventing successful zero measurements
+
+### Requirement: Personal-root mention selection
+Source-only mention export SHALL accept the same personal page and space roots and scope/status semantics as migration while scanning only real selected pages and enabled comments.
+
+#### Scenario: Whole personal space is scanned
+- **WHEN** mentions export selects a space with subtree scope
+- **THEN** it SHALL scan independent branches as well as homepage descendants without resource APIs, destination calls, container creation or migration state changes
+
+#### Scenario: Empty personal space is scanned
+- **WHEN** a complete subtree inventory contains no real pages
+- **THEN** the document SHALL contain an empty entries list and complete inventory without invented page or comment occurrences

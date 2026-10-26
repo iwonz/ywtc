@@ -4,8 +4,10 @@ import {assertTransferCapabilities, type SourceStatus, type TransferScope} from 
 import {discoverPageGraph} from './graph.js';
 import {loadMentionPolicy} from './mention-policy.js';
 import {sameRemoteInstance, type ResolvedLocator, type RemoteLocator} from './locators.js';
+import {realSourcePages, resolveSourceRoot} from './source-roots.js';
 
 export interface DoctorResult {
+  sourceKind?: 'space';
   source: {profile: string; provider: string; product: string; version?: string; id: string; title: string};
   destination: {profile?: string; provider: string; product: string; version?: string; id: string};
   pages: number;
@@ -36,11 +38,12 @@ export async function runCapabilityDoctor(
     destination?.preflight(),
   ]);
   const [root, container] = await Promise.all([
-    source.resolvePage(sourceLocator.value),
+    resolveSourceRoot(source, sourceLocator.value),
     destinationLocator.type === 'remote' && destination ? destination.resolveContainer(destinationLocator.value) : undefined,
   ]);
   const graph = await discoverPageGraph({adapter: source, root, scope, sourceStatus});
-  const commentInventory = comments && source.readComments ? await source.readComments(root) : undefined;
+  const commentPage = root.sourceSpace ? realSourcePages(graph.pages)[0] : root;
+  const commentInventory = comments && source.readComments && commentPage ? await source.readComments(commentPage) : undefined;
   const commentWarnings = [...(commentInventory?.warnings ?? [])];
   const destinationCommentWrite = !comments || destinationLocator.type === 'directory'
     ? 'skipped' as const
@@ -59,6 +62,7 @@ export async function runCapabilityDoctor(
     throw new Error('The destination belongs to the selected source graph. Choose a destination outside that graph.');
   }
   return {
+    ...(root.sourceSpace ? {sourceKind: 'space' as const} : {}),
     source: {
       profile: source.profile.name,
       provider: source.kind,
@@ -76,7 +80,7 @@ export async function runCapabilityDoctor(
         ...(destinationPlatform?.version ? {version: destinationPlatform.version} : {}),
         id: container!.id,
       },
-    pages: graph.pages.length,
+    pages: realSourcePages(graph.pages).length,
     returnedDescendants: graph.selection.returnedDescendants,
     selectedDescendants: graph.selection.selectedDescendants,
     excludedPages: graph.selection.excluded.length,
@@ -86,7 +90,7 @@ export async function runCapabilityDoctor(
     warnings: [...sourcePlatform.warnings, ...(destinationPlatform?.warnings ?? []), ...graph.warnings, ...commentWarnings],
     comments: {
       enabled: comments,
-      readable: !comments || Boolean(commentInventory),
+      readable: !comments || !commentPage || Boolean(commentInventory),
       threads: commentInventory?.threads.length ?? 0,
       entries: commentInventory?.comments ?? 0,
       destinationWrite: destinationCommentWrite,

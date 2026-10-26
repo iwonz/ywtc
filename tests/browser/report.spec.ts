@@ -16,6 +16,22 @@ function reportPage(input: Partial<TransferReportPage> & Pick<TransferReportPage
 
 let reportUrl: string;
 
+test('space section is a separate offline hierarchy node with real-page totals', async ({page}) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-space-report-browser-'));
+  const report = new TransferReport({runId: '00000000-0000-4000-8000-000000000019', dryRun: false, scope: 'subtree', commentsEnabled: false, direction: 'confluence → html', source: {provider: 'confluence', profile: 'source', rootId: 'space:7', title: 'Personal notes', url: 'https://confluence.example.com/display/~user', kind: 'space'}, destination: {provider: 'filesystem', id: '/tmp/export', format: 'html'}, state: {id: 'fixture', path: '/tmp/state.json', mode: 'automatic', source: 'new'}});
+  report.data.container = reportPage({sourceCanonicalId: 'source:confluence:space:7', sourceId: 'space:7', sourceTitle: 'Personal notes', sourceUrl: 'https://confluence.example.com/display/~user', status: 'complete', destinationUrl: 'file:///tmp/export/index.html'});
+  report.addPage(reportPage({sourceCanonicalId: 'source:confluence:10', sourceId: '10', sourceTitle: 'Independent branch', status: 'complete', depth: 1, projectedParentId: 'source:confluence:space:7'}));
+  report.setSelection({requestedStatus: 'all', effectiveStatus: 'all', returnedDescendants: 1, selectedDescendants: 1, excluded: [], maximumDepth: 1, hierarchyGaps: [], notes: []});
+  report.finish('completed');expect(report.data.summary.pages).toBe(1);
+  const remote: string[] = [];page.on('request', request => {if (/^https?:/.test(request.url())) remote.push(request.url());});
+  await page.goto(pathToFileURL((await report.write(temporary)).html).toString());
+  const section = page.getByRole('treeitem').filter({hasText: 'Personal notes'});
+  await expect(section).toHaveAttribute('aria-level', '1');
+  await expect(page.getByRole('treeitem').filter({hasText: 'Independent branch'})).toHaveAttribute('aria-level', '2');
+  await section.click();await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');expect(remote).toEqual([]);
+});
+
 test.beforeAll(async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-report-browser-'));
   const report = new TransferReport({

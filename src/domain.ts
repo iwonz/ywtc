@@ -78,6 +78,8 @@ export interface PageReference {
 }
 
 export interface SourcePage {
+  /** Explicit generated section work item; never a provider page. */
+  sourceSpace?: import('./types.js').ConfluenceSpace;
   provider: ProviderKind;
   profile: string;
   id: string;
@@ -345,6 +347,8 @@ export interface SourcePageCheckpoint {
 }
 
 export interface SourceAdapter {
+  resolveRoot?(locator: string): Promise<SourceRoot>;
+  getSpacePages?(space: import('./types.js').ConfluenceSpace, checkpoint?: SourcePageCheckpoint, signal?: AbortSignal): Promise<SourcePage[]>;
   readonly profile: ConnectionProfile;
   readonly kind: ProviderKind;
   readonly capabilities: AdapterCapabilities;
@@ -360,6 +364,8 @@ export interface SourceAdapter {
   readComments?(page: SourcePage): Promise<CommentInventory>;
   downloadResource(resource: SourceResource, destination: string, page?: SourcePage): Promise<{path: string; size: number; sha256: string; mimeType?: string}>;
 }
+
+export type SourceRoot = {kind: 'page'; item: SourcePage} | {kind: 'space'; item: SourcePage & {sourceSpace: import('./types.js').ConfluenceSpace}};
 
 export interface DestinationAdapter {
   readonly profile: ConnectionProfile;

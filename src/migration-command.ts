@@ -214,7 +214,7 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   await printAndMaybeOpenReport(result.reportPaths, workspace.root, command.openReport);
 
   console.log();
-  summaryField('Source', `root + ${result.summary.selectedDescendants}/${result.summary.returnedDescendants} descendants · ${result.summary.excludedPages} excluded · depth ${result.summary.maximumDepth}`);
+  summaryField('Source', `${result.sourceKind === 'space' ? 'space ·' : 'root +'} ${result.summary.selectedDescendants}/${result.summary.returnedDescendants} ${result.sourceKind === 'space' ? 'pages' : 'descendants'} · ${result.summary.excludedPages} excluded · depth ${result.summary.maximumDepth}`);
   summaryField('Assets', `${result.summary.pages} pages · ${result.summary.resources} files · ${result.summary.sourceBytes} known bytes${result.summary.bytesUnknown ? ` · ${result.summary.bytesUnknown} sizes unknown` : ''}`);
   summaryField('Content', `${result.summary.links} links${result.summary.diagrams ? ` · ${result.summary.diagrams} diagrams` : ''} · ${result.summary.cycles} traversal cycles · inventory ${result.summary.inventoryComplete ? 'complete' : 'incomplete'}`);
   if (result.summary.grids > 0) {

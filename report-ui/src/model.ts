@@ -3,6 +3,7 @@ import type {ReportPresentationStatus, TransferReportData, TransferReportExclude
 export type ReportTreeFilter = 'all' | 'problems' | 'partial' | 'failed' | 'blocked' | 'conflict' | 'excluded';
 
 export interface ReportTreeNode {
+  container?: boolean;
   id: string;
   title: string;
   status: ReportPresentationStatus;
@@ -50,10 +51,11 @@ function pageSearchText(report: TransferReportData, page: TransferReportPage): s
 
 export function buildReportTree(report: TransferReportData): ReportTree {
   const nodes = new Map<string, ReportTreeNode>();
-  for (const page of report.pages) {
+  for (const page of [...(report.container ? [report.container] : []), ...report.pages]) {
     nodes.set(page.sourceCanonicalId, {
       id: page.sourceCanonicalId,
       title: page.sourceTitle,
+      ...(page.sourceCanonicalId === report.container?.sourceCanonicalId ? {container: true} : {}),
       status: page.status,
       ...(page.projectedParentId ?? page.parentId ? {parentId: page.projectedParentId ?? page.parentId} : {}),
       depth: page.depth,

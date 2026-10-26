@@ -217,7 +217,7 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
       sourceRequired: true,
       destinationRequired: true,
       source: countText([
-        [summary.returnedDescendants + 1, t('found')],
+        [summary.returnedDescendants + (report.source.kind === 'space' ? 0 : 1), t('found')],
         [summary.pages, t('selected')],
         [summary.excludedPages, t('excluded')],
       ]),
@@ -369,6 +369,7 @@ function TreeRow({node, expanded, hasChildren, t, toggle, open}: {node: ReportTr
         <Group gap="xs" wrap="wrap">
           <Text fw={600} size="sm" className="tree-title">{node.synthetic ? t('unknownPosition') : node.title}</Text>
           <StatusBadge status={node.status} t={t} />
+          {node.container && <Badge size="xs" variant="light" color="gray">{t('spaceContainer')}</Badge>}
         </Group>
         {counters && <Text size="xs" c="dimmed" mt={3}>{counters}</Text>}
         {node.excluded && <Text size="xs" c="dimmed" mt={3}>{node.excluded.reason}{node.excluded.sourceStatus ? ` · ${node.excluded.sourceStatus}` : ''}</Text>}

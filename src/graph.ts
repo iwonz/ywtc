@@ -49,6 +49,7 @@ function assertSubtreeContainment(root: SourcePage, pages: SourcePage[]): void {
   const rootLocator = root.locator.replace(/^\/+|\/+$/g, '');
   for (const page of pages) {
     if (page.canonicalId === root.canonicalId) continue;
+    if (root.sourceSpace && (page.space === root.sourceSpace.key || page.space === root.sourceSpace.id)) continue;
     const ancestorMatch = page.ancestorIds?.includes(root.id) ?? false;
     const locatorMatch = page.provider === 'yandex-wiki'
       && page.locator.replace(/^\/+/, '').startsWith(`${rootLocator}/`);
@@ -72,6 +73,7 @@ export async function discoverPageGraph(input: {
   checkpoint?: SourcePageCheckpoint;
 }): Promise<PageGraph> {
   const {adapter, root, scope, signal, onProgress, checkpoint} = input;
+  if (root.sourceSpace) return discoverSpaceGraph(input);
   const requestedStatus = input.sourceStatus ?? 'all';
   const supportsSourceStatus = adapter.supportsSourceStatus?.(scope, requestedStatus) ?? requestedStatus === 'all';
   if (!supportsSourceStatus) {
@@ -247,4 +249,61 @@ export async function discoverPageGraph(input: {
   };
   onProgress?.({pages: pages.length, edges: edges.length});
   return {rootId: root.canonicalId, pages, edges, warnings, selection};
+}
+
+async function discoverSpaceGraph(input: Parameters<typeof discoverPageGraph>[0]): Promise<PageGraph> {
+  const {adapter, root, scope, checkpoint} = input;
+  const space = root.sourceSpace!;
+  const status = input.sourceStatus ?? 'all';
+  let selected: SourcePage[];
+  let linked: PageGraph | undefined;
+  if (scope === 'subtree') {
+    if (!adapter.getSpacePages) throw new Error('Source does not support complete space enumeration');
+    selected = await adapter.getSpacePages(space, checkpoint, input.signal);
+  } else {
+    if (!space.homepageId) throw new Error(`Confluence space ${space.key} has no homepage; use --scope subtree to transfer its pages`);
+    const home = await adapter.getPage(space.homepageId);
+    if (home.id !== space.homepageId || (home.space !== space.key && home.space !== space.id)) throw new Error('Confluence space homepage identity or membership is invalid');
+    await checkpoint?.savePage(home);
+    linked = await discoverPageGraph({...input, root: home});
+    selected = linked.pages;
+  }
+  const all = new Map(selected.map(page => [page.id, page]));
+  if (all.size !== selected.length) throw new Error('Confluence source space contains duplicate page IDs');
+  const hydrated = selected.map(page => {
+    const ancestors: string[] = [];
+    const seen = new Set([page.id]);
+    let parent = page.parentId;
+    while (parent) {
+      if (seen.has(parent)) throw new Error(`Confluence source space hierarchy cycle at ${page.id}`);
+      seen.add(parent);ancestors.unshift(parent);
+      parent = all.get(parent)?.parentId;
+    }
+    const fullAncestors = [...(page.ancestorIds ?? []).filter(id => !ancestors.includes(id)), ...ancestors];
+    return {...page, ...(fullAncestors.length ? {ancestorIds: fullAncestors} : {})};
+  });
+  if (scope === 'subtree' && status === 'current' && hydrated.some(page => page.sourceStatus === undefined)) throw new Error('Confluence space API did not expose page status for --source-status current');
+  const excluded = hydrated.filter(page => scope === 'subtree' && status === 'current' && page.sourceStatus !== 'current');
+  const included = hydrated.filter(page => !excluded.includes(page));
+  // The ordinary projector still handles nearest selected ancestors and hierarchy gaps.
+  const projectionAdapter = Object.create(adapter) as SourceAdapter;
+  const projectionRoot = {...root};
+  delete projectionRoot.sourceSpace;
+  // Membership has been validated by the space adapter, not by homepage ancestry.
+  const projectedPages = included.map(page => ({...page, ancestorIds: [root.id, ...(page.ancestorIds ?? [])]}));
+  projectionAdapter.getDescendants = async () => ({
+    pages: projectedPages,
+    returned: hydrated.length,
+    excluded: excluded.map(page => ({id: page.id, canonicalId: page.canonicalId, locator: page.locator, title: page.title, url: page.url, ...(page.parentId ? {parentId: page.parentId} : {}), ...(page.ancestorIds ? {ancestorIds: page.ancestorIds} : {}), reason: 'source-status' as const, status: 'non-current' as const, metadataComplete: true})),
+    effectiveStatus: status,
+    notes: [],
+  });
+  const graph = await discoverPageGraph({...input, adapter: projectionAdapter, root: projectionRoot, scope: 'subtree', onProgress: progress => input.onProgress?.({...progress, pages: Math.max(0, progress.pages - 1)})});
+  graph.pages = graph.pages.map(page => page.canonicalId === root.canonicalId ? {...page, sourceSpace: space} : {...page, ancestorIds: (page.ancestorIds ?? []).filter(id => id !== root.id)});
+  if (linked) {
+    graph.edges = linked.edges;
+    graph.warnings.push(...linked.warnings);
+    graph.selection.excluded.push(...linked.selection.excluded);
+  }
+  return graph;
 }

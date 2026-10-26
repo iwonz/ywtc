@@ -11,6 +11,7 @@ import {redact} from './logger.js';
 import {canonicalMentionInstance, decisionIdentityKey, type MentionDecisionDocument, type MentionDecisionEntry, type MentionInventoryIssue, type MentionOccurrence, parseMentionDecisions } from './mention-decisions.js';
 import {scanMentions} from './mentions.js';
 import {SourceInventoryOperationError} from './source-inventory.js';
+import {realSourcePages, resolveSourceRoot} from './source-roots.js';
 
 export async function collectMentionDecisions(input: {
   adapter: SourceAdapter; locator: string; scope: TransferScope; sourceStatus: SourceStatus;
@@ -27,15 +28,15 @@ export async function collectMentionDecisions(input: {
   try {
     await scheduler.checkpoint({force: true, ...(signal ? {signal} : {})});
     await adapter.preflight();
-    const root = await adapter.resolvePage(input.locator);
-    checkpoint.set(root.id, root);selectedPages = 1;
+    const root = await resolveSourceRoot(adapter, input.locator);
+    if (!root.sourceSpace) {checkpoint.set(root.id, root);selectedPages = 1;}
     const graph = await discoverPageGraph({adapter, root, scope: input.scope, sourceStatus: input.sourceStatus,
       ...(signal ? {signal} : {}), checkpoint: {
         loadPage: async id => checkpoint.get(id),
         savePage: async page => {checkpoint.set(page.id, page);},
       }, onProgress: progress => input.onProgress?.(`Discovering mentions · ${progress.pages} pages`),
     });
-    pages = graph.pages;selectedPages = pages.length;
+    pages = realSourcePages(graph.pages);selectedPages = pages.length;
     for (const warning of graph.warnings) issue('discovery', 'mention-discovery-incomplete', warning);
     for (const edge of graph.edges) if (['broken', 'inaccessible'].includes(edge.status)) issue('discovery', 'mention-linked-page-unread', edge.message ?? `Cannot resolve source reference ${edge.raw}`);
   } catch (error) {

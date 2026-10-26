@@ -5,7 +5,7 @@ import type {ConfluenceConnectionProfile} from '../config.js';
 import {extractPageReferences} from '../content-model.js';
 import {normalizeCommentForest} from '../comments.js';
 import {diagramKindForFilename} from '../diagrams.js';
-import {DestinationResourceSizeLimitError, DestinationRevisionConflictError, DestinationTitleConflictError} from '../domain.js';
+import {DestinationResourceSizeLimitError, DestinationRevisionConflictError, DestinationTitleConflictError, IncompleteSourceDiscoveryError} from '../domain.js';
 import type {
   AdapterCapabilities,
   CommentAuthor,
@@ -23,6 +23,7 @@ import type {
 } from '../domain.js';
 import {HttpRequestError} from '../http.js';
 import {sourceInventoryOperationError} from '../source-inventory.js';
+import {confluenceSpaceKey} from '../source-roots.js';
 import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage} from '../types.js';
 
 const capabilities: AdapterCapabilities = {
@@ -136,6 +137,47 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     return sourcePage(this.profile, this.client, await this.client.resolveTarget(locator));
   }
 
+  async resolveRoot(locator: string): Promise<import('../domain.js').SourceRoot> {
+    const key = confluenceSpaceKey(locator, this.profile.baseUrl);
+    if (key === undefined) return {kind: 'page', item: await this.resolvePage(locator)};
+    if (!this.client.getSpace) throw new Error('Confluence source does not support space resolution');
+    const space = await this.client.getSpace(key);
+    const base = this.profile.baseUrl.replace(/\/$/, '');
+    const url = this.profile.deployment === 'cloud'
+      ? `${base.replace(/\/wiki$/, '')}/wiki/spaces/${encodeURIComponent(space.key)}/overview`
+      : `${base}/display/${encodeURIComponent(space.key)}`;
+    return {kind: 'space', item: {provider: 'confluence', profile: this.profile.name, id: `space:${space.id}`, canonicalId: `${this.profile.name}:confluence:space:${space.id}`, title: space.name, locator, url, space: space.id, rawContent: '', rawFormat: 'confluence-storage', references: [], sourceSpace: space}};
+  }
+
+  async getSpacePages(space: import('../types.js').ConfluenceSpace, checkpoint?: import('../domain.js').SourcePageCheckpoint, signal?: AbortSignal): Promise<SourcePage[]> {
+    if (!this.client.getSpacePages) throw new Error('Confluence source does not support space page enumeration');
+    const pages = await this.client.getSpacePages(space, signal);
+    const result: SourcePage[] = [];
+    const failures: import('../domain.js').SourceDiscoveryFailure[] = [];
+    for (const item of pages) {
+      if (signal?.aborted) throw signal.reason ?? new Error('Space discovery cancelled');
+      let operation: 'page-detail' | 'checkpoint-write' = 'page-detail';
+      try {
+        const cached = await checkpoint?.loadPage(item.id, item.id);
+        const reusable = cached && item.version && cached.version === String(item.version.number) ? cached : undefined;
+        const full = sourcePage(this.profile, this.client, item.body?.storage?.value !== undefined ? item : reusable ? {...item, body: {storage: {value: reusable.rawContent, representation: 'storage'}}} : await this.client.getPage(item.id));
+        if (full.space !== space.key && full.space !== space.id) throw new Error(`Source page ${item.id} no longer belongs to the selected space`);
+        if (full.id !== item.id) throw new Error('Confluence source page immutable identity differs from the requested ID');
+        operation = 'checkpoint-write';
+        await checkpoint?.savePage(full);
+        result.push(full);
+      } catch (error) {
+        if (signal?.aborted) throw signal.reason ?? error;
+        const stub = {...sourcePage(this.profile, this.client, {...item, body: {storage: {value: '', representation: 'storage'}}}), depth: 1};
+        const typed = sourceInventoryOperationError(operation, error, `/content/${item.id}`);
+        result.push(stub);
+        failures.push({page: stub, code: 'source-space-page-read-failed', message: typed.message, retryable: typed.retryable});
+      }
+    }
+    if (failures.length) throw new IncompleteSourceDiscoveryError(`Source space inventory incomplete: ${failures.length}/${pages.length} page details failed`, result.map(page => ({...page, depth: 1, projectedParentId: page.parentId && result.some(parent => parent.id === page.parentId) ? canonical(this.profile, page.parentId) : `${this.profile.name}:confluence:space:${space.id}`})), {requestedStatus: 'all', effectiveStatus: 'all', returnedDescendants: pages.length, selectedDescendants: pages.length, excluded: [], maximumDepth: 1, hierarchyGaps: [], notes: []}, failures);
+    return result;
+  }
+
   async getPage(id: string): Promise<SourcePage> {
     return sourcePage(this.profile, this.client, await this.client.getPage(id));
   }
@@ -216,6 +258,11 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
     if (/^(?:https?:\/\/|\/)|viewpage\.action|\/(?:pages|spaces)\//i.test(href)) {
       const url = new URL(href, `${this.profile.baseUrl}/`);
       if (url.origin !== new URL(this.profile.baseUrl).origin) return undefined;
+      const key = confluenceSpaceKey(url.toString(), this.profile.baseUrl);
+      if (key !== undefined && this.client.getSpace) {
+        const space = await this.client.getSpace(key);
+        return space.homepageId ? this.getPage(space.homepageId) : undefined;
+      }
       return sourcePage(this.profile, this.client, await this.client.resolveTarget(url.toString()));
     }
     const [space, title] = href.includes(':') ? href.split(':', 2) : [from.space ?? '', href];

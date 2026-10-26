@@ -10,13 +10,14 @@ import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {HttpRequestError, RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
-import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
+import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluenceSpace, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
 import {
   confluenceAttachmentSchema,
   confluenceUserSchema,
   dataCenterCommentSchema,
   type DataCenterCommentPayload,
   dataCenterPageSchema,
+  dataCenterSpaceSchema,
   dataCenterSystemInfoSchema,
   normalizeConfluenceAttachment,
   normalizeDataCenterPage,
@@ -144,6 +145,42 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         await probeContent();
       }
       return {deployment: 'data-center', product: 'Confluence Data Center', ...(version ? {version} : {}), api: '/rest/api'};
+    });
+  }
+
+  async getSpace(key: string): Promise<ConfluenceSpace> {
+    return this.readLimit(async () => {
+      const response = await this.http.request<unknown>({method: 'GET', url: `/rest/api/space/${encodeURIComponent(key)}`, params: {expand: 'homepage'}});
+      const space = parseConfluenceResponse(dataCenterSpaceSchema, response.data, 'reading Data Center source space');
+      if (space.key !== key) throw new Error('Confluence source space key differs from the requested key');
+      return {id: space.id, key: space.key, name: space.name, ...(space.homepage ? {homepageId: space.homepage.id} : {})};
+    });
+  }
+
+  async getSpacePages(space: ConfluenceSpace, signal?: AbortSignal): Promise<ConfluencePage[]> {
+    return this.readLimit(async () => {
+      const results = new Map<string, ConfluencePage>();
+      let start = 0;
+      const seen = new Set<number>();
+      for (;;) {
+        if (signal?.aborted) throw signal.reason ?? new Error('Space discovery cancelled');
+        if (seen.has(start)) throw new Error('Confluence space pagination repeated an offset');
+        seen.add(start);
+        const response = await this.http.request<unknown>({method: 'GET', url: `/rest/api/space/${encodeURIComponent(space.key)}/content/page`, ...(signal ? {signal} : {}), params: {start, limit: 100, depth: 'all', expand: 'space,version,ancestors,body.storage,body.view'}});
+        const batch = parseConfluenceList(dataCenterPageSchema, response.data, 'listing Data Center source space pages');
+        let added = 0;
+        for (const item of batch.results) {
+          if (item.space.key !== space.key || (item.space.id && item.space.id !== space.id)) throw new Error('Confluence page belongs to another source space');
+          if (!results.has(item.id)) added += 1;
+          results.set(item.id, normalizeDataCenterPage(item));
+        }
+        if (!batch._links?.next) break;
+        if (added === 0) throw new Error('Confluence space pagination made no progress');
+        const next = new URL(batch._links.next, this.config.baseUrl).searchParams.get('start');
+        start = next === null ? start + batch.results.length : Number(next);
+        if (!Number.isSafeInteger(start) || start < 0) throw new Error('Confluence space pagination returned an invalid offset');
+      }
+      return [...results.values()];
     });
   }
 

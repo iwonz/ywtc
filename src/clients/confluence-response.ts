@@ -113,6 +113,14 @@ export const cloudSpaceSchema = z.object({
   id: identifier,
   key: z.string().min(1),
   name: z.string().optional(),
+  homepageId: identifier.nullish(),
+}).passthrough();
+
+export const dataCenterSpaceSchema = z.object({
+  id: identifier,
+  key: z.string().min(1),
+  name: z.string().min(1),
+  homepage: z.object({id: identifier}).passthrough().nullish(),
 }).passthrough();
 
 export const cloudCommentSchema = z.object({
