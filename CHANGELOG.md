@@ -2,6 +2,22 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.0.0](https://github.com/iwonz/ywtc/compare/v4.4.0...v5.0.0) (2026-10-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mentions:** mention policies accept only off or mapping with mappingFile.
+
+### Features
+
+* **mentions:** require explicit mention decision mappings ([7eb9943](https://github.com/iwonz/ywtc/commit/7eb9943637dd7143aa3954137c1607b9d2eaac96))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v4.4.0 ([eb6929f](https://github.com/iwonz/ywtc/commit/eb6929ff891412c79348d648075943ac01d478e0))
+
 ## [4.4.0](https://github.com/iwonz/ywtc/compare/v4.3.1...v4.4.0) (2026-10-23)
 
 
