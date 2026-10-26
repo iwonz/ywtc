@@ -175,6 +175,14 @@ function fixture() {
 }
 
 describe('personal space transfer lifecycle', () => {
+  it('keeps explicit mention URLs literal while rewriting identical space navigation', async () => {
+    const f = fixture();
+    const page = {...f.pages[0]!, rawContent: `<p><a href="${f.root.url}">Navigation</a> <ac:link><ri:user ri:username="user"/></ac:link></p>`};
+    const document = normalizePageContent(page);
+    const body = await renderConfluenceStorage(document, page, {currentPageId: page.canonicalId, resources: new Map(), sourcePages: new Map([f.root, page].map(item => [item.canonicalId, item])), pages: new Map([[f.root.canonicalId, {provider: 'confluence', profile: 'dest', id: '200', canonicalId: 'dest:200', title: 'Notes', url: 'https://destination.example.com/pages/200'}]]), mentions: new Map(document.mentions!.map(mention => [mention.id, {outcome: 'linked', label: '@user', url: f.root.url, retryable: false}]))}, 'DOC');
+    expect(body.body).toContain('href="https://destination.example.com/pages/200">Navigation</a>');
+    expect(body.body).toContain(`href="${f.root.url.replaceAll('&', '&amp;')}">@user</a>`);
+  });
   it('selects 115 real pages across independent branches and rejects duplicate IDs', async () => {
     const f = fixture();const template = f.pages[0]!;f.pages.splice(0);
     for (let index = 0; index < 115; index += 1) f.pages.push({...template, id: String(1000 + index), canonicalId: `source:confluence:${1000 + index}`, ...(index % 5 ? {parentId: String(1000 + index - 1)} : {})});

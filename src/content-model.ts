@@ -1582,7 +1582,7 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
     };
   }
   if (document.rawFormat === 'confluence-storage') {
-    const $ = load(`<main data-root>${replaceConfluenceMentionLinks(document.raw, document, context)}</main>`, {xmlMode: true}, false);
+    const $ = load(`<main data-root>${document.raw}</main>`, {xmlMode: true}, false);
     const warnings: string[] = [];
     const adaptations = [...document.adaptations];
     $('script, iframe, object, embed, form').each((_index, element) => {
@@ -1689,7 +1689,7 @@ export async function renderConfluenceStorage(document: NormalizedDocument, page
       }
     });
     return {
-      body: $('main[data-root]').html() ?? '<p></p>',
+      body: replaceConfluenceMentionLinks($('main[data-root]').html() ?? '<p></p>', document, context),
       warnings,
       normalizations: [...document.normalizations],
       adaptations,

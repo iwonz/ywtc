@@ -1791,3 +1791,14 @@ Terminal and HTML/JSON reporting SHALL distinguish a space container from real s
 #### Scenario: Source commands share resolution
 - **WHEN** doctor, interactive migration or mentions export receives a supported personal source
 - **THEN** it SHALL use the same root and scope semantics without profile lookup, browser scraping or additional source permissions
+
+### Requirement: Literal mention decision precedence
+Explicit mention decision URLs and labels SHALL remain literal after source page, space navigation and resource rewriting, without preventing ordinary source references from targeting migrated objects.
+
+#### Scenario: Mention URL matches source space
+- **WHEN** a page contains a space-navigation link and an explicit mention decision pointing to the same source space URL
+- **THEN** ordinary navigation SHALL target the migrated section while the mention SHALL retain the configured URL and escaped label
+
+#### Scenario: Destination reads the final representation
+- **WHEN** the rendered representation is verified
+- **THEN** semantic mention verification SHALL use the literal decision URL rather than an automatically rebound space or page reference
