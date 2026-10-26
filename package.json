@@ -1,6 +1,6 @@
 {
   "name": "@iwonz/ywtc",
-  "version": "5.1.0",
+  "version": "5.1.1",
   "type": "module",
   "description": "Resumable, loss-aware transfers between Yandex Wiki, Confluence, Markdown, and static HTML",
   "license": "MIT",
