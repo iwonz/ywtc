@@ -141,6 +141,14 @@ describe('compact report presentation', () => {
     expect(visibleDetailSections({page: withMention, hasPreview: false, issueCount: 0})).toEqual(['overview', 'mentions']);
   });
 
+  it('shows hashtag decisions only when present, independently from verified transfer totals', () => {
+    const data = summary();
+    data.hashtags = {mode: 'mapping', total: 2, unique: 1, page: 2, comment: 0, preserved: 0, text: 1, linked: 1, verified: 0};
+    expect(visibleSummarySections(data)).toEqual(['pages', 'hashtags']);
+    const withTags = page();withTags.hashtags = [{id: 'h', tag: '#tag', location: 'page', outcome: 'text', label: 'Tag', verification: 'pending'}];
+    expect(visibleDetailSections({page: withTags, hasPreview: false, issueCount: 0})).toEqual(['overview', 'hashtags']);
+  });
+
   it('hides empty page-detail categories and reveals each populated category', () => {
     const data = page();
     expect(visibleDetailSections({page: data, hasPreview: false, issueCount: 0})).toEqual(['overview']);

@@ -11,6 +11,8 @@ const statusTables = [
   {heading: 'Статусы запуска', source: 'src/state.ts', type: 'RunStatus'},
   {heading: 'Статусы обхода ссылок', source: 'src/domain.ts', type: 'GraphEdgeStatus'},
   {heading: 'Статусы инвентаризации', source: 'src/report-contract.ts', type: 'ReportInventoryStatus'},
+  {heading: 'Статусы представления hashtags', values: ['preserved', 'text', 'linked']},
+  {heading: 'Статусы проверки hashtags', values: ['pending', 'verified', 'unverified']},
 ];
 
 function statusTable(heading: string, rows = '| `complete` | 1. Проверено.<br>2. Подтверждено. | Ничего. |'): string {

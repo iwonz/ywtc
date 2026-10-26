@@ -26,3 +26,5 @@ export * from './version.js';
 export * from './workspace.js';
 export * from './mention-decisions.js';
 export * from './mention-export.js';
+export * from './hashtag-decisions.js';
+export * from './hashtag-export.js';

@@ -56,6 +56,7 @@ const fileSchema = z.object({
     concurrency: z.number().int().min(1).max(64).default(4),
   }).strict().partial().default({}),
   mentions: mentionPolicySchema,
+  hashtags: mentionPolicySchema,
   connections: z.record(z.string().regex(/^[a-z0-9][a-z0-9._-]*$/), z.discriminatedUnion('type', [
     yandexProfileSchema,
     confluenceProfileSchema,
@@ -100,6 +101,7 @@ export interface AppConfig {
   timeoutMs: number;
   concurrency: number;
   mentions?: MentionPolicy;
+  hashtags?: MentionPolicy;
   configFile: string;
 }
 
@@ -189,6 +191,7 @@ export function parseWorkspaceConfig(value: unknown, configFile: string): AppCon
     timeoutMs: parsed.data.defaults.timeoutMs ?? 30_000,
     concurrency: parsed.data.defaults.concurrency ?? 4,
     mentions: parsed.data.mentions as MentionPolicy,
+    hashtags: parsed.data.hashtags as MentionPolicy,
     configFile,
   };
 }

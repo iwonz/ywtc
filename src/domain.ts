@@ -550,6 +550,7 @@ export interface NormalizedDocument {
 }
 
 export interface RenderContext {
+  hashtagPolicy?: import('./hashtag-decisions.js').HashtagProcessingPolicy;
   pages: Map<string, DestinationPage | {path: string; title: string}>;
   resources: Map<string, RenderResourceBinding>;
   sourcePages: Map<string, SourcePage>;

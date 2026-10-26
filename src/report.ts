@@ -25,6 +25,7 @@ import {
   type TransferReportPage,
   type TransferReportSummary,
 } from './report-contract.js';
+import {summarizeHashtags, verifiedHashtagRecords} from './hashtag-decisions.js';
 import {buildRetryPlan} from './retry-plan.js';
 import type {RunStatus} from './state.js';
 
@@ -433,9 +434,18 @@ export class TransferReport {
     const index = this.data.pages.findIndex((page) => page.sourceCanonicalId === sourceCanonicalId);
     if (index < 0) throw new Error(`Report page ${sourceCanonicalId} is not registered`);
     this.data.pages[index] = {...this.data.pages[index]!, ...update};
+    if (update.status || update.comments) this.verifyHashtagOutcomes(this.data.pages[index]!);
+  }
+
+  private verifyHashtagOutcomes(page: TransferReportPage): void {
+    if (!page.hashtags) return;
+    page.hashtags = verifiedHashtagRecords(page.hashtags, page.status, page.comments.status, this.data.dryRun);
   }
 
   addPage(page: TransferReportPage, previews?: PreviewPair, collectIssues = true): void {
+    const previousHashtags = this.data.pages.find(item => item.sourceCanonicalId === page.sourceCanonicalId)?.hashtags;
+    if (!page.hashtags && previousHashtags) page.hashtags = previousHashtags;
+    this.verifyHashtagOutcomes(page);
     page.attemptedInRun ??= true;
     page.outcomeRunId ??= this.data.runId;
     for (const resource of page.resourceItems) {
@@ -680,6 +690,7 @@ export class TransferReport {
         return `source:${mention.source}`;
       })).size,
       mentionOutcomes,
+      ...(this.data.pages.some(page => page.hashtags?.length) ? {hashtags: summarizeHashtags(this.data.pages.flatMap(page => page.hashtags ?? []), this.data.hashtagMode ?? 'off')} : {}),
       ...(Number.isFinite(started) && Number.isFinite(finished) ? {durationMs: Math.max(0, finished - started)} : {}),
       pageStatuses: pageStatusCounts,
       resourceStatuses: resourceStatusCounts,

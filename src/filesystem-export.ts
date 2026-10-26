@@ -8,6 +8,8 @@ import PQueue from 'p-queue';
 import {z} from 'zod';
 import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml, setSourceResourceBinding, sourceResourceBindings} from './content-model.js';
 import {commentAttachmentUses, createCommentArchiveZip, renderCommentArchive} from './comments.js';
+import {hashtagSummarySchema, summarizeHashtags, type HashtagProcessingPolicy, type HashtagSummary} from './hashtag-decisions.js';
+import {pageHashtagRecords} from './hashtags.js';
 import type {CommentInventory, ExportFormat, MentionOutcomeCounts, MentionProcessingPolicy, MentionPresentation, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
 import type {CommentTransferStatus} from './state.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
@@ -25,6 +27,7 @@ export interface ExportManifestPage {
   adaptations: string[];
   preservedExternalReferences: number;
   mentions?: MentionOutcomeCounts;
+  hashtags?: HashtagSummary;
   comments: {
     status: CommentTransferStatus;
     threads: number;
@@ -66,6 +69,7 @@ const manifestPageSchema = z.object({
   warnings: z.array(z.string()),
   adaptations: z.array(z.string()),
   preservedExternalReferences: z.number().int().nonnegative(),
+  hashtags: hashtagSummarySchema.optional(),
   mentions: z.object({
     total: z.number().int().nonnegative(), preserved: z.number().int().nonnegative(), native: z.number().int().nonnegative(),
     linked: z.number().int().nonnegative(), text: z.number().int().nonnegative(), unresolved: z.number().int().nonnegative(), failed: z.number().int().nonnegative(),
@@ -213,8 +217,9 @@ async function verifyGeneratedTree(directory: string, manifest: ExportManifest):
     const content = await readFile(filename, 'utf8');
     const references = manifest.format === 'html'
       ? [...content.matchAll(/(?:href|src)=["']([^"']+)["']/g)].map((match) => match[1]!)
-      : [...content.matchAll(/!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g)].map((match) => match[1]!);
-    for (const reference of references) {
+      : [...content.matchAll(/!?\[[^\]]*\]\((?:<([^>\r\n]+)>|([^)\s]+))(?:\s+["'][^"']*["'])?\)/g)].map((match) => match[1] ?? match[2]!);
+    for (const rawReference of references) {
+      const reference = rawReference.startsWith('<') && rawReference.endsWith('>') ? rawReference.slice(1, -1) : rawReference;
       if (/^(?:https?:|mailto:|tel:|data:|#)/i.test(reference)) continue;
       const clean = decodeURIComponent(reference.split(/[?#]/, 1)[0] ?? '');
       if (!clean) continue;
@@ -246,6 +251,7 @@ export class FilesystemExporter {
     commentsByPage?: Map<string, CommentInventory>;
     mentionPresentationsByPage?: Map<string, Map<string, MentionPresentation>>;
     mentionPolicy?: MentionProcessingPolicy;
+    hashtagPolicy?: HashtagProcessingPolicy;
     commentsEnabled?: boolean;
     retryPageIds?: ReadonlySet<string>;
     retryResourceIds?: ReadonlyMap<string, ReadonlySet<string>>;
@@ -418,6 +424,7 @@ export class FilesystemExporter {
               ...(zip && archivePath ? {archiveName: zip.name, archiveHref: relativeHref(pageFile, archivePath)} : {}),
               attachmentNames: names,
               mentionPolicy: input.mentionPolicy ?? {mode: 'off'},
+              hashtagPolicy: input.hashtagPolicy ?? {mode: 'off'},
             }));
             comments = {
               ...comments,
@@ -475,6 +482,7 @@ export class FilesystemExporter {
           resources: resourceMapByPage.get(page.canonicalId) ?? new Map(),
           sourcePages,
           currentPageId: page.canonicalId,
+          hashtagPolicy: input.hashtagPolicy ?? {mode: 'off'},
           currentPath: relative,
           ...(input.mentionPresentationsByPage?.get(page.canonicalId) ? {mentions: input.mentionPresentationsByPage.get(page.canonicalId)!} : {}),
         };
@@ -493,6 +501,8 @@ export class FilesystemExporter {
         manifestPage.adaptations.push(...rendered.adaptations);
         manifestPage.preservedExternalReferences = rendered.preservedExternalReferences;
         if (rendered.mentions) manifestPage.mentions = rendered.mentions;
+        const hashtagRecords = pageHashtagRecords(fullPage, input.commentsByPage?.get(page.canonicalId), input.hashtagPolicy ?? {mode: 'off'}).records;
+        if (hashtagRecords.length) manifestPage.hashtags = summarizeHashtags(hashtagRecords.map(item => ({...item, verification: item.location === 'page' || manifestPage.comments.status === 'complete' ? 'verified' : 'unverified'})), input.hashtagPolicy?.mode ?? 'off');
         warnings.push(...rendered.warnings.map((warning) => `${page.title}: ${warning}`));
         if (manifestPage.degraded) {
           const snapshot = `_source/${stableSegment(page)}.${page.rawFormat === 'yfm' ? 'yfm' : 'storage.xml'}`;

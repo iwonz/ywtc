@@ -64,11 +64,13 @@ describe('four remote transfer directions', () => {
 
   for (const [label, sourceProfile, destinationProfile] of cases) {
     it(`${label} completes a mutation-free dry-run`, async () => {
-      const sourceMock = sourceProfile.type === 'yandex-wiki' ? mockWikiSource(sourceProfile, 1, 'root', 'Hello @ivan') : mockConfluenceSource(sourceProfile, '10', '<p>Hello <ac:link><ri:user ri:username="ivan"/></ac:link></p>');
+      const sourceMock = sourceProfile.type === 'yandex-wiki' ? mockWikiSource(sourceProfile, 1, 'root', 'Hello #topic @ivan') : mockConfluenceSource(sourceProfile, '10', '<p>Hello #topic <ac:link><ri:user ri:username="ivan"/></ac:link></p>');
       const destinationMock = destinationProfile.type === 'yandex-wiki' ? mockWikiDestination(destinationProfile) : mockConfluenceDestination(destinationProfile);
       const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-matrix-'));
       await writeFile(path.join(directory, 'decisions.json'), JSON.stringify({source: {provider: sourceProfile.type, instance: sourceProfile.type === 'yandex-wiki' ? sourceProfile.webUrl : sourceProfile.baseUrl}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan'}]}));
+      await writeFile(path.join(directory, 'hashtags.json'), JSON.stringify({source: {provider: sourceProfile.type, instance: sourceProfile.type === 'yandex-wiki' ? sourceProfile.webUrl : sourceProfile.baseUrl}, entries: [{tag: '#topic', decision: 'url', url: 'https://docs.example.com/topic'}]}));
       const config: AppConfig = {
+        hashtags: {mode: 'mapping', mappingFile: './hashtags.json'},
         mentions: {mode: 'mapping', mappingFile: './decisions.json'},
         profiles: {[sourceProfile.name]: sourceProfile, [destinationProfile.name]: destinationProfile},
         timeoutMs: 5_000,
@@ -91,6 +93,7 @@ describe('four remote transfer directions', () => {
       expect(result.status).toMatch(/completed/);
       expect(result.hasErrors).toBe(false);
       expect(result.summary.mentionOutcomes?.linked).toBe(1);
+      expect(result.summary.hashtags).toMatchObject({total: 1, linked: 1, verified: 0});
       expect(result.summary).toMatchObject({
         pages: 1, complete: 0, partial: 0, failed: 0, unprocessedPages: 1,
         resources: 0, resourcesPlanned: 0, inventoryComplete: true,

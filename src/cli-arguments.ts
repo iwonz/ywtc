@@ -2,10 +2,11 @@ import {Command, Option, type CommandUnknownOpts} from '@commander-js/extra-typi
 import type {ExportFormat, SourceStatus, TransferScope} from './domain.js';
 import {packageVersion} from './version.js';
 
-export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'mentions' | 'update';
+export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'mentions' | 'hashtags' | 'update';
 
 export type CliCommand =
   | {command: 'mentions-export'; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
+  | {command: 'hashtags-export'; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
   | {command: 'help'; topic?: CliHelpTopic}
   | {command: 'version'}
   | {command: 'init'; workdir?: string; interactive: boolean}
@@ -186,7 +187,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       });
     });
 
-  program.command('mentions').description('Export source mentions for explicit decisions').command('export')
+  for (const kind of ['mentions', 'hashtags'] as const) program.command(kind).description(`Export source ${kind} for explicit decisions`).command('export')
     .description('Create decisions.json and an offline editor from source pages and comments')
     .requiredOption('-s, --source <locator>', 'source page URL, ID, or slug')
     .requiredOption('-o, --output <directory>', 'new or empty directory for decisions.json and index.html')
@@ -197,7 +198,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('-C, --comments', 'scan comments (default)', true)
     .option('-N, --no-comments', 'skip comment API calls')
     .option('-j, --concurrency <n>', 'concurrency from 1 to 64', concurrency)
-    .action(options => onCommand({command: 'mentions-export', source: nonEmpty(options.source, '--source')!, output: nonEmpty(options.output, '--output')!,
+    .action(options => onCommand({command: kind === 'mentions' ? 'mentions-export' : 'hashtags-export', source: nonEmpty(options.source, '--source')!, output: nonEmpty(options.output, '--output')!,
       scope: options.scope as TransferScope, sourceStatus: options.sourceStatus as SourceStatus, comments: options.comments,
       ...(options.sourceProfile ? {sourceProfile: nonEmpty(options.sourceProfile, '--source-profile')!} : {}),
       ...(options.workdir ? {workdir: nonEmpty(options.workdir, '--workdir')!} : {}),
@@ -240,7 +241,7 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const helpIndex = argv.findIndex((value) => ['--help', '-h'].includes(value));
   if (helpIndex >= 0) {
     const topic = argv[0];
-    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'mentions', 'update'].includes(topic ?? '')
+    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'mentions', 'hashtags', 'update'].includes(topic ?? '')
       ? {command: 'help', topic: topic as CliHelpTopic}
       : {command: 'help'};
   }
@@ -268,6 +269,6 @@ export function cliHelp(topic?: CliHelpTopic): string {
   const program = createCliProgram();
   if (!topic) return program.helpInformation();
   const command = program.commands.find((candidate) => candidate.name() === topic);
-  if (topic === 'mentions') return command!.commands[0]!.helpInformation();
+  if (topic === 'mentions' || topic === 'hashtags') return command!.commands[0]!.helpInformation();
   return command?.helpInformation() ?? program.helpInformation();
 }

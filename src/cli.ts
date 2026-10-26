@@ -3,6 +3,7 @@ import {cliHelp, parseCliArguments} from './cli-arguments.js';
 import {readWorkspaceConfig, validateProfileSecrets} from './config.js';
 import {resolveDestinationLocator, resolveSourceLocator} from './locators.js';
 import {redact} from './logger.js';
+import {loadHashtagPolicy} from './hashtag-policy.js';
 import {loadMentionPolicy} from './mention-policy.js';
 import {readyMigrationCommand, runMigrationCommand} from './migration-command.js';
 import {runUpdate} from './updater.js';
@@ -67,6 +68,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     console.log(`  Config    ${paint(32, 'valid')} · ${workspace.configFile}`);
     if (!command.source || !command.destination) {
       loadMentionPolicy(config);
+      loadHashtagPolicy(config);
       validateProfileSecrets(config, Object.values(config.profiles));
       console.log(`  API       ${paint(90, 'not requested; pass both --source and --destination')}`);
       return 0;
@@ -103,7 +105,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const {runRetryCommand} = await import('./retry-command.js');
     return runRetryCommand(command);
   }
-  if (command.command === 'mentions-export') {
+  if (command.command === 'mentions-export' || command.command === 'hashtags-export') {
     const {runMentionExportCommand} = await import('./mention-command.js');
     return runMentionExportCommand(command);
   }

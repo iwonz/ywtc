@@ -245,6 +245,11 @@ export async function runMigrationCommand(command: ReadyMigrationCommand, retry?
   }
 
   console.log();
+  if (result.summary.hashtags?.total) {
+    const tags = result.summary.hashtags;
+    const outcomes = (['preserved', 'text', 'linked'] as const).filter(key => tags[key] > 0).map(key => `${tags[key]} ${key}`).join(' · ');
+    summaryField('Hashtags', `${tags.mode} · ${tags.total} occurrences / ${tags.unique} tags · ${outcomes}${tags.verified > 0 ? ` · ${tags.verified} verified` : ''}`);
+  }
   summaryField('Causes', `${result.summary.rootErrors} root errors · ${result.summary.dependentPages} dependent pages · ${result.summary.dependentFiles} dependent files · ${result.summary.dependentComments} dependent comment archives`);
   summaryField('Quality', `${result.summary.errors} errors · ${result.summary.warnings} warnings · ${result.summary.degradations} degradations · ${result.summary.adaptations} adaptations · ${result.summary.normalizations} safe normalizations · ${result.summary.preservedExternalReferences} external references preserved`);
 

@@ -350,7 +350,7 @@ const mentionsServer = createServer((request, response) => {
   if (request.url?.startsWith('/rest/api/settings/systemInfo')) response.end(JSON.stringify({version: '9.5.2'}));
   else if (request.url?.startsWith('/rest/api/space/~user/content/page')) response.end(JSON.stringify({results: ['1', '2'].map(id => ({id, type: 'page', title: `Personal ${id}`, status: 'current', space: {id: '7', key: '~user'}, version: {number: 1}, ancestors: [], body: {storage: {value: `<p>Hello <ac:link><ri:user ri:username="user${id}"/></ac:link></p>`, representation: 'storage'}}}))}));
   else if (request.url?.startsWith('/rest/api/space/~user')) response.end(JSON.stringify({id: '7', key: '~user', name: 'Personal notes'}));
-  else if (request.url?.startsWith('/rest/api/content/1')) response.end(JSON.stringify({id: '1', type: 'page', title: 'Mentions', status: 'current', space: {key: 'DOC'}, version: {number: 1}, ancestors: [], body: {storage: {value: '<p>Hello <ac:link><ri:user ri:username="ivan"/></ac:link></p>', representation: 'storage'}}, _links: {webui: '/pages/1'}}));
+  else if (request.url?.startsWith('/rest/api/content/1')) response.end(JSON.stringify({id: '1', type: 'page', title: 'Mentions', status: 'current', space: {key: 'DOC'}, version: {number: 1}, ancestors: [], body: {storage: {value: '<p>Hello #topic <ac:link><ri:user ri:username="ivan"/></ac:link></p>', representation: 'storage'}}, _links: {webui: '/pages/1'}}));
   else {response.statusCode = 500;response.end(JSON.stringify({message: 'Unexpected endpoint in source-only export'}));}
 });
 await new Promise<void>(resolve => mentionsServer.listen(0, '127.0.0.1', resolve));
@@ -358,7 +358,7 @@ try {
   const address = mentionsServer.address();if (!address || typeof address === 'string') throw new Error('Missing fixture address');
   const instance = `http://127.0.0.1:${address.port}`;
   const configPath = path.join(mentionsWorkspace, 'ywtc.config.yaml');
-  await writeFile(configPath, stringifyYaml({mentions: {mode: 'mapping', mappingFile: './does-not-exist.json'}, connections: {source: {type: 'confluence', deployment: 'data-center', baseUrl: instance, authType: 'pat', token: 'package-smoke-token'}}}), {mode: 0o600});
+  await writeFile(configPath, stringifyYaml({hashtags: {mode: 'mapping', mappingFile: './does-not-exist.json'}, mentions: {mode: 'mapping', mappingFile: './does-not-exist.json'}, connections: {source: {type: 'confluence', deployment: 'data-center', baseUrl: instance, authType: 'pat', token: 'package-smoke-token'}}}), {mode: 0o600});
   const output = path.join(temporary, 'installed-mentions');
   const exported = await execFileAsync(executable, ['mentions', 'export', '-s', '1', '-S', 'source', '-m', 'page', '-N', '-w', mentionsWorkspace, '-o', output], {encoding: 'utf8'});
   if (!exported.stdout.includes('file://') || !exported.stdout.includes('complete')) throw new Error('Packaged export did not print editor paths and completeness');
@@ -371,6 +371,14 @@ try {
   await execFileAsync(process.execPath, ['--input-type=module', '--eval', accept], {encoding: 'utf8'});
   if (mentionsRequests.some(value => !value.startsWith('GET ') || /attachment|grid|comment/.test(value))) throw new Error(`Export used non-source endpoints: ${mentionsRequests.join(', ')}`);
   if ((await readdir(mentionsWorkspace)).includes('.states')) throw new Error('Mentions export mutated migration state');
+  const hashtagOutput = path.join(temporary, 'installed-hashtags');
+  const hashtagExport = await execFileAsync(executable, ['hashtags', 'export', '-s', '1', '-S', 'source', '-m', 'page', '-N', '-w', mentionsWorkspace, '-o', hashtagOutput], {encoding: 'utf8'});
+  const hashtagDocument = JSON.parse(await readFile(path.join(hashtagOutput, 'decisions.json'), 'utf8'));
+  if (!hashtagExport.stdout.includes('file://') || hashtagDocument.entries.length !== 1 || hashtagDocument.entries[0].tag !== '#topic') throw new Error('Packaged hashtag export failed');
+  const hashtagEditor = await readFile(path.join(hashtagOutput, 'index.html'), 'utf8');
+  if (!hashtagEditor.includes('data-kind="hashtags"') || /<script[^>]+src=/.test(hashtagEditor)) throw new Error('Packaged hashtag editor is not autonomous');
+  const acceptHashtags = `import {readWorkspaceConfig} from ${JSON.stringify(pathToFileURL(installedConfigModule).toString())};import {loadHashtagPolicy} from ${JSON.stringify(pathToFileURL(path.join(path.dirname(installedConfigModule), 'hashtag-policy.js')).toString())};const config = readWorkspaceConfig(${JSON.stringify(configPath)});config.hashtags = {mode:'mapping',mappingFile:${JSON.stringify(path.join(hashtagOutput, 'decisions.json'))}};if (loadHashtagPolicy(config, config.profiles.source).document.entries[0].tag !== '#topic') throw Error('Hashtag mapping rejected');`;
+  await execFileAsync(process.execPath, ['--input-type=module', '--eval', acceptHashtags], {encoding: 'utf8'});
   const spaceOutput = path.join(temporary, 'installed-personal-mentions');
   await execFileAsync(executable, ['mentions', 'export', '-s', `${instance}/spaces/viewspace.action?key=~user`, '-N', '-w', mentionsWorkspace, '-o', spaceOutput], {encoding: 'utf8'});
   const personal = JSON.parse(await readFile(path.join(spaceOutput, 'decisions.json'), 'utf8'));

@@ -1,0 +1,50 @@
+import {mkdtemp, readFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {expect, test} from '@playwright/test';
+import {parseHashtagDecisions} from '../../src/hashtag-decisions.js';
+import {writeHashtagBundle} from '../../src/hashtag-export.js';
+
+test('offline hashtag editor supports text/url decisions, validation, import and deletion without network', async ({page}) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'ywtc-hashtags-browser-'));
+  const source = {provider: 'yandex-wiki', instance: 'https://wiki.example.com'};
+  const doc = parseHashtagDecisions({source, entries: [{tag: '#Tag', decision: 'skip'}, {tag: '#tag', decision: 'skip'}]});
+  const bundle = await writeHashtagBundle(path.join(dir, 'editor'), doc);
+  const requests: string[] = [];page.on('request', request => {if (/^https?:/.test(request.url())) requests.push(request.url());});
+  await page.goto(bundle.url);
+  await expect(page.getByRole('heading', {name: 'Решения для тегов'})).toBeVisible();
+  await page.getByRole('radiogroup', {name: 'Решение #Tag', exact: true}).getByText('Текст', {exact: true}).click();
+  await page.getByRole('textbox', {name: 'Текст #Tag', exact: true}).fill('Готовый текст @literal');
+  await page.getByRole('radiogroup', {name: 'Решение #tag', exact: true}).getByText('Ссылка', {exact: true}).click();
+  await page.getByRole('button', {name: 'Сохранить JSON'}).click();await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('textbox', {name: 'URL #tag', exact: true}).fill('https://docs.example.com/tag');
+  const pending = page.waitForEvent('download');await page.getByRole('button', {name: 'Сохранить JSON'}).click();const saved = path.join(dir, 'saved.json');await (await pending).saveAs(saved);
+  const downloaded = parseHashtagDecisions(JSON.parse(await readFile(saved, 'utf8')));
+  expect(downloaded.entries[0]).toMatchObject({decision: 'text', text: 'Готовый текст @literal'});expect(downloaded.entries[1]).toMatchObject({decision: 'url', url: 'https://docs.example.com/tag'});
+  await page.getByRole('button', {name: 'Удалить #Tag', exact: true}).click();await expect(page.getByTestId('decision-row')).toHaveCount(1);
+  await page.getByRole('button', {name: 'Отменить удаление'}).click();await expect(page.getByTestId('decision-row')).toHaveCount(2);
+  await page.getByLabel('Файл решений').setInputFiles(saved);
+  await page.getByLabel('Файл решений').setInputFiles({name: 'mentions.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({source, entries: [{identity: {username: 'user'}, mention: '@user', decision: 'skip'}]}))});
+  await expect(page.getByRole('alert')).toContainText('Файл не открыт');await expect(page.getByTestId('decision-row')).toHaveCount(2);
+  expect(requests).toEqual([]);
+});
+
+test('large hashtag catalogs remain accessible on mobile and escape hostile literal labels', async ({page}) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'ywtc-hashtags-large-'));
+  const source = {provider: 'confluence', instance: 'https://confluence.example.com'};
+  const bundle = await writeHashtagBundle(path.join(dir, 'editor'), parseHashtagDecisions({source, entries: []}));
+  const errors: string[] = [], requests: string[] = [];page.on('pageerror', error => errors.push(error.message));page.on('request', request => {if (/^https?:/.test(request.url())) requests.push(request.url());});
+  await page.setViewportSize({width: 390, height: 844});await page.goto(bundle.url);
+  const entries = Array.from({length: 10000}, (_, index) => ({tag: `#tag${index}`, decision: 'skip'}));
+  await page.getByLabel('Файл решений').setInputFiles({name: 'large.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({source, entries}))});
+  await expect(page.getByText('Показано 10000 / 10000')).toBeVisible();expect(await page.getByTestId('decision-row').count()).toBeLessThan(60);
+  await page.getByRole('treeitem').first().focus();await page.keyboard.press('ArrowDown');await expect(page.getByRole('treeitem').nth(1)).toBeFocused();
+  await page.getByRole('textbox', {name: 'Поиск тегов'}).fill('#tag9999');
+  await page.getByRole('radiogroup', {name: 'Решение #tag9999', exact: true}).getByText('Ссылка', {exact: true}).click();
+  await page.getByRole('textbox', {name: 'URL #tag9999', exact: true}).fill('https://example.com');
+  await page.getByRole('textbox', {name: 'Текст #tag9999', exact: true}).fill('<img src=x onerror="window.injected=true">');
+  await expect(page.getByRole('link', {name: 'Предпросмотр #tag9999'})).toHaveText('<img src=x onerror="window.injected=true">');
+  for (let index = 0; index < 2; index++) await page.getByRole('button', {name: /тема/}).click();
+  expect(await page.evaluate(() => 'injected' in window)).toBe(false);expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  expect(requests).toEqual([]);expect(errors).toEqual([]);
+});

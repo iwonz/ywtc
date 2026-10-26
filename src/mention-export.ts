@@ -17,6 +17,7 @@ export async function collectMentionDecisions(input: {
   adapter: SourceAdapter; locator: string; scope: TransferScope; sourceStatus: SourceStatus;
   comments: boolean; concurrency: number; signal?: AbortSignal; secrets?: string[];
   onProgress?: (message: string) => void;
+  scanIdentities?: (content: string, format: SourcePage['rawFormat']) => import('./domain.js').MentionIdentity[];
 }): Promise<MentionDecisionDocument> {
   const {adapter, signal} = input, scheduler = new CooperativeScheduler();
   const issues: MentionInventoryIssue[] = [], entries = new Map<string, MentionDecisionEntry>();
@@ -51,14 +52,14 @@ export async function collectMentionDecisions(input: {
     }
   }
   const scan = (page: SourcePage, content: string, location: MentionOccurrence['location'], commentId?: string, format = page.rawFormat) => {
-    const found = scanMentions(content, format);
-    for (const mention of found.mentions) {
-      const key = decisionIdentityKey(mention.identity);
+    const identities = input.scanIdentities?.(content, format) ?? scanMentions(content, format).mentions.map(item => item.identity);
+    for (const identity of identities) {
+      const key = decisionIdentityKey(identity);
       if (!key) {issue(location === 'page' ? 'page' : 'comment', 'mention-identity-missing', 'Mention has no usable source identifier; its source representation is retained.', page.id, false);continue;}
       let entry = entries.get(key);
       if (!entry) {
-        const {username, accountId, userKey, id} = mention.identity;
-        entry = {identity: {...(username ? {username} : {}), ...(accountId ? {accountId} : {}), ...(userKey ? {userKey} : {}), ...(id ? {id} : {})}, mention: mention.identity.source, decision: 'skip', occurrences: []};
+        const {username, accountId, userKey, id} = identity;
+        entry = {identity: {...(username ? {username} : {}), ...(accountId ? {accountId} : {}), ...(userKey ? {userKey} : {}), ...(id ? {id} : {})}, mention: identity.source, decision: 'skip', occurrences: []};
         entries.set(key, entry);
       }
       const existing = entry.occurrences?.find(item => item.pageId === page.id && item.location === location && item.commentId === commentId);
@@ -103,7 +104,8 @@ export async function collectMentionDecisions(input: {
 }
 
 export const MENTION_DATA_MARKER = '{"__ywtc_mentions_payload__":true}';
-export function embedMentionDocument(shell: string, document: MentionDecisionDocument): string {
+export function embedMentionDocument(shell: string, document: MentionDecisionDocument): string {return embedDecisionDocument(shell, document);}
+export function embedDecisionDocument(shell: string, document: unknown): string {
   if (shell.split(MENTION_DATA_MARKER).length !== 2) throw new Error('Mention editor must contain exactly one data placeholder');
   const serialized = JSON.stringify(document).replaceAll('&', '\\u0026').replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
   return shell.replace(MENTION_DATA_MARKER, () => serialized);
@@ -112,7 +114,7 @@ export function embedMentionDocument(shell: string, document: MentionDecisionDoc
 async function assertEmptyOutput(directory: string): Promise<void> {
   try {
     const info = await lstat(directory);
-    if (!info.isDirectory() || info.isSymbolicLink() || (await readdir(directory)).length) throw new Error('Mentions output must be a new or truly empty directory; nonempty output is never overwritten.');
+    if (!info.isDirectory() || info.isSymbolicLink() || (await readdir(directory)).length) throw new Error('Decision output must be a new or truly empty directory; nonempty output is never overwritten.');
   } catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;}
 }
 
@@ -130,11 +132,15 @@ export async function writeMentionBundle(directory: string, document: MentionDec
   await assertEmptyOutput(directory);
   const checked = parseMentionDecisions(document);
   const template = shell ?? await readFile(fileURLToPath(new URL(import.meta.url.includes('/src/') ? '../dist/mentions-ui/index.html' : './mentions-ui/index.html', import.meta.url)), 'utf8');
-  const html = embedMentionDocument(template, checked);
+  return writeDecisionBundle(directory, checked, template);
+}
+export async function writeDecisionBundle(directory: string, document: unknown, template: string): Promise<{json: string; html: string; url: string}> {
+  await assertEmptyOutput(directory);
+  const html = embedDecisionDocument(template, document);
   const staging = await mkdtemp(path.join(path.dirname(directory), '.ywtc-mentions-'));
   try {
     await chmod(staging, 0o700);
-    await writeFile(path.join(staging, 'decisions.json'), `${JSON.stringify(checked, null, 2)}\n`, {mode: 0o600});
+    await writeFile(path.join(staging, 'decisions.json'), `${JSON.stringify(document, null, 2)}\n`, {mode: 0o600});
     await writeFile(path.join(staging, 'index.html'), html, {mode: 0o600});
     await assertEmptyOutput(directory);await rename(staging, directory);
   } finally {await rm(staging, {recursive: true, force: true});}

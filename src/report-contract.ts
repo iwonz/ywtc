@@ -89,6 +89,7 @@ export interface TransferReportPage {
   adaptations?: string[];
   preservedExternalReferences?: number;
   mentions?: TransferReportMention[];
+  hashtags?: import('./hashtag-decisions.js').HashtagRecord[];
   conflictEvidence?: ConflictEvidence;
   error?: string;
   blockedByPageId?: string;
@@ -252,10 +253,12 @@ export interface TransferReportSummary {
   commentBytes: number;
   commentStatuses: CommentStatusCounts;
   mentionMode?: MentionMode;
+  hashtagMode?: 'off' | 'mapping';
   pageMentions?: number;
   commentMentions?: number;
   mentionIdentities?: number;
   mentionOutcomes?: MentionOutcomeCounts;
+  hashtags?: import('./hashtag-decisions.js').HashtagSummary;
   durationMs?: number;
   pageStatuses: PageStatusCounts;
   resourceStatuses: ResourceStatusCounts;
@@ -271,6 +274,7 @@ export interface TransferReportData {
   dryRun: boolean;
   commentsEnabled: boolean;
   mentionMode?: MentionMode;
+  hashtagMode?: 'off' | 'mapping';
   scope: TransferScope;
   sourceStatus: SourceStatus;
   selection: SourceSelection;

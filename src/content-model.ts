@@ -28,6 +28,7 @@ import {discoverPageDiagrams} from './diagrams.js';
 import {transformYfm} from './diplodoc.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
+import {renderWithHashtags} from './hashtags.js';
 import {escapeMentionMarkdown, protectYfmMentions, protectConfluenceMentions as extractConfluenceMentions} from './mentions.js';
 import {safeLinkifyMatches} from './safe-linkify.js';
 import {confluenceSpaceKey} from './source-roots.js';
@@ -1454,6 +1455,9 @@ function renderTreeHtml(context: RenderContext, directive: NonNullable<Normalize
 }
 
 export async function renderMarkdown(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
+  return renderWithHashtags(document, context.hashtagPolicy, 'markdown', prepared => renderMarkdownContent(prepared, context));
+}
+async function renderMarkdownContent(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
     return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
@@ -1468,6 +1472,9 @@ export async function renderMarkdown(document: NormalizedDocument, context: Rend
 }
 
 export async function renderStaticHtml(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
+  return renderWithHashtags(document, context.hashtagPolicy, 'html', prepared => renderStaticHtmlContent(prepared, context));
+}
+async function renderStaticHtmlContent(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
     return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
@@ -1487,6 +1494,9 @@ export async function renderStaticHtml(document: NormalizedDocument, context: Re
 }
 
 export async function renderYfm(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
+  return renderWithHashtags(document, context.hashtagPolicy, 'markdown', prepared => renderYfmContent(prepared, context));
+}
+async function renderYfmContent(document: NormalizedDocument, context: RenderContext): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
     return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
@@ -1562,6 +1572,9 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
 }
 
 export async function renderConfluenceStorage(document: NormalizedDocument, page: SourcePage, context: RenderContext, spaceKey: string): Promise<RenderedDocument> {
+  return renderWithHashtags(document, context.hashtagPolicy, 'html', prepared => renderConfluenceStorageContent(prepared, page, context, spaceKey));
+}
+async function renderConfluenceStorageContent(document: NormalizedDocument, page: SourcePage, context: RenderContext, spaceKey: string): Promise<RenderedDocument> {
   if (document.semanticallyEmpty) {
     return {body: '<p></p>', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }

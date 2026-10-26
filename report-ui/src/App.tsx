@@ -27,6 +27,7 @@ import {
   AlertTriangle,
   Archive,
   AtSign,
+  Hash,
   Ban,
   CheckCircle2,
   ChevronRight,
@@ -251,6 +252,11 @@ function SummaryTable({report, t}: {report: TransferReportData; t: Translate}) {
         [summary.mentionIdentities ?? 0, t('identities')],
       ]),
       destination: <OutcomeList counts={{...summary.mentionOutcomes, total: 0}} t={t} />,
+    }] : []),
+    ...(sections.includes('hashtags') && summary.hashtags ? [{
+      id: 'hashtags', icon: <Hash size={16} />, label: t('hashtags'),
+      source: countText([[summary.hashtags.total, t('occurrences')], [summary.hashtags.unique, t('hashtags')]]),
+      destination: <Stack gap={4}><Text size="xs" c="dimmed">{t('decisions')}</Text><OutcomeList counts={{preserved: summary.hashtags.preserved, text: summary.hashtags.text, linked: summary.hashtags.linked}} t={t}/>{summary.hashtags.verified > 0 && <Text size="xs">{summary.hashtags.verified} {t('verified')}</Text>}</Stack>,
     }] : []),
     ...(sections.includes('data') ? [{
       id: 'data', icon: <Database size={16} />, label: t('data'),
@@ -660,6 +666,7 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
     {value: 'files', label: t('files'), visible: sections.includes('files')},
     {value: 'comments', label: t('comments'), visible: sections.includes('comments')},
     {value: 'mentions', label: t('mentions'), visible: sections.includes('mentions')},
+    {value: 'hashtags', label: t('hashtags'), visible: sections.includes('hashtags')},
     {value: 'comparison', label: t('comparison'), visible: sections.includes('comparison')},
     {value: 'issues', label: `${t('issues')} · ${issues.length}`, visible: sections.includes('issues')},
   ].filter((tab) => tab.visible);
@@ -719,6 +726,7 @@ function PageDialog({node, payload, locale, t, onOpenChange}: {node?: ReportTree
           {sections.includes('files') && <Tabs.Panel value="files" pt="md"><ResourcesTable node={node} t={t} /></Tabs.Panel>}
           {sections.includes('comments') && <Tabs.Panel value="comments" pt="md"><CommentsPanel node={node} locale={locale} t={t} /></Tabs.Panel>}
           {sections.includes('mentions') && <Tabs.Panel value="mentions" pt="md"><MentionsPanel node={node} t={t} /></Tabs.Panel>}
+          {sections.includes('hashtags') && <Tabs.Panel value="hashtags" pt="md"><Table.ScrollContainer minWidth={600}><Table><Table.Thead><Table.Tr><Table.Th>{t('source')}</Table.Th><Table.Th>{t('decisions')}</Table.Th><Table.Th>{t('status')}</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{page?.hashtags?.map(item => <Table.Tr key={item.id}><Table.Td><Text size="sm" fw={600}>{item.tag}</Text><Text size="xs" c="dimmed">{item.location}{item.commentId ? ` · ${item.commentId}` : ''}</Text></Table.Td><Table.Td>{item.url && safeLink(item.url) ? <Text component="a" href={safeLink(item.url)} target="_blank" rel="noreferrer">{item.label}</Text> : <Text>{item.label}</Text>}<Text size="xs" c="dimmed">{t(item.outcome)}</Text></Table.Td><Table.Td>{t(item.verification)}</Table.Td></Table.Tr>)}</Table.Tbody></Table></Table.ScrollContainer></Tabs.Panel>}
           {preview && (
             <Tabs.Panel value="comparison" pt="md">
               <SimpleGrid cols={{base: 1, lg: 2}} spacing="md">

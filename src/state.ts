@@ -2,6 +2,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
+import {verifiedHashtagRecords, hashtagRecordSchema, hashtagSummarySchema, type HashtagRecord, type HashtagSummary} from './hashtag-decisions.js';
 import {acquireExclusiveLease, type ExclusiveLease} from './exclusive-lease.js';
 import type {ExportFormat, GraphEdgeStatus, MentionMode, RecordedMentionMode, MentionOutcomeCounts, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
 
@@ -107,6 +108,7 @@ export interface PageTransferState extends BlockingCause {
   resources: Record<string, ResourceTransferState>;
   comments?: CommentTransferState;
   mentions?: MentionTransferState;
+  hashtags?: HashtagRecord[];
   degradations: string[];
   adaptations?: string[];
   conflictEvidence?: ConflictEvidence;
@@ -154,6 +156,7 @@ export interface StateRun {
   commentMentions?: number;
   mentionIdentities?: number;
   mentionOutcomes?: MentionOutcomeCounts;
+  hashtags?: HashtagSummary;
   operation?: 'migrate' | 'retry';
   retryRootRunId?: string;
   retryParentRunId?: string;
@@ -347,6 +350,7 @@ const pageStateSchema = z.object({
   resources: z.record(z.string(), resourceStateSchema),
   comments: commentStateSchema.optional(),
   mentions: mentionStateSchema.optional(),
+  hashtags: z.array(hashtagRecordSchema).optional(),
   degradations: z.array(z.string()),
   adaptations: z.array(z.string()).optional(),
   conflictEvidence: z.object({
@@ -397,6 +401,7 @@ const runSchema = z.object({
   commentMentions: z.number().int().nonnegative().optional(),
   mentionIdentities: z.number().int().nonnegative().optional(),
   mentionOutcomes: mentionOutcomeCountsSchema.optional(),
+  hashtags: hashtagSummarySchema.optional(),
   operation: z.enum(['migrate', 'retry']).optional(),
   retryRootRunId: z.string().optional(),
   retryParentRunId: z.string().optional(),
@@ -665,6 +670,7 @@ export class StateStore {
         else Object.assign(page.comments, {status: 'not-started', lastError: interrupted ? 'Transfer was interrupted before comment archival started' : 'Transfer ended before comment archival started'});
         page.comments.updatedAt = updatedAt;
       }
+      if (page.hashtags) page.hashtags = verifiedHashtagRecords(page.hashtags, page.status, page.comments?.status ?? 'skipped', false);
       page.updatedAt = updatedAt;
     }
     await this.save();

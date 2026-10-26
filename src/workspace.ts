@@ -14,6 +14,10 @@ mentions:
   mode: off
   # Use mode: mapping and mappingFile: ./mentions/decisions.json for explicit decisions.
 
+hashtags:
+  mode: off
+  # Use mode: mapping and mappingFile: ./hashtags/decisions.json for explicit decisions.
+
 connections:
   yandex:
     type: yandex-wiki

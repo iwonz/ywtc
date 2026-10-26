@@ -40,6 +40,7 @@ brew install ywtc
 | Текст и таблицы | Сохраняются заголовки, начертания и цвет, списки и задачи, цитаты, разделители, inline/preformatted code с языком и обычные таблицы. Destination получает нативную или семантически эквивалентную разметку. |
 | Секции и колонки | YFM `layout/block` и Confluence layouts преобразуются в нативные секции и колонки. HTML использует адаптивную сетку; Markdown сохраняет содержимое ячеек в исходном порядке. |
 | Ссылки и якоря | Ссылки внутри выбранного набора переписываются на destination; якоря сохраняются. Внешние ссылки и переходы за границу набора остаются исходными. |
+| Hashtags | Текстовые `#теги` в страницах и комментариях: сохранить, заменить готовым текстом или ссылкой по ручному mapping. Регистр различается; метки/labels страниц не изменяются. |
 | Упоминания | Yandex Wiki `@login`/`@{login}` и Confluence `ri:user`: сохранение исходного представления или обычная ссылка по ручному mapping. Email, URL, код и исходники диаграмм не затрагиваются. В архиве комментариев используются только безопасные текст и ссылки. |
 | Файлы и изображения | Доступные через API вложения передаются потоково с проверкой размера и SHA-256. Прерванная Yandex-загрузка продолжается с подтверждённой byte-range позиции; несовместимый ответ безопасно запускает её заново. Поддерживаются любые скачиваемые файлы, включая PNG/JPEG/GIF/WebP/SVG, PDF, ZIP, DOCX, XLSX и PPTX. Коллизии имён разрешаются стабильно. |
 | Диаграммы | Mermaid, PlantUML, D2 и Draw.io распознаются до общего YFM parser. Нативный синтаксис сохраняется при доказанной поддержке destination; иначе точный source остаётся управляемым вложением или code block, а доступное SVG-представление — изображением. Полная смена представления считается adaptation, а не потерей. |
@@ -99,6 +100,8 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | --- | --- | --- | --- |
 | `defaults.timeoutMs` | общий | `1000..300000`; `30000` | Таймаут HTTP-запроса |
 | `defaults.concurrency` | общий | `1..64`; `4` | Общая параллельность операции |
+| `hashtags.mode` | общий | `off` (default), `mapping` | Сохранить текстовые теги или применить `skip/text/url` из JSON |
+| `hashtags.mappingFile` | `mapping` | обязательный путь | От каталога config; поддерживаются абсолютный путь и `~`. Source-bound файл фиксируется до API-запросов |
 | `mentions.mode` | общий | `off` (default), `mapping` | Сохранить представление или применить явные решения из JSON; без поиска пользователей |
 | `mentions.mappingFile` | `mapping` | обязательный путь | От каталога `ywtc.config.yaml`; поддерживаются абсолютный путь и `~`. Файл проверяется до API-запросов и фиксируется на время запуска |
 | `connections.<name>` | общий | имя `[a-z0-9][a-z0-9._-]*` | Именованное подключение |
@@ -148,6 +151,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `ywtc doctor [options]` | Проверить workspace; с source и destination — выполнить read-only preflight |
 | `ywtc migrate -i` | Выбрать параметры, выполнить dry-run и при допустимом результате явно перейти к live |
 | `ywtc migrate -s <locator> -d <locator\|directory> [options]` | Неинтерактивный перенос или экспорт |
+| `ywtc hashtags export -s <locator> -o <directory> [options]` | Выгрузить текстовые теги и автономный редактор решений без destination и migration state |
 | `ywtc mentions export -s <locator> -o <directory> [options]` | Выгрузить source-упоминания и автономный редактор решений без destination и migration state |
 | `ywtc retry <run-id> [options]` | Повторить только исправимые незавершённые объекты последней live-итерации цепочки |
 | `ywtc reports list [-w <path>]` | Показать локальные отчёты от новых к старым |
@@ -159,22 +163,22 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | Полная / short | Команды | Значения и назначение |
 | --- | --- | --- |
 | `--interactive`, `-i` | `init`, `migrate` | TTY-мастер; в `migrate` переданные опции становятся редактируемыми defaults |
-| `--workdir`, `-w` | `init`, `doctor`, `migrate`, `retry`, `reports`, `mentions export` | Явный workspace; поддерживается `~/...` |
-| `--source`, `-s` | `doctor`, `migrate`, `mentions export` | URL, page ID или Yandex slug; обязателен в неинтерактивном `migrate` |
-| `--output`, `-o` | `mentions export` | Обязательный новый или действительно пустой каталог для `decisions.json` и `index.html` |
+| `--workdir`, `-w` | `init`, `doctor`, `migrate`, `retry`, `reports`, `mentions/hashtags export` | Явный workspace; поддерживается `~/...` |
+| `--source`, `-s` | `doctor`, `migrate`, `mentions/hashtags export` | URL, page ID или Yandex slug; обязателен в неинтерактивном `migrate` |
+| `--output`, `-o` | `mentions/hashtags export` | Обязательный новый или действительно пустой каталог для `decisions.json` и `index.html` |
 | `--destination`, `-d` | `doctor`, `migrate` | Родительская страница или каталог; обязателен в неинтерактивном `migrate` |
-| `--source-profile`, `-S` | `doctor`, `migrate`, `mentions export` | Имя source-профиля при неоднозначном коротком locator |
+| `--source-profile`, `-S` | `doctor`, `migrate`, `mentions/hashtags export` | Имя source-профиля при неоднозначном коротком locator |
 | `--destination-profile`, `-D` | `doctor`, `migrate` | Имя remote destination-профиля; запрещён для файлового экспорта |
-| `--scope`, `-m` | `doctor`, `migrate`, `mentions export` | `page`, `subtree` (default), `linked` |
-| `--source-status`, `-t` | `doctor`, `migrate`, `mentions export` | `all` (default) или `current`; root включается всегда |
-| `--comments`, `-C` / `--no-comments`, `-N` | `doctor`, `migrate`, `mentions export` | Комментарии включены по умолчанию; `-N` исключает все comment API calls |
+| `--scope`, `-m` | `doctor`, `migrate`, `mentions/hashtags export` | `page`, `subtree` (default), `linked` |
+| `--source-status`, `-t` | `doctor`, `migrate`, `mentions/hashtags export` | `all` (default) или `current`; root включается всегда |
+| `--comments`, `-C` / `--no-comments`, `-N` | `doctor`, `migrate`, `mentions/hashtags export` | Комментарии включены по умолчанию; `-N` исключает все comment API calls |
 | `--format`, `-f` | `doctor`, `migrate` | `markdown` или `html`; делает destination файловым |
 | `--archive`, `-a` | `migrate` | Дополнительный ZIP для файлового экспорта |
 | `--dry-run`, `-n` | `migrate`, `retry` | Полный discovery/render или точный retry-план без destination writes |
 | `--fresh`, `-F` | `migrate` | Игнорировать mappings; существующий live-state сохранить как backup |
 | `--rewrite`, `-R` | `migrate`, `retry` | Заново собрать контент и записать новой версией в существующие remote-страницы, сохранив ID; нужны mappings, нельзя сочетать с `--fresh` или `--format` |
 | `--open-report`, `-o` | `migrate`, `retry` | Открыть итоговый HTML; ошибка opener не меняет outcome переноса |
-| `--concurrency`, `-j` | `migrate`, `retry`, `mentions export` | `1..64`; иначе `defaults.concurrency` |
+| `--concurrency`, `-j` | `migrate`, `retry`, `mentions/hashtags export` | `1..64`; иначе `defaults.concurrency` |
 | `--state`, `-r` | `migrate` | Явный state path внутри workspace |
 | `--install`, `-i` | `update` | Установить найденное обновление |
 | `--via`, `-c` | `update` | `npm` или `brew` |
@@ -216,6 +220,35 @@ mentions:
 
 Mapping привязан к provider и каноническому instance source, но не к профилю/root/scope. Экспорт также может содержать справочные `occurrences` (page ID/title/URL, page/comment, comment ID и count) и `inventory` (complete, selectedPages, scannedPages, scannedComments, issues). Эти сведения и порядок JSON не влияют на обновления. Изменение эффективного решения обновляет затронутые страницы и архивы при обычном `migrate`, без `--fresh` и смены state ID. Проверка URL и user lookup не выполняются; новые native notifications не создаются. Файлы решений содержат пользовательские identity и source-контексты — храните их приватно, вне Git.
 
+### Решения для тегов
+
+```bash
+ywtc hashtags export --source "https://wiki.example.com/team" --output "./hashtags"
+```
+
+Параметры, source-only обход, inventory, защита каталога и exit codes совпадают с экспортом упоминаний выше. Сканируются текст страниц, комментарии, ответы и inline-контекст; Grid payloads и метки/labels страниц не читаются. Редактор использует тот же автономный интерфейс, но с решениями **Как есть / Текст / Ссылка**. Импорт JSON другого типа отклоняется.
+
+```yaml
+hashtags:
+  mode: mapping
+  mappingFile: ./hashtags/decisions.json
+```
+
+```json
+{
+  "source": {"provider": "yandex-wiki", "instance": "https://wiki.example.com"},
+  "entries": [
+    {"tag": "#исходный", "decision": "skip"},
+    {"tag": "#старый", "decision": "text", "text": "#новый"},
+    {"tag": "#документация", "decision": "url", "url": "https://docs.example.com", "text": "Документация"}
+  ]
+}
+```
+
+Одна запись применяется ко всем вхождениям точного тега: `#Tag` и `#tag` различаются. Имя состоит из Unicode-букв, цифр, combining marks, `_` и `-` и содержит букву или цифру; распознаётся на границе текста, после пробела или открывающей пунктуации, в том числе внутри поддерживаемого форматирования. Код, diagrams, заголовочные маркеры, anchors, URL/fragments, escapes, атрибуты и параметры макросов не меняются. Если вся подпись ссылки — один тег, `text` заменяет всю ссылку текстом, `url` — её адрес и подпись; смешанные подписи не обрабатываются.
+
+`skip`, удалённая и отсутствующая запись сохраняют исходное представление без warning. `text` — непустой готовый текст без автоматически добавляемого `#`; `url` — HTTP(S) ссылка без credentials с исходным тегом как default-текстом. Значения не интерпретируются как разметка, новые mentions или шаблоны. Повторяющиеся теги, неизвестные поля и несовместимые с решением поля запрещены. Source binding, пути, metadata и обновление без `--fresh` действуют как для mentions; политики независимы. URL не проверяются по сети.
+
 ### Locators и выбор страниц
 
 - Yandex Wiki: полный URL, числовой page ID или slug вида `team/start`, включая личный раздел `/users/<login>/`.
@@ -229,7 +262,7 @@ Mapping привязан к provider и каноническому instance sour
 | `subtree` | Root и все доступные структурные descendants до последнего уровня; default |
 | `linked` | Детерминированный BFS по внутренним ссылкам и page/include references; циклы завершаются безопасно |
 
-Для Confluence URL пространства `subtree` выбирает все доступные страницы, в том числе вне дерева домашней. В destination создаётся раздел с названием пространства; внутри сохраняются домашняя страница и самостоятельные ветки. `page` переносит только домашнюю страницу, `linked` начинает обход от неё; без домашней страницы доступен только `subtree`. Пустое пространство допустимо. Настройки, права, профиль пользователя и блоги не копируются; скрытые от токена страницы API не раскрывает. Эти правила действуют и для `doctor`, мастера миграции и `mentions export`.
+Для Confluence URL пространства `subtree` выбирает все доступные страницы, в том числе вне дерева домашней. В destination создаётся раздел с названием пространства; внутри сохраняются домашняя страница и самостоятельные ветки. `page` переносит только домашнюю страницу, `linked` начинает обход от неё; без домашней страницы доступен только `subtree`. Пустое пространство допустимо. Настройки, права, профиль пользователя и блоги не копируются; скрытые от токена страницы API не раскрывает. Эти правила действуют и для `doctor`, мастера миграции и `mentions/hashtags export`.
 
 `--source-status all` включает все доступные descendants: в Yandex Wiki — `actual` и `obsolete`; `current` оставляет только `actual/current`. Confluence зависит от hierarchy API и может не возвращать archived, trashed и historical versions.
 
@@ -386,6 +419,26 @@ Outcomes описывают представление, не доставку у
 | `text` | 1. Только исторические state/report: прежний шаблонный режим сформировал текст без URL. Нынешний обработчик этот outcome не назначает. | Ничего либо задать явное URL-решение. |
 | `unresolved` | 1. Только исторические state/report: прежний placeholder не заполнен либо user lookup не подтвердил identity и сохранил fallback. Нынешний обработчик этот outcome не назначает. | Разметить mapping при необходимости; старый lookup warning не запускает retry успешной страницы. |
 | `failed` | 1. Зарезервированное значение исторического формата; текущего отдельного producer нет. | Проверить verification и issues страницы; статус не считать доказательством потери упоминания сам по себе. |
+
+### Статусы представления hashtags
+
+Относятся к вхождениям в основном body и архивируемых комментариях. Счётчики решений не означают подтверждённую запись: отдельно хранится verification. Нулевые показатели и пустая вкладка скрыты.
+
+| Статус | Условия назначения | Что делать |
+| --- | --- | --- |
+| `preserved` | 1. Режим `off`.<br>2. В `mapping` выбрано `skip`.<br>3. Запись отсутствует или удалена. | Ничего либо разметить mapping. |
+| `text` | 1. Найдена точная запись с `decision: text`; подготовлен её буквальный текст. | Проверить preview и verification. |
+| `linked` | 1. Найдена точная запись с `decision: url`; подготовлены её URL и явный/default-текст. | Проверить preview; доступность URL проверяется вручную. |
+
+### Статусы проверки hashtags
+
+Поле `verification` описывает подтверждение основного объекта, отдельно от подготовленного решения.
+
+| Статус | Условия назначения | Что делать |
+| --- | --- | --- |
+| `pending` | 1. Dry-run.<br>2. Основной объект ещё не получил завершённый проверяемый исход: промежуточный, blocked, not-started, skipped или stale. | Дождаться завершения; при необходимости устранить зависимость и повторить перенос. |
+| `verified` | 1. Для body страницы подтверждён `complete/partial`.<br>2. Для архивного комментария подтверждён `complete`. | Ничего; общий объект может иметь независимые проблемы файлов или комментариев. |
+| `unverified` | 1. Страница получила `failed/conflict`.<br>2. Архив получил `failed/partial/conflict`. | Проверить ошибку объекта; не считать подготовленное решение подтверждённым переносом. |
 
 ### Статусы обхода ссылок
 

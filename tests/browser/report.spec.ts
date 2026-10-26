@@ -16,6 +16,18 @@ function reportPage(input: Partial<TransferReportPage> & Pick<TransferReportPage
 
 let reportUrl: string;
 
+test('hashtag report distinguishes decisions and verification and exposes safe per-page details', async ({page}) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-hashtag-report-browser-'));
+  const report = new TransferReport({runId: '00000000-0000-4000-8000-000000000020', dryRun: true, scope: 'page', hashtagMode: 'mapping', commentsEnabled: false, direction: 'yandex-wiki → html', source: {provider: 'yandex-wiki', profile: 'source', rootId: '1', title: 'Hashtag page', url: 'https://wiki.example.com/page'}, destination: {provider: 'filesystem', id: '/tmp/export', format: 'html'}, state: {id: 'fixture', path: '/tmp/state.json', mode: 'automatic', source: 'new'}});
+  report.addPage(reportPage({sourceCanonicalId: 'source:1', sourceId: '1', sourceTitle: 'Hashtag page', status: 'planned', hashtags: [{id: 'h', tag: '#topic', location: 'page', outcome: 'linked', label: 'Topic link', url: 'https://docs.example.com/topic', verification: 'pending'}]}));
+  report.finish('completed');expect(report.data.summary.hashtags?.verified).toBe(0);
+  const requests: string[] = [];page.on('request', request => {if (/^https?:/.test(request.url())) requests.push(request.url());});
+  await page.goto(pathToFileURL((await report.write(temporary)).html).toString());
+  await page.getByRole('treeitem').filter({hasText: 'Hashtag page'}).click();await page.getByRole('tab', {name: 'Hashtags', exact: true}).click();
+  const panel = page.getByRole('dialog');await expect(panel.getByText('#topic', {exact: true})).toBeVisible();await expect(panel.getByText('Pending', {exact: true})).toBeVisible();
+  await expect(panel.getByRole('link', {name: 'Topic link'})).toHaveAttribute('href', 'https://docs.example.com/topic');expect(requests).toEqual([]);
+});
+
 test('space section is a separate offline hierarchy node with real-page totals', async ({page}) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-space-report-browser-'));
   const report = new TransferReport({runId: '00000000-0000-4000-8000-000000000019', dryRun: false, scope: 'subtree', commentsEnabled: false, direction: 'confluence → html', source: {provider: 'confluence', profile: 'source', rootId: 'space:7', title: 'Personal notes', url: 'https://confluence.example.com/display/~user', kind: 'space'}, destination: {provider: 'filesystem', id: '/tmp/export', format: 'html'}, state: {id: 'fixture', path: '/tmp/state.json', mode: 'automatic', source: 'new'}});

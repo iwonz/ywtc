@@ -183,6 +183,36 @@ async function setup() {
 }
 
 describe('comment migration pipeline', () => {
+  it('updates page and comment hashtag decisions in place and ignores unrelated catalog changes', async () => {
+    const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    adapters.changeComment('Comment #old');
+    const root = await adapters.source.resolvePage('root');root.rawContent = 'Page #old';adapters.source.resolvePage = async () => root;adapters.source.getPage = async () => root;
+    config.hashtags = {mode: 'mapping', mappingFile: './hashtags.json'};
+    const document = {source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{tag: '#old', decision: 'text', text: 'First'}]};
+    const filename = path.join(directory, 'hashtags.json');await writeFile(filename, JSON.stringify(document));
+    const migrator = new Migrator(config, createLogger([]), profile => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter);
+    const first = await migrator.run(options);
+    const firstReport = JSON.parse(await readFile(first.reportPaths.json, 'utf8'));
+    expect(first.summary, JSON.stringify(firstReport.pages[0]?.hashtags)).toMatchObject({complete: 1, hashtags: {total: 2, text: 2, verified: 2}});
+    expect(adapters.page()?.content).toContain('First');expect(adapters.commentBody()).toContain('First');
+    const firstVersion = adapters.page()?.version;
+    document.entries.push({tag: '#unrelated', decision: 'text', text: 'Unrelated'});await writeFile(filename, JSON.stringify(document, null, 2));
+    await migrator.run(options);expect(adapters.page()?.version).toBe(firstVersion);expect(adapters.counts().commentUpdates).toBe(0);
+    document.entries[0]!.text = 'Second';await writeFile(filename, JSON.stringify(document));
+    const changed = await migrator.run(options);expect(changed.stateId).toBe(first.stateId);expect(changed.summary.complete).toBe(1);
+    expect(adapters.page()?.content).toContain('Second');expect(adapters.commentBody()).toContain('Second');expect(adapters.counts().commentUpdates).toBe(1);
+    const state = JSON.parse(await readFile(changed.stateFilename, 'utf8'));expect(state.pages[root.canonicalId].hashtags).toEqual(expect.arrayContaining([expect.objectContaining({label: 'Second', verification: 'verified'})]));
+  });
+  it.each(['markdown', 'html'] as const)('exports hashtag page and comment decisions to %s', async format => {
+    const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    adapters.changeComment('Comment #topic');const root = await adapters.source.resolvePage('root');root.rawContent = 'Page #topic';adapters.source.resolvePage = async () => root;adapters.source.getPage = async () => root;
+    config.hashtags = {mode: 'mapping', mappingFile: './hashtags.json'};
+    await writeFile(path.join(directory, 'hashtags.json'), JSON.stringify({source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{tag: '#topic', decision: 'url', url: 'https://docs.example.com/(topic)'}]}));
+    const output = path.join(directory, 'export');
+    const result = await new Migrator(config, createLogger([]), () => adapters.source as SourceAdapter & DestinationAdapter).run({...options, destination: {type: 'directory', path: output, format}});
+    expect(result.summary).toMatchObject({complete: 1, hashtags: {linked: 2, verified: 2}});
+    const manifest = JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8'));expect(manifest.pages[0].hashtags).toMatchObject({linked: 2});
+  });
   it.each(['markdown', 'html'] as const)('exports explicit page/comment decisions to %s without destination calls', async format => {
     const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
     adapters.changeComment('Hello @ivan');

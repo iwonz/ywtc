@@ -2,6 +2,7 @@ import {createProviderAdapter} from './adapters/factory.js';
 import type {AppConfig} from './config.js';
 import {assertTransferCapabilities, type SourceStatus, type TransferScope} from './domain.js';
 import {discoverPageGraph} from './graph.js';
+import {loadHashtagPolicy} from './hashtag-policy.js';
 import {loadMentionPolicy} from './mention-policy.js';
 import {sameRemoteInstance, type ResolvedLocator, type RemoteLocator} from './locators.js';
 import {realSourcePages, resolveSourceRoot} from './source-roots.js';
@@ -30,6 +31,7 @@ export async function runCapabilityDoctor(
   comments = true,
 ): Promise<DoctorResult> {
   loadMentionPolicy(config, sourceLocator.profile);
+  loadHashtagPolicy(config, sourceLocator.profile);
   const source = createProviderAdapter(sourceLocator.profile, config);
   const destination = destinationLocator.type === 'remote' ? createProviderAdapter(destinationLocator.profile, config) : undefined;
   assertTransferCapabilities(source, destination, scope, sourceStatus, comments);

@@ -20,6 +20,8 @@ import type {
   MentionProcessingPolicy,
 } from './domain.js';
 import {safeFilename} from './input.js';
+import type {HashtagProcessingPolicy} from './hashtag-decisions.js';
+import {renderSafeCommentHashtags} from './hashtags.js';
 import {renderSafeCommentMentions} from './mentions.js';
 
 export interface FlatComment {
@@ -307,9 +309,9 @@ function entryLines(entry: CommentEntry, depth: number, replacements: Map<string
   const status = entry.status && entry.status !== 'open' ? ` · ${entry.status}` : '';
   const when = entry.createdAt ? ` · ${entry.createdAt}` : '';
   const header = `${indent}${commentAuthorLabel(entry.author)}${when}${status}:`;
-  const contextLines = entry.inlineContext ? [`${indent}> ${renderSafeCommentMentions(entry.inlineContext, context.mentionPolicy ?? {mode: 'off'}, entry.bodyFormat, readableBody).content.replaceAll('\n', `\n${indent}> `)}`] : [];
-  const body = renderSafeCommentMentions(entry.body, context.mentionPolicy ?? {mode: 'off'}, entry.bodyFormat,
-    content => rewriteInternalUrls(replaceAttachmentTokens(entry, replacements, content), context.pages, context.sourcePages)).content;
+  const contextLines = entry.inlineContext ? [`${indent}> ${renderSafeCommentHashtags(entry.inlineContext, context.hashtagPolicy ?? {mode: 'off'}, entry.bodyFormat, value => renderSafeCommentMentions(value, context.mentionPolicy ?? {mode: 'off'}, entry.bodyFormat, readableBody).content).replaceAll('\n', `\n${indent}> `)}`] : [];
+  const body = renderSafeCommentHashtags(entry.body, context.hashtagPolicy ?? {mode: 'off'}, entry.bodyFormat, value => renderSafeCommentMentions(value, context.mentionPolicy ?? {mode: 'off'}, entry.bodyFormat,
+    content => rewriteInternalUrls(replaceAttachmentTokens(entry, replacements, content), context.pages, context.sourcePages)).content);
   const lines = body.split('\n').map((line) => `${indent}${line}`);
   return [header, ...contextLines, ...lines, ...entry.replies.flatMap((reply) => ['', ...entryLines(reply, depth + 1, replacements, context)])];
 }
@@ -366,6 +368,7 @@ export interface CommentRenderContext {
   pages?: Map<string, DestinationPage>;
   sourcePages?: Map<string, SourcePage>;
   mentionPolicy?: MentionProcessingPolicy;
+  hashtagPolicy?: HashtagProcessingPolicy;
   presentation?: 'native' | 'quote' | 'code';
 }
 
@@ -472,7 +475,7 @@ function countReplies(entry: CommentEntry): number {
   return entry.replies.reduce((total, reply) => total + 1 + countReplies(reply), 0);
 }
 
-export function verifyCommentArchive(expected: string | CommentInventory, body: string, archiveName?: string, mentionPolicy: MentionProcessingPolicy = {mode: 'off'}): {ok: boolean; differences: string[]} {
+export function verifyCommentArchive(expected: string | CommentInventory, body: string, archiveName?: string, mentionPolicy: MentionProcessingPolicy = {mode: 'off'}, hashtagPolicy: HashtagProcessingPolicy = {mode: 'off'}): {ok: boolean; differences: string[]} {
   const differences: string[] = [];
   const expectedFingerprint = typeof expected === 'string' ? expected : expected.fingerprint;
   const readable = readableBody(body);
@@ -485,7 +488,7 @@ export function verifyCommentArchive(expected: string | CommentInventory, body: 
       if (!readable.includes(author)) differences.push(`comment author is missing: ${author}`);
       if (entry.createdAt && !readable.includes(entry.createdAt)) differences.push(`comment date is missing: ${entry.id}`);
       if (entry.status && entry.status !== 'open' && !readable.includes(entry.status)) differences.push(`comment status is missing: ${entry.id}`);
-      const text = readableBody(renderSafeCommentMentions(entry.body, mentionPolicy, entry.bodyFormat).content).replace(/\[[^\]]*\]\([^)]*\)/g, ' ');
+      const text = readableBody(renderSafeCommentHashtags(entry.body, hashtagPolicy, entry.bodyFormat, value => renderSafeCommentMentions(value, mentionPolicy, entry.bodyFormat).content)).replace(/\[[^\]]*\]\([^)]*\)/g, ' ');
       const tokens = text.toLocaleLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? [];
       const actual = readable.toLocaleLowerCase();
       if (tokens.some((token) => !actual.includes(token))) differences.push(`comment text is missing: ${entry.id}`);
