@@ -169,17 +169,17 @@ The export manifest and report SHALL account for every discovered diagram and di
 - **WHEN** a required diagram source or representation cannot be written or verified
 - **THEN** the page SHALL be partial or failed according to body availability and the manifest SHALL identify the missing artifact
 
-### Requirement: Static mention presentation
-Markdown and HTML exports SHALL preserve recognized mentions as escaped text or safe relative-independent HTTP(S) profile links and SHALL account for them without claiming native user resolution.
+### Requirement: Explicit static mention presentation
+Markdown and HTML exports SHALL preserve source mentions or apply explicit source-bound HTTP(S) link decisions with escaped literal labels, without user resolution or URL probing.
 
-#### Scenario: Template mode exports a link
-- **WHEN** `urlTemplate` produces a valid absolute HTTP(S) URL for a mention
-- **THEN** Markdown and HTML SHALL render the configured display text as a link and record a `linked` outcome
+#### Scenario: Mapping exports a link
+- **WHEN** an entry selects url
+- **THEN** both formats SHALL retain its exact URL and label in page and enabled comment content and record linked
 
-#### Scenario: Auto mode targets a static format
-- **WHEN** `auto` is configured and destination is Markdown or HTML
-- **THEN** ywtc SHALL use the configured fallback as a complete adaptation without a native-resolution warning
+#### Scenario: Mention is skipped
+- **WHEN** mode is off, an entry is absent, or its decision is skip
+- **THEN** the static output SHALL retain readable source text and record preserved without a warning
 
-#### Scenario: Static mention output is unsafe
-- **WHEN** a rendered URL has a non-HTTP(S) scheme or cannot be constructed from available fields
-- **THEN** ywtc SHALL omit the link, preserve the source token as escaped text, and record the exact unresolved reason
+#### Scenario: Mapping is unsafe
+- **WHEN** a mapping contains an unsafe URL or an invalid decision
+- **THEN** validation SHALL stop before source API calls or destination replacement rather than silently changing the requested decision

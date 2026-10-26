@@ -8,8 +8,7 @@ import {pipeline} from 'node:stream/promises';
 import FormData from 'form-data';
 import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
-import type {MentionIdentity, MentionResolution} from '../domain.js';
-import {HttpRequestError, RetryingHttpClient} from '../http.js';
+import {RetryingHttpClient} from '../http.js';
 import {RequestRateLimiter} from '../rate-limiter.js';
 import type {ConfluenceApi, ConfluenceAttachment, ConfluenceComment, ConfluencePage, ConfluencePlatformInfo, DownloadedFile} from '../types.js';
 import {
@@ -79,35 +78,6 @@ export class CloudConfluenceClient implements ConfluenceApi {
     });
   }
 
-  async resolveMentionUser(identity: MentionIdentity): Promise<MentionResolution> {
-    if (!identity.accountId) return {status: 'unsupported', retryable: false, reason: 'destination-exact-identity-unavailable'};
-    const cached = this.usersById.get(identity.accountId);
-    if (cached) return {status: 'resolved', user: {
-      accountId: cached.accountId,
-      ...(cached.displayName ? {displayName: cached.displayName} : {}),
-    }};
-    try {
-      return await this.readLimit(async () => {
-        const response = await this.http.request<unknown>({method: 'GET', url: '/rest/api/user', params: {accountId: identity.accountId}});
-        const user = parseConfluenceResponse(cloudUserSchema, response.data, 'resolving a Confluence Cloud mention user');
-        this.usersById.set(user.accountId, user);
-        return {status: 'resolved' as const, user: {
-          accountId: user.accountId,
-          ...(user.displayName ? {displayName: user.displayName} : {}),
-        }};
-      });
-    } catch (error) {
-      if (error instanceof HttpRequestError) {
-        if (error.status === 404) return {status: 'not-found', retryable: false, reason: 'destination-user-not-found'};
-        return {
-          status: 'failed',
-          retryable: error.status === 429 || (error.status ?? 0) >= 500,
-          reason: `destination-user-lookup-http-${error.status ?? 'network'}`,
-        };
-      }
-      throw error;
-    }
-  }
 
   async preflight(): Promise<ConfluencePlatformInfo> {
     await this.readLimit(async () => {

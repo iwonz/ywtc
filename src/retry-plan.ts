@@ -55,7 +55,7 @@ function isCommentIssue(issue: TransferReportIssue): boolean {
 
 function actionableIssues(issues: TransferReportIssue[], object: 'page' | 'resource' | 'comment', objectId?: string): TransferReportIssue[] {
   return issues.filter((issue) => {
-    if (!retryable(issue) || !['error', 'warning'].includes(issue.severity)) return false;
+    if (issue.code === 'mention-user-unresolved' || !retryable(issue) || !['error', 'warning'].includes(issue.severity)) return false;
     if (object === 'resource') return issue.resourceId === objectId || (issue.objectType === 'resource' && issue.objectId === objectId);
     if (object === 'comment') return isCommentIssue(issue);
     return !issue.resourceId && !isCommentIssue(issue) && issue.objectType !== 'resource';
@@ -80,8 +80,7 @@ export function buildRetryPlan(report: TransferReportData): RetryPlan {
     const pageIssues = actionableIssues(issues, 'page');
     const retryPage = page.status === 'not-started'
       || (['failed', 'partial'].includes(page.status) && pageIssues.length > 0)
-      || page.inventoryStatus === 'failed' && pageIssues.length > 0
-      || pageIssues.some((issue) => issue.code === 'mention-user-unresolved');
+      || page.inventoryStatus === 'failed' && pageIssues.length > 0;
     const resourceIds = page.resourceItems
       .filter((resource) => {
         if (retryPage && ['blocked', 'not-started'].includes(resource.status)) return true;

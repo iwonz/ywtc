@@ -97,7 +97,7 @@ function issueActionLabel(issue: TransferReportIssue, locale: Locale): string {
   if (issue.severity === 'normalization') return 'Действие не требуется.';
   if (issue.category === 'authorization') return 'Проверьте токен подключения, выполните doctor и повторите миграцию.';
   if (issue.category === 'permissions') return 'Предоставьте пользователю токена доступ к объекту и повторите миграцию.';
-  if (issue.category === 'mention') return 'Задайте точный alias или измените fallback-шаблон упоминаний; повтор нужен только для нативной разметки.';
+  if (issue.category === 'mention') return 'Проверьте source identity и явный mapping решений; при необходимости повторите перенос затронутого объекта.';
   if (issue.category === 'conflict') return 'Проверьте ownership и identity destination-объекта, затем повторите миграцию.';
   return 'Проверьте причину, затронутый объект и техническую диагностику.';
 }

@@ -3,7 +3,7 @@ import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
 import {acquireExclusiveLease, type ExclusiveLease} from './exclusive-lease.js';
-import type {ExportFormat, GraphEdgeStatus, MentionMode, MentionOutcomeCounts, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
+import type {ExportFormat, GraphEdgeStatus, MentionMode, RecordedMentionMode, MentionOutcomeCounts, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
 
 export type PageTransferStatus = 'discovered' | 'planned' | 'skeleton-created' | 'not-started' | 'complete' | 'partial' | 'conflict' | 'failed' | 'blocked';
 export type RunStatus = 'running' | 'completed' | 'completed-with-warnings' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
@@ -149,7 +149,7 @@ export interface StateRun {
   commentThreads?: number;
   comments?: number;
   commentAttachments?: number;
-  mentionMode?: MentionMode;
+  mentionMode?: RecordedMentionMode;
   pageMentions?: number;
   commentMentions?: number;
   mentionIdentities?: number;
@@ -391,7 +391,7 @@ const runSchema = z.object({
   commentThreads: z.number().int().nonnegative().optional(),
   comments: z.number().int().nonnegative().optional(),
   commentAttachments: z.number().int().nonnegative().optional(),
-  mentionMode: z.enum(['off', 'template', 'auto']).optional(),
+  mentionMode: z.enum(['off', 'mapping', 'template', 'auto']).optional(),
   pageMentions: z.number().int().nonnegative().optional(),
   commentMentions: z.number().int().nonnegative().optional(),
   mentionIdentities: z.number().int().nonnegative().optional(),

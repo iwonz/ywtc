@@ -183,6 +183,37 @@ async function setup() {
 }
 
 describe('comment migration pipeline', () => {
+  it.each(['markdown', 'html'] as const)('exports explicit page/comment decisions to %s without destination calls', async format => {
+    const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    adapters.changeComment('Hello @ivan');
+    const root = await adapters.source.resolvePage('root');root.rawContent = 'Page @ivan';adapters.source.resolvePage = async () => root;adapters.source.getPage = async () => root;
+    config.mentions = {mode: 'mapping', mappingFile: './decisions.json'};
+    await writeFile(path.join(directory, 'decisions.json'), JSON.stringify({source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan', text: '@ivan'}]}));
+    const migrator = new Migrator(config, createLogger([]), profile => {
+      if (profile.name !== 'source') throw new Error('Filesystem output must not create a destination adapter');return adapters.source as SourceAdapter & DestinationAdapter;
+    });
+    const output = path.join(directory, 'export');
+    const result = await migrator.run({...options, destination: {type: 'directory', path: output, format}});
+    expect(result.summary.mentionOutcomes).toMatchObject({linked: 2});expect(result.summary.complete).toBe(1);
+    const manifest = JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8'));
+    expect(manifest.pages[0].comments.status).toBe('complete');
+  });
+  it('updates only effective comment decisions, without changing state identity or notifying users', async () => {
+    const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    adapters.changeComment('Hello @ivan');
+    config.mentions = {mode: 'mapping', mappingFile: './decisions.json'};
+    const filename = path.join(directory, 'decisions.json');
+    const document = {source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan', text: 'Different label'}]};
+    await writeFile(filename, JSON.stringify(document));
+    const migrator = new Migrator(config, createLogger([]), profile => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter);
+    const first = await migrator.run(options);
+    expect(first.summary.complete).toBe(1);expect(adapters.commentBody()).toContain('https://people.example/ivan');
+    expect(adapters.commentBody()).not.toContain('ri:user');
+    await migrator.run(options);expect(adapters.counts().commentCreates).toBe(1);expect(adapters.counts().commentUpdates).toBe(0);
+    document.entries[0]!.url = 'https://people.example/changed';await writeFile(filename, JSON.stringify(document));
+    const changed = await migrator.run(options);expect(changed.stateId).toBe(first.stateId);
+    expect(adapters.counts().commentUpdates).toBe(1);expect(changed.summary.complete).toBe(1);
+  });
   it('does not require attachment APIs for a comment archive without attachment payloads', async () => {
     const {config, options} = await setup();
     const adapters = fixture({commentsWithoutAttachments: true});

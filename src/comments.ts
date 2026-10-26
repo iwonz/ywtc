@@ -17,7 +17,7 @@ import type {
   RawContentFormat,
   SourcePage,
   SourceResource,
-  MentionPolicy,
+  MentionProcessingPolicy,
 } from './domain.js';
 import {safeFilename} from './input.js';
 import {renderSafeCommentMentions} from './mentions.js';
@@ -94,6 +94,7 @@ function entryFromFlat(comment: FlatComment, format: RawContentFormat): CommentE
     author: comment.author,
     ...(comment.createdAt ? {createdAt: comment.createdAt} : {}),
     body: comment.body,
+    bodyFormat: format,
     ...(comment.inlineContext ? {inlineContext: comment.inlineContext} : {}),
     ...(comment.status ? {status: comment.status} : {}),
     attachments: extractAttachmentReferences(comment.body, format),
@@ -306,9 +307,9 @@ function entryLines(entry: CommentEntry, depth: number, replacements: Map<string
   const status = entry.status && entry.status !== 'open' ? ` · ${entry.status}` : '';
   const when = entry.createdAt ? ` · ${entry.createdAt}` : '';
   const header = `${indent}${commentAuthorLabel(entry.author)}${when}${status}:`;
-  const contextLines = entry.inlineContext ? [`${indent}> ${readableBody(entry.inlineContext).replaceAll('\n', `\n${indent}> `)}`] : [];
-  const mentionSafeBody = renderSafeCommentMentions(entry.body, context.mentionPolicy ?? {mode: 'off'}).content;
-  const body = rewriteInternalUrls(replaceAttachmentTokens(entry, replacements, mentionSafeBody), context.pages, context.sourcePages);
+  const contextLines = entry.inlineContext ? [`${indent}> ${renderSafeCommentMentions(entry.inlineContext, context.mentionPolicy ?? {mode: 'off'}, entry.bodyFormat, readableBody).content.replaceAll('\n', `\n${indent}> `)}`] : [];
+  const body = renderSafeCommentMentions(entry.body, context.mentionPolicy ?? {mode: 'off'}, entry.bodyFormat,
+    content => rewriteInternalUrls(replaceAttachmentTokens(entry, replacements, content), context.pages, context.sourcePages)).content;
   const lines = body.split('\n').map((line) => `${indent}${line}`);
   return [header, ...contextLines, ...lines, ...entry.replies.flatMap((reply) => ['', ...entryLines(reply, depth + 1, replacements, context)])];
 }
@@ -326,8 +327,34 @@ function escapeHtml(value: string): string {
 }
 
 function markdownLinksToHtml(value: string): string {
-  const escaped = escapeHtml(value);
-  return escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2">$1</a>').replace(/\n/g, '<br/>');
+  // Parse link labels/destinations in one forward pass, including escaped labels and angle URLs.
+  const chunks: string[] = [];
+  let cursor = 0, index = 0;
+  while (index < value.length) {
+    if (value[index] !== '[') {index += 1;continue;}
+    let end = index + 1, label = '';
+    while (end < value.length && value[end] !== ']') {
+      if (value[end] === '\\' && end + 1 < value.length) {label += value[end + 1];end += 2;}
+      else label += value[end++];
+    }
+    if (end >= value.length) break;
+    if (value[end + 1] !== '(') {index = end + 1;continue;}
+    const start = end + 2, angle = value[start] === '<';
+    let stop = start + (angle ? 1 : 0), depth = 1;
+    while (stop < value.length) {
+      if (angle ? value[stop] === '>' : value[stop] === ')' && depth === 1) break;
+      if (!angle && value[stop] === '(') depth += 1;
+      if (!angle && value[stop] === ')') depth -= 1;
+      stop += 1;
+    }
+    const finish = stop + (angle ? 1 : 0), href = value.slice(start + (angle ? 1 : 0), stop);
+    if (stop >= value.length) break;
+    if (value[finish] !== ')' || !/^https?:\/\//i.test(href)) {index = finish + 1;continue;}
+    chunks.push(escapeHtml(value.slice(cursor, index)), `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`);
+    cursor = finish + 1;index = cursor;
+  }
+  chunks.push(escapeHtml(value.slice(cursor)));
+  return chunks.join('').replace(/\n/g, '<br/>');
 }
 
 export interface CommentRenderContext {
@@ -338,7 +365,7 @@ export interface CommentRenderContext {
   attachmentNames?: Map<string, string>;
   pages?: Map<string, DestinationPage>;
   sourcePages?: Map<string, SourcePage>;
-  mentionPolicy?: MentionPolicy;
+  mentionPolicy?: MentionProcessingPolicy;
   presentation?: 'native' | 'quote' | 'code';
 }
 
@@ -445,7 +472,7 @@ function countReplies(entry: CommentEntry): number {
   return entry.replies.reduce((total, reply) => total + 1 + countReplies(reply), 0);
 }
 
-export function verifyCommentArchive(expected: string | CommentInventory, body: string, archiveName?: string): {ok: boolean; differences: string[]} {
+export function verifyCommentArchive(expected: string | CommentInventory, body: string, archiveName?: string, mentionPolicy: MentionProcessingPolicy = {mode: 'off'}): {ok: boolean; differences: string[]} {
   const differences: string[] = [];
   const expectedFingerprint = typeof expected === 'string' ? expected : expected.fingerprint;
   const readable = readableBody(body);
@@ -458,7 +485,7 @@ export function verifyCommentArchive(expected: string | CommentInventory, body: 
       if (!readable.includes(author)) differences.push(`comment author is missing: ${author}`);
       if (entry.createdAt && !readable.includes(entry.createdAt)) differences.push(`comment date is missing: ${entry.id}`);
       if (entry.status && entry.status !== 'open' && !readable.includes(entry.status)) differences.push(`comment status is missing: ${entry.id}`);
-      const text = readableBody(entry.body).replace(/\[[^\]]*\]\([^)]*\)/g, ' ');
+      const text = readableBody(renderSafeCommentMentions(entry.body, mentionPolicy, entry.bodyFormat).content).replace(/\[[^\]]*\]\([^)]*\)/g, ' ');
       const tokens = text.toLocaleLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? [];
       const actual = readable.toLocaleLowerCase();
       if (tokens.some((token) => !actual.includes(token))) differences.push(`comment text is missing: ${entry.id}`);

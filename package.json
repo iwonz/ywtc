@@ -41,9 +41,10 @@
     "npm": ">=11.5.1"
   },
   "scripts": {
-    "build": "npm run build:node && npm run build:report",
+    "build": "npm run build:node && npm run build:report && npm run build:mentions",
     "build:node": "tsc -p tsconfig.build.json",
     "build:report": "vite build --config vite.report.config.ts",
+    "build:mentions": "vite build --config vite.mentions.config.ts",
     "check": "npm run release:check && npm run security:audit && npm run typecheck && npm run lint && npm run knip && npm test && npm run test:browser && npm run build && npm run package:verify && npm run spec:validate",
     "format": "biome format --write .",
     "format:check": "biome format .",
@@ -59,12 +60,12 @@
     "release:validate": "node --import tsx scripts/validate-release-tag.ts",
     "security:audit": "npm audit --omit=dev --audit-level=high",
     "spec:validate": "openspec validate --all --strict --no-interactive",
-    "pretest": "npm run build:report",
+    "pretest": "npm run build:report && npm run build:mentions",
     "test": "vitest run",
-    "pretest:browser": "npm run build:report",
+    "pretest:browser": "npm run build:report && npm run build:mentions",
     "test:browser": "playwright test",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p report-ui/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p report-ui/tsconfig.json && tsc --noEmit -p mentions-ui/tsconfig.json",
     "workspace:init": "node --import tsx src/cli.ts init --workdir ."
   },
   "dependencies": {

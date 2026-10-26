@@ -183,7 +183,7 @@ describe('targeted retry planner', () => {
     expect(plan.remainingRetryable).toBe(0);
   });
 
-  it('retries a complete page only for a transient mention lookup failure', () => {
+  it('ignores retired lookup warnings on complete pages', () => {
     const transient = page('transient');
     const permanent = page('permanent');
     const data = report([transient, permanent], [
@@ -199,8 +199,8 @@ describe('targeted retry planner', () => {
 
     const plan = buildRetryPlan(data);
 
-    expect(plan.pages.transient?.decision).toBe('retry');
-    expect(plan.pages.transient?.retryPage).toBe(true);
+    expect(plan.pages.transient?.decision).toBe('resolved');
+    expect(plan.pages.transient?.retryPage).toBe(false);
     expect(plan.pages.permanent?.decision).toBe('resolved');
   });
 

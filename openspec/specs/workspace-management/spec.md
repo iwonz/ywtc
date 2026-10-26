@@ -193,21 +193,21 @@ The wizard SHALL keep drafts in memory, perform read-only probes, semantically m
 - **WHEN** connection-only verification succeeds
 - **THEN** the result SHALL state that page-specific read and write access is verified later by `doctor` or `migrate`, and the wizard SHALL NOT create, update, or delete remote content
 
-### Requirement: Strict global mention policy
-The workspace configuration SHALL accept one optional global mention policy, default it to `off`, and reject unknown modes, fields, placeholders, alias keys, and unsafe URL templates before provider mutation.
+### Requirement: Strict mapping policy configuration
+The workspace SHALL accept only optional mention modes `off` and `mapping`, default to off, and require a mappingFile path in mapping mode. Unknown policy fields and removed modes SHALL fail strict configuration validation.
 
 #### Scenario: Workspace is initialized
-- **WHEN** `ywtc init` creates a new configuration
-- **THEN** the generated YAML SHALL include `mentions.mode: off` without example identities, internal domains, or populated personal data
+- **WHEN** init creates configuration
+- **THEN** YAML SHALL include mentions.mode off without personal data or a mandatory mapping path
 
-#### Scenario: Template placeholders are valid
-- **WHEN** text or URL templates contain only `source`, `username`, `displayName`, `email`, `id`, or `name`
-- **THEN** strict configuration parsing SHALL accept them and preserve their literal template values
+#### Scenario: Mapping is loaded
+- **WHEN** migrate or doctor uses mapping mode
+- **THEN** its file SHALL be read and validated once before provider calls, with relative paths based on the configuration directory and absolute/tilde paths supported
 
-#### Scenario: Template placeholder is unknown
-- **WHEN** a template contains another placeholder or malformed braces
-- **THEN** configuration loading SHALL fail before API requests with the exact `mentions` field path and SHALL redact configured identity data where required
+#### Scenario: Mapping is unusable
+- **WHEN** the file is absent, malformed, invalid, or bound to another selected source
+- **THEN** the command SHALL identify the file and invalid field safely before API requests without converting or modifying it
 
-#### Scenario: Alias key is invalid
-- **WHEN** an alias key does not begin with `username:`, `accountId:`, `userKey:`, or `id:` or has no value
-- **THEN** strict configuration loading SHALL reject it before API requests
+#### Scenario: Export prepares a missing mapping
+- **WHEN** mentions export uses valid source credentials
+- **THEN** it SHALL not require the configured mapping file to exist and SHALL not modify workspace configuration or migration state

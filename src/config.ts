@@ -3,55 +3,9 @@ import {parse as parseYaml} from 'yaml';
 import {z} from 'zod';
 import type {MentionPolicy} from './domain.js';
 
-const mentionPlaceholderNames = new Set(['source', 'username', 'displayName', 'email', 'id', 'name']);
-
-function validateMentionTemplate(value: string, context: z.RefinementCtx, path: (string | number)[]): void {
-  const placeholders = [...value.matchAll(/\{([^{}]+)\}/g)];
-  for (const match of placeholders) {
-    if (!mentionPlaceholderNames.has(match[1] ?? '')) {
-      context.addIssue({code: 'custom', path, message: `Unknown mention placeholder: ${match[0]}`});
-    }
-  }
-  const withoutPlaceholders = value.replace(/\{[^{}]+\}/g, '');
-  if (/[{}]/.test(withoutPlaceholders)) {
-    context.addIssue({code: 'custom', path, message: 'Malformed mention placeholder'});
-  }
-}
-
-const mentionAliasSchema = z.object({
-  username: z.string().trim().min(1).optional(),
-  userKey: z.string().trim().min(1).optional(),
-  accountId: z.string().trim().min(1).optional(),
-  id: z.string().trim().min(1).optional(),
-}).strict().refine((alias) => Object.values(alias).some(Boolean), 'at least one destination identifier is required');
-
-const activeMentionPolicySchema = z.object({
-  mode: z.enum(['template', 'auto']),
-  textTemplate: z.string().min(1).default('{source}'),
-  urlTemplate: z.string().min(1).optional(),
-  aliases: z.record(z.string(), mentionAliasSchema).default({}),
-}).strict().superRefine((policy, context) => {
-  validateMentionTemplate(policy.textTemplate, context, ['textTemplate']);
-  if (policy.urlTemplate !== undefined) {
-    validateMentionTemplate(policy.urlTemplate, context, ['urlTemplate']);
-    const substituted = policy.urlTemplate.replace(/\{[^{}]+\}/g, 'value');
-    try {
-      const url = new URL(substituted);
-      if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('unsafe protocol');
-    } catch {
-      context.addIssue({code: 'custom', path: ['urlTemplate'], message: 'Mention URL template must produce an absolute HTTP(S) URL'});
-    }
-  }
-  for (const key of Object.keys(policy.aliases)) {
-    if (!/^(?:username|accountId|userKey|id):.+$/.test(key)) {
-      context.addIssue({code: 'custom', path: ['aliases', key], message: 'Invalid mention alias key'});
-    }
-  }
-});
-
 const mentionPolicySchema = z.discriminatedUnion('mode', [
   z.object({mode: z.literal('off')}).strict(),
-  activeMentionPolicySchema,
+  z.object({mode: z.literal('mapping'), mappingFile: z.string().trim().min(1)}).strict(),
 ]).default({mode: 'off'});
 
 const limitsSchema = z.object({

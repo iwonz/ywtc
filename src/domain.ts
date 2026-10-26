@@ -1,4 +1,5 @@
 import type {ConnectionProfile} from './config.js';
+import type {MentionDecisionDocument} from './mention-decisions.js';
 
 export type ProviderKind = 'yandex-wiki' | 'confluence';
 export type TransferScope = 'page' | 'subtree' | 'linked';
@@ -7,55 +8,37 @@ export type ExportFormat = 'markdown' | 'html';
 export type RawContentFormat = 'yfm' | 'confluence-storage';
 export type DiagramKind = 'drawio' | 'mermaid' | 'plantuml' | 'd2';
 
-export type MentionMode = 'off' | 'template' | 'auto';
+export type MentionMode = 'off' | 'mapping';
+/** Historical run metadata is readable; these values do not enable processing. */
+export type RecordedMentionMode = MentionMode | 'template' | 'auto';
 export type MentionOutcome = 'preserved' | 'native' | 'linked' | 'text' | 'unresolved' | 'failed';
-
-export interface MentionAlias {
-  username?: string;
-  userKey?: string;
-  accountId?: string;
-  id?: string;
-}
 
 export type MentionPolicy =
   | {mode: 'off'}
-  | {
-    mode: 'template' | 'auto';
-    textTemplate: string;
-    urlTemplate?: string;
-    aliases: Record<string, MentionAlias>;
-  };
+  | {mode: 'mapping'; mappingFile: string};
+
+export type MentionProcessingPolicy =
+  | {mode: 'off'}
+  | {mode: 'mapping'; document: MentionDecisionDocument};
 
 export interface MentionIdentity {
   source: string;
-  username?: string;
+  username?: string | undefined;
   displayName?: string;
   email?: string;
-  id?: string;
-  userKey?: string;
-  accountId?: string;
-}
-
-export interface ResolvedMentionUser {
-  username?: string;
-  displayName?: string;
-  id?: string;
-  userKey?: string;
-  accountId?: string;
+  id?: string | undefined;
+  userKey?: string | undefined;
+  accountId?: string | undefined;
 }
 
 export interface MentionPresentation {
-  outcome: MentionOutcome;
+  outcome: 'preserved' | 'linked';
   label: string;
   url?: string;
-  user?: ResolvedMentionUser;
   reason?: string;
   retryable: boolean;
 }
 
-export type MentionResolution =
-  | {status: 'resolved'; user: ResolvedMentionUser; retryable?: false}
-  | {status: 'not-found' | 'ambiguous' | 'unsupported' | 'failed'; reason: string; retryable: boolean};
 
 export interface EmbeddedResourceDescriptor {
   type: 'yfm-data-uri';
@@ -279,6 +262,7 @@ export interface CommentEntry {
   author: CommentAuthor;
   createdAt?: string;
   body: string;
+  bodyFormat?: RawContentFormat;
   inlineContext?: string;
   status?: 'open' | 'resolved' | 'deleted';
   attachments: CommentAttachmentReference[];
@@ -330,7 +314,6 @@ export interface AdapterCapabilities {
   readComments?: boolean;
   writeComments?: boolean;
   updateComments?: boolean;
-  resolveMentions?: boolean;
 }
 
 export interface SourceStatusExclusion {
@@ -410,8 +393,6 @@ export interface DestinationAdapter {
   createArchiveComment?(input: {page: DestinationPage; body: string}): Promise<DestinationComment>;
   updateArchiveComment?(input: {comment: DestinationComment; body: string}): Promise<DestinationComment>;
   readArchiveComment?(input: {page: DestinationPage; commentId: string}): Promise<DestinationComment>;
-  resolveMention?(identity: MentionIdentity): Promise<MentionResolution>;
-  preflightMentionLookup?(): Promise<{available: boolean; warning?: string}>;
 }
 
 export type GraphEdgeStatus = 'resolved' | 'external' | 'inaccessible' | 'broken' | 'cycle' | 'unsupported';

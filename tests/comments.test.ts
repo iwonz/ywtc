@@ -97,13 +97,13 @@ describe('comment archives', () => {
     })).rejects.toThrow(/integrity check failed/);
   });
 
-  it('renders comment mentions as safe template links without native destination markers', () => {
+  it('renders explicit comment links without native destination markers', () => {
     const yandex = normalizeCommentForest([
       {id: '1', author: {providerId: 'u1'}, body: 'Ping @ivan and `@code`'},
     ], 'yfm');
     const yandexBody = renderCommentArchive(yandex, 'confluence', {
       sourceUrl: 'https://wiki.example.com/page',
-      mentionPolicy: {mode: 'template', textTemplate: '{username}', urlTemplate: 'https://people.example/{username}', aliases: {}},
+      mentionPolicy: {mode: 'mapping', document: {source: {provider: 'yandex-wiki', instance: 'https://wiki.example.com'}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan'}]}},
     });
     expect(yandexBody).toContain('https://people.example/ivan');
     expect(yandexBody).toContain('@code');
@@ -114,9 +114,17 @@ describe('comment archives', () => {
     ], 'confluence-storage');
     const confluenceBody = renderCommentArchive(confluence, 'yandex-wiki', {
       sourceUrl: 'https://confluence.example/pages/1',
-      mentionPolicy: {mode: 'template', textTemplate: '{name}', urlTemplate: 'https://people.example/{username}', aliases: {}},
+      mentionPolicy: {mode: 'mapping', document: {source: {provider: 'confluence', instance: 'https://confluence.example'}, entries: [{identity: {username: 'maria'}, mention: 'Maria', decision: 'url', url: 'https://people.example/maria', text: 'Maria'}]}},
     });
     expect(confluenceBody).toContain('[Maria](https://people.example/maria)');
     expect(confluenceBody).not.toContain('ri:user');
+  });
+  it('preserves literal mapping labels and URL parentheses without page-link rewriting', () => {
+    const inventory = normalizeCommentForest([{id: '1', author: {providerId: 'u'}, body: 'Hello @ivan'}], 'yfm');
+    const url = 'https://people.example/ivan_(profile)';
+    const body = renderCommentArchive(inventory, 'confluence', {sourceUrl: 'https://wiki.example/page',
+      mentionPolicy: {mode: 'mapping', document: {source: {provider: 'yandex-wiki', instance: 'https://wiki.example'}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url, text: '[Ivan] <admin>'}]}},
+    });
+    expect(body).toContain(`href="${url}"`);expect(body).toContain('[Ivan] &lt;admin&gt;</a>');
   });
 });

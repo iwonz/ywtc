@@ -146,21 +146,6 @@ Retry planning SHALL select actionable page, resource, comment, Grid, discovery,
 - **WHEN** the latest report contains an explicit retryable unavailable or failed Grid outcome
 - **THEN** retry SHALL select that Grid enrichment and its owning page while leaving unrelated complete pages unchanged
 
-### Requirement: Targeted mention-resolution retry
-Retry planning SHALL select unresolved mention work caused by a typed transient destination lookup failure even when the owning page remains complete because a fallback was verified.
-
-#### Scenario: Transient lookup failure is actionable
-- **WHEN** the latest aggregate outcome contains a retryable mention warning caused by timeout, rate limiting, network failure, or provider 5xx
-- **THEN** retry SHALL select the owning page's mention resolution and final render while carrying forward its verified resources and unrelated content outcomes
-
-#### Scenario: Deterministic unresolved identity is terminal
-- **WHEN** the latest outcome is not found, unsupported lookup, missing template data, or ambiguous identity without a transient provider failure
-- **THEN** retry SHALL keep the verified fallback and SHALL NOT select that mention automatically
-
-#### Scenario: Retry resolves the user
-- **WHEN** an actionable lookup later returns one verified destination user
-- **THEN** retry SHALL replace the fallback with the native mention, remove the resolved warning, and verify the updated page without duplicating destination objects
-
 ### Requirement: Identity-preserving targeted rewrite
 The CLI SHALL accept `retry --rewrite` and `-R` while keeping ordinary actionable selection and restoring the source and destination invocation. Rewrite SHALL affect only selected pages and necessary in-place dependency recovery.
 
@@ -171,3 +156,18 @@ The CLI SHALL accept `retry --rewrite` and `-R` while keeping ordinary actionabl
 #### Scenario: Origin invocation used rewrite
 - **WHEN** retry restores an invocation that recorded rewrite
 - **THEN** its identity-preserving no-create policy SHALL remain enabled even when the operator omits the flag
+
+### Requirement: Decision-based mention retry boundary
+Retry SHALL target actual unresolved content verification failures and SHALL NOT repeat complete pages solely because historical destination-user lookup warnings remain.
+
+#### Scenario: Earlier lookup failed
+- **WHEN** a complete page carries a recorded mention-user-unresolved diagnostic
+- **THEN** it SHALL remain resolved for automatic retry regardless of the historical lookup retryability
+
+#### Scenario: Mapping changes for successful pages
+- **WHEN** an operator changes decisions for complete pages
+- **THEN** ordinary migrate SHALL reconcile those changes while targeted retry SHALL retain its existing frozen selection boundary
+
+#### Scenario: Mention representation was lost
+- **WHEN** current content verification proves a missing or altered mention representation
+- **THEN** the ordinary typed verification failure SHALL remain actionable without performing a user lookup

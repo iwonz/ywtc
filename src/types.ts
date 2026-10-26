@@ -1,5 +1,4 @@
 import type {Readable} from 'node:stream';
-import type {MentionIdentity, MentionResolution} from './domain.js';
 
 export type YandexPageType = 'page' | 'grid' | 'wysiwyg' | 'template';
 
@@ -228,7 +227,6 @@ export interface YandexWikiApi {
 
 export interface ConfluenceApi {
   getCurrentUser(): Promise<Record<string, unknown>>;
-  resolveMentionUser(identity: MentionIdentity): Promise<MentionResolution>;
   preflight?(): Promise<ConfluencePlatformInfo>;
   resolveTarget(input: string): Promise<ConfluencePage>;
   getPage(id: string): Promise<ConfluencePage>;

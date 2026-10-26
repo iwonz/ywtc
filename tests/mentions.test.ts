@@ -1,15 +1,14 @@
 import {createHash} from 'node:crypto';
 import {describe, expect, it} from 'vitest';
 import {ConfigurationError, parseWorkspaceConfig} from '../src/config.js';
+import {normalizePageContent, renderConfluenceStorage, renderMarkdown, renderStaticHtml, renderYfm, verifyDestinationContent} from '../src/content-model.js';
+import type {MentionIdentity, MentionProcessingPolicy, RenderContext, SourcePage} from '../src/domain.js';
 import {
   mentionPolicyFingerprint,
   prepareMentionPresentation,
   protectYfmMentions,
   resolveMentionPresentations,
 } from '../src/mentions.js';
-import type {MentionIdentity, MentionPolicy} from '../src/domain.js';
-import type {RenderContext, SourcePage} from '../src/domain.js';
-import {normalizePageContent, renderConfluenceStorage, renderMarkdown, renderStaticHtml, renderYfm, verifyDestinationContent} from '../src/content-model.js';
 
 const config = (mentions?: unknown): unknown => ({
   defaults: {},
@@ -22,108 +21,24 @@ const config = (mentions?: unknown): unknown => ({
   },
 });
 
-describe('mention configuration', () => {
-  it('defaults to off and accepts strict template and auto policies', () => {
+describe('current mention decisions', () => {
+  it('defaults off and rejects removed modes and fields', () => {
     expect(parseWorkspaceConfig(config(), '/tmp/ywtc.config.yaml').mentions).toEqual({mode: 'off'});
-    expect(parseWorkspaceConfig(config({
-      mode: 'template', textTemplate: '{name}', urlTemplate: 'https://profiles.example.com/{username}',
-    }), '/tmp/ywtc.config.yaml').mentions).toEqual({
-      mode: 'template', textTemplate: '{name}', urlTemplate: 'https://profiles.example.com/{username}', aliases: {},
-    });
-    expect(parseWorkspaceConfig(config({
-      mode: 'auto', textTemplate: '{source}', aliases: {'username:ivan': {username: 'i.petrov', accountId: 'abc'}},
-    }), '/tmp/ywtc.config.yaml').mentions).toMatchObject({
-      mode: 'auto', textTemplate: '{source}', aliases: {'username:ivan': {username: 'i.petrov', accountId: 'abc'}},
-    });
-  });
-
-  it.each([
-    [{mode: 'template', textTemplate: '{unknown}'}, 'mentions.textTemplate'],
-    [{mode: 'template', textTemplate: '{name', urlTemplate: 'https://example.com/{username}'}, 'mentions.textTemplate'],
-    [{mode: 'template', textTemplate: '{name}', urlTemplate: 'javascript:{username}'}, 'mentions.urlTemplate'],
-    [{mode: 'auto', textTemplate: '{source}', aliases: {'login:ivan': {username: 'ivan'}}}, 'mentions.aliases.login:ivan'],
-    [{mode: 'off', textTemplate: '{source}'}, 'mentions.textTemplate'],
-  ])('rejects invalid mention configuration %#', (mentions, field) => {
-    expect(() => parseWorkspaceConfig(config(mentions), '/tmp/ywtc.config.yaml')).toThrowError(ConfigurationError);
-    try {
-      parseWorkspaceConfig(config(mentions), '/tmp/ywtc.config.yaml');
-    } catch (error) {
-      expect((error as ConfigurationError).fields).toContain(field);
+    for (const policy of [{mode: 'auto'}, {mode: 'template'}, {mode: 'off', textTemplate: '{source}'}]) {
+      expect(() => parseWorkspaceConfig(config(policy), '/tmp/ywtc.config.yaml')).toThrow(ConfigurationError);
     }
   });
-});
-
-describe('mention presentation', () => {
-  const identity: MentionIdentity = {source: '@{ivan}', username: 'ivan', displayName: 'Ivan Petrov', id: '42'};
-
-  it('renders escaped text and an encoded safe profile URL', () => {
-    const policy: MentionPolicy = {mode: 'template', textTemplate: '{displayName} <{username}>', urlTemplate: 'https://profiles.example.com/{username}', aliases: {}};
-    expect(prepareMentionPresentation(identity, policy, {native: false})).toEqual({
-      outcome: 'linked', label: 'Ivan Petrov <ivan>', url: 'https://profiles.example.com/ivan', retryable: false,
-    });
-  });
-
-  it('performs no destination lookup when processing is off', async () => {
-    const destination = {resolveMention: async () => { throw new Error('lookup must not run'); }};
-    const result = await resolveMentionPresentations([{id: 'one', identity}], {mode: 'off'}, destination);
-
-    expect(result.get('one')).toEqual({outcome: 'preserved', label: '@{ivan}', retryable: false});
-  });
-
-  it('preserves the source and reports unresolved when required values are missing', () => {
-    const policy: MentionPolicy = {mode: 'auto', textTemplate: '{email}', aliases: {}};
-    expect(prepareMentionPresentation(identity, policy, {native: true, status: 'not-found'})).toEqual({
-      outcome: 'unresolved', label: '@{ivan}', reason: 'missing-template-value:email', retryable: false,
-    });
-  });
-
-  it('produces a stable policy fingerprint independent of alias insertion order', () => {
-    const left: MentionPolicy = {mode: 'auto', textTemplate: '{source}', aliases: {
-      'username:b': {username: 'b2'}, 'username:a': {username: 'a2'},
+  it('uses explicit decisions without lookup and hashes effective values only', async () => {
+    const identity: MentionIdentity = {source: '@{ivan}', username: 'ivan'};
+    const policy: MentionProcessingPolicy = {mode: 'mapping', document: {
+      source: {provider: 'yandex-wiki', instance: 'https://wiki.example.com'},
+      entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example.com/ivan', text: 'Ivan <admin>'}],
     }};
-    const right: MentionPolicy = {mode: 'auto', textTemplate: '{source}', aliases: {
-      'username:a': {username: 'a2'}, 'username:b': {username: 'b2'},
-    }};
-    expect(mentionPolicyFingerprint(left)).toBe(mentionPolicyFingerprint(right));
-  });
-
-  it('deduplicates destination lookup and verifies aliases before rendering native mentions', async () => {
-    const policy: MentionPolicy = {mode: 'auto', textTemplate: '{source}', aliases: {
-      'username:ivan': {username: 'i.petrov', accountId: 'cloud-42'},
-    }};
-    let calls = 0;
-    const destination = {
-      resolveMention: async (value: MentionIdentity) => {
-        calls += 1;
-        expect(value).toMatchObject({username: 'i.petrov', accountId: 'cloud-42'});
-        return {status: 'resolved' as const, user: {username: 'i.petrov', accountId: 'cloud-42'}};
-      },
-    };
-    const results = await resolveMentionPresentations([
-      {id: 'one', identity}, {id: 'two', identity: {...identity, source: '@ivan'}},
-    ], policy, destination);
-    expect(calls).toBe(1);
-    expect([...results.values()]).toEqual([
-      expect.objectContaining({outcome: 'native'}), expect.objectContaining({outcome: 'native'}),
-    ]);
-  });
-
-  it('uses any matching source alias before immutable-ID lookup', async () => {
-    const policy: MentionPolicy = {mode: 'auto', textTemplate: '{source}', aliases: {
-      'username:ivan': {accountId: 'destination-42'},
-    }};
-    const destination = {
-      resolveMention: async (value: MentionIdentity) => {
-        expect(value.accountId).toBe('destination-42');
-        return {status: 'resolved' as const, user: {accountId: 'destination-42'}};
-      },
-    };
-
-    const results = await resolveMentionPresentations([
-      {id: 'one', identity: {...identity, accountId: 'source-42'}},
-    ], policy, destination);
-
-    expect(results.get('one')).toMatchObject({outcome: 'native', user: {accountId: 'destination-42'}});
+    expect(prepareMentionPresentation(identity, policy)).toMatchObject({outcome: 'linked', label: 'Ivan <admin>'});
+    expect((await resolveMentionPresentations([{id: '1', identity}], {mode: 'off'})).get('1')).toMatchObject({outcome: 'preserved', label: '@{ivan}'});
+    const changed = structuredClone(policy);
+    if (changed.mode === 'mapping') changed.document.entries.unshift({identity: {username: 'unrelated'}, mention: '@unrelated', decision: 'skip'});
+    expect(mentionPolicyFingerprint(policy, [identity])).toBe(mentionPolicyFingerprint(changed, [identity]));
   });
 });
 
@@ -171,6 +86,13 @@ describe('bounded YFM mention recognition', () => {
 });
 
 describe('mention normalization and rendering', () => {
+  it('keeps literal mapping URLs outside ordinary page-link rewriting', async () => {
+    const source = page('Hello @ivan'), document = normalizePageContent(source), renderContext = context(source);
+    renderContext.pages.set(source.canonicalId, {path: 'destination.md', title: 'Moved'});
+    renderContext.mentions!.set(document.mentions![0]!.id, {outcome: 'linked', label: 'Ivan', url: source.url, retryable: false});
+    expect((await renderMarkdown(document, renderContext)).body).toContain(source.url);
+    expect((await renderStaticHtml(document, renderContext)).body).toContain(source.url);
+  });
   const page = (rawContent: string, rawFormat: SourcePage['rawFormat'] = 'yfm'): SourcePage => ({
     provider: rawFormat === 'yfm' ? 'yandex-wiki' : 'confluence', profile: 'source', id: '1', canonicalId: 'source:1',
     title: 'Mentions', locator: 'mentions', url: 'https://wiki.example.com/mentions', rawContent, rawFormat, references: [],
@@ -240,20 +162,14 @@ describe('mention normalization and rendering', () => {
     ]);
   });
 
-  it('renders verified native users for Confluence and Yandex destinations', async () => {
-    const source = page('Hello @ivan');
-    const document = normalizePageContent(source);
-    const renderContext = context(source);
+  it('renders decisions as ordinary links, never new native users', async () => {
+    const source = page('Hello @ivan'), document = normalizePageContent(source), renderContext = context(source);
     renderContext.mentions!.set(document.mentions![0]!.id, {
-      outcome: 'native', label: 'Ivan', user: {username: 'i.petrov', accountId: 'cloud-42'}, retryable: false,
+      outcome: 'linked', label: '@ivan', url: 'https://people.example/ivan', retryable: false,
     });
     const confluence = await renderConfluenceStorage(document, source, renderContext, 'DOC');
-    expect(confluence.body).toContain('<ri:user ri:account-id="cloud-42"/>');
-    expect(confluence.mentions).toMatchObject({native: 1});
-    const yfm = await renderYfm(document, renderContext);
-    expect(yfm.body).toContain('@i.petrov');
-    expect(yfm.mentions).toMatchObject({native: 1});
-    expect(verifyDestinationContent(confluence.body, '<p>Hello Ivan</p>', 'confluence', source)).toMatchObject({status: 'failed'});
+    expect(confluence.body).toContain('https://people.example/ivan');
+    expect(confluence.body).not.toContain('ri:user');
     expect(verifyDestinationContent(confluence.body, confluence.body, 'confluence', source)).toMatchObject({status: 'complete'});
   });
 });

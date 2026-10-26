@@ -31,6 +31,7 @@ async function reportBundle(root: string, runId: string, finishedAt: string, ret
     warnings: ['warning'],
     errors: ['error'],
     summary: {
+      mentionMode: 'mapping',
       pages: 3, complete: 2, partial: 1, failed: 0, blocked: 0, conflicts: 0, unprocessedPages: 0,
       returnedDescendants: 5, selectedDescendants: 2, excludedPages: 3, maximumDepth: 2, hierarchyGaps: 1, hierarchyRepairs: 1,
       resources: 4, resourcesComplete: 3, resourcesPartial: 0, resourcesFailed: 1, resourcesPlanned: 0,
@@ -48,6 +49,7 @@ describe('report catalog', () => {
     const catalog = await listReports(root);
     expect(catalog.reports.map((report) => report.runId)).toEqual([newer, older]);
     expect(catalog.reports[0]).toMatchObject({
+      mentionMode: 'mapping',
       pages: 3, complete: 2, partial: 1, resources: 4, resourcesComplete: 3, resourcesFailed: 1,
       sourceStatus: 'current', returnedDescendants: 5, selectedDescendants: 2, excludedPages: 3, maximumDepth: 2, hierarchyGaps: 1, hierarchyRepairs: 1,
       inventoryComplete: true, degradations: 3, warnings: 4, errors: 5,

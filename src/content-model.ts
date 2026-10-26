@@ -28,7 +28,7 @@ import {discoverPageDiagrams} from './diagrams.js';
 import {transformYfm} from './diplodoc.js';
 import {normalizeWikiSlug, resolveRelativeWikiSlug} from './input.js';
 import {hasYfmLayouts, parseYfmDocumentSegments} from './layout.js';
-import {escapeMentionMarkdown, protectYfmMentions} from './mentions.js';
+import {escapeMentionMarkdown, protectYfmMentions, protectConfluenceMentions as extractConfluenceMentions} from './mentions.js';
 import {safeLinkifyMatches} from './safe-linkify.js';
 
 function sha256(value: string): string {
@@ -522,42 +522,6 @@ function metrics(html: string): NormalizedDocument['metrics'] {
   return {links: $('a').length, images: $('img').length, tables: $('table').length, codeBlocks: $('pre').length, mentions: $('[data-ywtc-mention-id]').length, preservedExternalReferences: 0};
 }
 
-function extractConfluenceMentions(storage: string): {content: string; mentions: NormalizedMention[]} {
-  const $ = load(`<main data-ywtc-mentions>${storage}</main>`, {xmlMode: true}, false);
-  const mentions: NormalizedMention[] = [];
-  const digest = sha256(storage).slice(0, 16).toUpperCase();
-  let namespaceAttempt = 0;
-  let markerNamespace = digest;
-  while (storage.includes(`YWTCCONFLUENCEMENTION${markerNamespace}`)) {
-    namespaceAttempt += 1;
-    markerNamespace = `${digest}X${namespaceAttempt.toString(36).toUpperCase()}`;
-  }
-  $('ac\\:link').each((_index, element) => {
-    const link = $(element);
-    const user = link.children('ri\\:user').first();
-    if (user.length === 0) return;
-    const username = user.attr('ri:username');
-    const userKey = user.attr('ri:userkey');
-    const accountId = user.attr('ri:account-id');
-    const displayName = link.children('ac\\:link-body, ac\\:plain-text-link-body').first().text().trim() || undefined;
-    const source = displayName ?? (username ? `@${username}` : accountId ?? userKey ?? 'mention');
-    const id = `mention-${mentions.length}`;
-    const marker = `YWTCCONFLUENCEMENTION${markerNamespace}${mentions.length.toString(36).toUpperCase()}TOKEN`;
-    mentions.push({
-      id,
-      marker,
-      identity: {
-        source,
-        ...(username ? {username} : {}),
-        ...(userKey ? {userKey, id: userKey} : {}),
-        ...(accountId ? {accountId, id: accountId} : {}),
-        ...(displayName ? {displayName} : {}),
-      },
-    });
-    link.replaceWith(marker);
-  });
-  return {content: $('main[data-ywtc-mentions]').html() ?? '', mentions};
-}
 
 function injectMentionElements(html: string, mentions: NormalizedMention[]): string {
   let result = html;
@@ -585,7 +549,7 @@ function portableMentionHtml(document: NormalizedDocument, context: RenderContex
     if (!mention) return;
     const presentation = context.mentions?.get(id);
     const label = presentation?.label ?? mention.identity.source;
-    if (presentation?.url && (presentation.outcome === 'linked' || presentation.outcome === 'unresolved')) {
+    if (presentation?.url && presentation.outcome === 'linked') {
       $(element).replaceWith(`<a href="${escapeHtml(presentation.url)}">${escapeHtml(label)}</a>`);
     } else {
       $(element).replaceWith(escapeHtml(label));
@@ -595,17 +559,6 @@ function portableMentionHtml(document: NormalizedDocument, context: RenderContex
 }
 
 function mentionStorage(presentation: import('./domain.js').MentionPresentation | undefined, mention: NormalizedMention): string {
-  if (presentation?.outcome === 'native' && presentation.user) {
-    const user = presentation.user;
-    const attribute = user.accountId
-      ? `ri:account-id="${escapeHtml(user.accountId)}"`
-      : user.userKey
-        ? `ri:userkey="${escapeHtml(user.userKey)}"`
-        : user.username
-          ? `ri:username="${escapeHtml(user.username)}"`
-          : undefined;
-    if (attribute) return `<ac:link><ri:user ${attribute}/><ac:plain-text-link-body><![CDATA[${(presentation.label || mention.identity.source).replaceAll(']]>', ']]]]><![CDATA[>')}]]></ac:plain-text-link-body></ac:link>`;
-  }
   const label = presentation?.label ?? mention.identity.source;
   return presentation?.url
     ? `<a href="${escapeHtml(presentation.url)}">${escapeHtml(label)}</a>`
@@ -627,6 +580,7 @@ function replaceConfluenceMentionLinks(value: string, document: NormalizedDocume
   $('ac\\:link').each((_elementIndex, element) => {
     const link = $(element);
     if (link.children('ri\\:user').length === 0) return;
+    if (link.parents('code,pre,script,style,ac\\:plain-text-body').length) return;
     const mention = document.mentions?.[index++];
     if (!mention) return;
     const presentation = context.mentions?.get(mention.id);
@@ -641,9 +595,8 @@ function replaceMentionMarkersWithYfm(value: string, document: NormalizedDocumen
   for (const [index, mention] of (document.mentions ?? []).entries()) {
     const presentation = context.mentions?.get(mention.id);
     const label = presentation?.label ?? mention.identity.source;
-    const replacement = presentation?.outcome === 'native' && presentation.user?.username
-      ? `@${presentation.user.username}`
-      : presentation?.url ? `[${escapeMentionMarkdown(label)}](${presentation.url})` : escapeMentionMarkdown(label);
+    const destination = presentation?.url?.includes('(') || presentation?.url?.includes(')') ? `<${presentation.url}>` : presentation?.url;
+    const replacement = destination ? `[${escapeMentionMarkdown(label)}](${destination})` : escapeMentionMarkdown(label);
     result = result.split(mention.marker ?? `YWTMENTION${index}TOKEN`).join(replacement);
   }
   return result;
@@ -1492,7 +1445,7 @@ export async function renderMarkdown(document: NormalizedDocument, context: Rend
   if (document.semanticallyEmpty) {
     return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
-  const portable = rewritePortableHtml(portableMentionHtml(document, context, htmlFromDocument(document)), context);
+  const portable = portableMentionHtml(document, context, rewritePortableHtml(htmlFromDocument(document), context));
   const linearized = linearizeLayoutsForMarkdown(portable);
   const tree = treeDirectiveNodes(document).map((node) => renderTreeMarkdown(context, node.tree ?? {})).filter(Boolean).join('\n\n');
   const content = await htmlToMarkdown(linearized.html);
@@ -1506,7 +1459,7 @@ export async function renderStaticHtml(document: NormalizedDocument, context: Re
   if (document.semanticallyEmpty) {
     return {body: '', warnings: [...document.warnings], normalizations: [...document.normalizations], adaptations: [...document.adaptations], notices: [...document.notices], degraded: document.degraded, representedReferences: document.references.length, preservedExternalReferences: 0};
   }
-  const rewritten = rewritePortableHtml(portableMentionHtml(document, context, htmlFromDocument(document)), context);
+  const rewritten = portableMentionHtml(document, context, rewritePortableHtml(htmlFromDocument(document), context));
   const content = await sanitizeHtml(rewritten);
   const tree = treeDirectiveNodes(document).map((node) => renderTreeHtml(context, node.tree ?? {})).filter(Boolean).join('');
   const body = `${content}${tree}`;
@@ -1582,7 +1535,7 @@ export async function renderYfm(document: NormalizedDocument, context: RenderCon
       mentions: mentionCounts(document, context),
     };
   }
-  const converted = await semanticHtmlToYfm(rewritePortableHtml(portableMentionHtml(document, context, htmlFromDocument(document)), context));
+  const converted = await semanticHtmlToYfm(portableMentionHtml(document, context, rewritePortableHtml(htmlFromDocument(document), context)));
   return {
     body: converted.body,
     warnings: [...document.warnings],

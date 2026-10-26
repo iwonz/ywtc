@@ -68,7 +68,7 @@ const reportListSchema = z.object({
     commentAttachments: z.number().nonnegative().optional().default(0),
     commentBytes: z.number().nonnegative().optional().default(0),
     commentStatuses: z.record(z.string(), z.number().nonnegative()).optional().default({}),
-    mentionMode: z.enum(['off', 'template', 'auto']).optional(),
+    mentionMode: z.enum(['off', 'mapping', 'template', 'auto']).optional(),
     pageMentions: z.number().nonnegative().optional().default(0),
     commentMentions: z.number().nonnegative().optional().default(0),
     mentionIdentities: z.number().nonnegative().optional().default(0),
@@ -127,7 +127,7 @@ export interface ReportCatalogEntry {
   commentAttachments: number;
   commentBytes: number;
   commentStatuses: Record<string, number>;
-  mentionMode?: 'off' | 'template' | 'auto';
+  mentionMode?: 'off' | 'mapping' | 'template' | 'auto';
   pageMentions: number;
   commentMentions: number;
   mentionIdentities: number;

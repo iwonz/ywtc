@@ -1,4 +1,4 @@
-import {mkdtemp, readFile} from 'node:fs/promises';
+import {mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import nock from 'nock';
@@ -36,11 +36,11 @@ function mockWikiDestination(profile: YandexConnectionProfile, id = 100, slug = 
     .reply(200, {id, slug, title: 'Archive', page_type: 'page', content: ''});
 }
 
-function mockConfluenceSource(profile: ConfluenceConnectionProfile, id = '10') {
+function mockConfluenceSource(profile: ConfluenceConnectionProfile, id = '10', content = '<h1>Root</h1><p>Body</p>') {
   return nock(new URL(profile.baseUrl).origin, {reqheaders: {authorization: `Bearer ${profile.token}`}})
     .get('/confluence/rest/api/settings/systemInfo').reply(200, {version: '9.2.0'})
     .get(`/confluence/rest/api/content/${id}`).query({expand: 'space,version,ancestors,body.storage,body.view,operations'})
-    .reply(200, {id, type: 'page', title: 'Root', space: {key: 'DOC'}, version: {number: 1}, body: {storage: {value: '<h1>Root</h1><p>Body</p>', representation: 'storage'}}})
+    .reply(200, {id, type: 'page', title: 'Root', space: {key: 'DOC'}, version: {number: 1}, body: {storage: {value: content, representation: 'storage'}}})
     .get(`/confluence/rest/api/content/${id}/child/attachment`).query({start: 0, limit: 100, expand: 'extensions,metadata'})
     .reply(200, {results: [], size: 0});
 }
@@ -64,10 +64,12 @@ describe('four remote transfer directions', () => {
 
   for (const [label, sourceProfile, destinationProfile] of cases) {
     it(`${label} completes a mutation-free dry-run`, async () => {
-      const sourceMock = sourceProfile.type === 'yandex-wiki' ? mockWikiSource(sourceProfile) : mockConfluenceSource(sourceProfile);
+      const sourceMock = sourceProfile.type === 'yandex-wiki' ? mockWikiSource(sourceProfile, 1, 'root', 'Hello @ivan') : mockConfluenceSource(sourceProfile, '10', '<p>Hello <ac:link><ri:user ri:username="ivan"/></ac:link></p>');
       const destinationMock = destinationProfile.type === 'yandex-wiki' ? mockWikiDestination(destinationProfile) : mockConfluenceDestination(destinationProfile);
       const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-matrix-'));
+      await writeFile(path.join(directory, 'decisions.json'), JSON.stringify({source: {provider: sourceProfile.type, instance: sourceProfile.type === 'yandex-wiki' ? sourceProfile.webUrl : sourceProfile.baseUrl}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan'}]}));
       const config: AppConfig = {
+        mentions: {mode: 'mapping', mappingFile: './decisions.json'},
         profiles: {[sourceProfile.name]: sourceProfile, [destinationProfile.name]: destinationProfile},
         timeoutMs: 5_000,
         concurrency: 2,
@@ -88,6 +90,7 @@ describe('four remote transfer directions', () => {
       });
       expect(result.status).toMatch(/completed/);
       expect(result.hasErrors).toBe(false);
+      expect(result.summary.mentionOutcomes?.linked).toBe(1);
       expect(result.summary).toMatchObject({
         pages: 1, complete: 0, partial: 0, failed: 0, unprocessedPages: 1,
         resources: 0, resourcesPlanned: 0, inventoryComplete: true,
@@ -101,14 +104,13 @@ describe('four remote transfer directions', () => {
     const sourceProfile = wiki('wiki-source', 'https://api.wiki-source.example', 'org-a');
     const destinationProfile = confluence('conf-dest', 'https://conf-dest.example');
     const sourceMock = mockWikiSource(sourceProfile, 1, 'root', 'Hello @ivan');
-    const destinationMock = mockConfluenceDestination(destinationProfile)
-      .get('/confluence/rest/api/user').query({username: 'ivan'})
-      .reply(200, {username: 'ivan', userKey: 'user-1', displayName: 'Ivan'});
+    const destinationMock = mockConfluenceDestination(destinationProfile);
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-mentions-matrix-'));
+    await writeFile(path.join(directory, 'decisions.json'), JSON.stringify({source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan'}]}));
     const config: AppConfig = {
       profiles: {[sourceProfile.name]: sourceProfile, [destinationProfile.name]: destinationProfile},
       timeoutMs: 5_000, concurrency: 2,
-      mentions: {mode: 'auto', textTemplate: '{source}', aliases: {}},
+      mentions: {mode: 'mapping', mappingFile: './decisions.json'},
       configFile: path.join(directory, 'ywtc.config.yaml'),
     };
     const result = await new Migrator(config, createLogger([])).run({
@@ -118,9 +120,9 @@ describe('four remote transfer directions', () => {
       runtimeDirectory: path.join(directory, '.states'), cacheDirectory: path.join(directory, '.states/cache'),
       reportsDirectory: path.join(directory, '.states/reports'),
     });
-    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as {summary: {mentionOutcomes: {native: number}}; pages: Array<{mentions?: Array<{outcome: string}>}>};
-    expect(report.summary.mentionOutcomes.native).toBe(1);
-    expect(report.pages[0]?.mentions).toEqual([expect.objectContaining({outcome: 'native'})]);
+    const report = JSON.parse(await readFile(result.reportPaths.json, 'utf8')) as {summary: {mentionOutcomes: {linked: number}}; pages: Array<{mentions?: Array<{outcome: string}>}>};
+    expect(report.summary.mentionOutcomes.linked).toBe(1);
+    expect(report.pages[0]?.mentions).toEqual([expect.objectContaining({outcome: 'linked'})]);
     expect(sourceMock.isDone()).toBe(true);
     expect(destinationMock.isDone()).toBe(true);
   });

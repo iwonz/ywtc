@@ -1,4 +1,4 @@
-import type {GraphEdgeStatus, MentionMode, MentionOutcome, MentionOutcomeCounts, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
+import type {GraphEdgeStatus, RecordedMentionMode as MentionMode, MentionOutcome, MentionOutcomeCounts, ProviderKind, SourceResource, SourceSelection, SourceStatus, TransferScope} from './domain.js';
 import type {IssueCategory, IssueObjectType, MigrationIssue} from './issues.js';
 import type {CommentTransferStatus, PageTransferStatus, ResourceTransferState, RunStatus, StateLoadSource} from './state.js';
 import type {ConflictEvidence} from './state.js';

@@ -10,6 +10,13 @@ const identity: TransferIdentity = {
 };
 
 describe('transfer state', () => {
+  it('reads historical mention modes without restoring removed configuration modes', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-historical-mentions-')), filename = path.join(directory, 'state.json');
+    const store = new StateStore(filename);await store.load(identity);await store.beginRun('page', false);await store.release();
+    const value = JSON.parse(await readFile(filename, 'utf8'));value.runs[0].mentionMode = 'auto';
+    await writeFile(filename, JSON.stringify(value));
+    const resumed = new StateStore(filename);expect((await resumed.load(identity)).runs[0]?.mentionMode).toBe('auto');await resumed.release();
+  });
   it('builds an unversioned canonical ID and isolates destinations and export formats', () => {
     expect(transferStateId(identity)).toBe(transferStateId({...identity}));
     expect(transferStateId(identity)).toBe(transferStateId({
@@ -44,7 +51,7 @@ describe('transfer state', () => {
     });
     await store.setRunComments(run.id, {threads: 1, comments: 2, attachments: 1});
     await store.setRunMentions(run.id, {
-      mode: 'auto', pageMentions: 2, commentMentions: 1,
+      mode: 'mapping', pageMentions: 2, commentMentions: 1,
       mentionIdentities: 2,
       outcomes: {total: 3, preserved: 0, native: 1, linked: 1, text: 0, unresolved: 1, failed: 0},
     });
@@ -95,7 +102,7 @@ describe('transfer state', () => {
       operation: 'retry', sourceStatus: 'current', returnedDescendants: 9, selectedDescendants: 2,
       excludedPages: 1, maximumDepth: 2, commentsEnabled: true, commentThreads: 1, comments: 2,
       commentAttachments: 1, retryAttempt: 2, retrySelectedPages: 3, retrySelectedResources: 1,
-      retrySelectedComments: 2, retryContextPages: 4, mentionMode: 'auto', pageMentions: 2,
+      retrySelectedComments: 2, retryContextPages: 4, mentionMode: 'mapping', pageMentions: 2,
       commentMentions: 1, mentionIdentities: 2, mentionOutcomes: {total: 3, native: 1, linked: 1, unresolved: 1},
     });
     expect(state.pages['wiki:10']).toMatchObject({status: 'discovered', destinationFingerprint: 'page-fingerprint', destinationVersion: '8'});

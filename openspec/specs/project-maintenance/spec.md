@@ -199,38 +199,35 @@ Package and project checks SHALL exercise the public comment flags, provider con
 - **THEN** source fixtures, cached comment bodies, generated ZIPs, reports, tokens, email addresses, and runtime state SHALL be excluded
 
 ### Requirement: Deterministic transfer status reference
-The README SHALL explain every current reported status in object-specific tables with numbered assignment conditions, applicability, and an operator action, while keeping outcome, quality, retryability, and exit code distinct.
+The README SHALL explain every reported status in object-specific tables with numbered conditions, applicability, and an operator action, keeping current producers, historical values, outcome, quality, retryability, and exit code distinct.
 
 #### Scenario: Operator inspects an object status
-- **WHEN** an operator reads `Отчёты и статусы`
-- **THEN** tables SHALL cover pages, files, comment archives, Grid snapshots, mentions, runs, excluded pages, and traversal edges using their current vocabularies
-- **AND** each status SHALL have a dedicated conditions column containing a numbered list of deterministic assignment branches and a next action
+- **WHEN** an operator reads reports and statuses
+- **THEN** tables SHALL cover pages, files, comment archives, Grid snapshots, mentions, runs, exclusions, traversal and inventory with numbered deterministic conditions and next actions
 
 #### Scenario: Incomplete status is interpreted
 - **WHEN** a page, file, or archive is failed, blocked, or not-started
-- **THEN** documentation SHALL explain whether the current operation lacks verification or a dependency, and SHALL NOT imply that previous or bootstrap destination data is absent
+- **THEN** documentation SHALL distinguish missing verification or dependencies from absence of previous or bootstrap data
 
 #### Scenario: Intermediate or reserved value is inspected
-- **WHEN** a status exists only during processing or is accepted by the current type but has no automatic producer
-- **THEN** documentation SHALL explicitly identify that scope and SHALL NOT invent reachable assignment conditions
-- **AND** planned SHALL be described as dry-run-only in finalized outcomes rather than forbidden during live preparation
+- **WHEN** a value is intermediate, historical, or reserved without an active producer
+- **THEN** documentation SHALL identify that scope explicitly without inventing active assignment conditions
 
 #### Scenario: Run status and exit code are inspected
-- **WHEN** an operator compares run status, object outcomes, issues, and command exit code
-- **THEN** documentation SHALL state their current precedence, warning/degradation behavior, signal handling, and retry completion rules without equating partial-page count with a nonzero normal-migration exit code
+- **WHEN** run result, object outcome, issue, and exit code are compared
+- **THEN** documentation SHALL state their distinct precedence, signal behavior, and retry rules
 
 #### Scenario: Quality and retryability are inspected
-- **WHEN** a complete page has an adaptation, normalization, preserved external reference, or unresolved mention warning
-- **THEN** documentation SHALL distinguish completeness from notification delivery, warnings from degradations, and transient mention retry from terminal unresolved identity
+- **WHEN** a complete page has a normalization, adaptation, external reference, or preserved mention
+- **THEN** documentation SHALL distinguish completeness from representation and SHALL NOT describe removed lookup retry as active work
 
 #### Scenario: README status coverage is checked
 - **WHEN** repository validation runs
-- **THEN** it SHALL reject missing or malformed numbered status-condition tables
-- **AND** tests SHALL compare the documented values with current state and domain status unions so an added status requires documentation review
+- **THEN** malformed or missing numbered tables SHALL fail and tests SHALL compare documented status values with their domain and state vocabularies
 
 #### Scenario: README structure is checked
-- **WHEN** the status reference is updated
-- **THEN** status definitions SHALL remain only in `Отчёты и статусы` within the existing nine second-level headings
+- **WHEN** the reference is updated
+- **THEN** status definitions SHALL remain in reports and statuses within the existing nine second-level headings
 
 ### Requirement: Packaged report application
 The project SHALL compile and package the report dashboard as a self-contained generated asset that the installed CLI can inject with per-run data without depending on repository source files.
@@ -439,23 +436,23 @@ Automated quality and publication jobs that execute browser tests SHALL provisio
 - **THEN** they SHALL verify browser provisioning is present in every browser-bearing job and ordered between dependency installation and the complete project check
 
 ### Requirement: Mention transfer documentation and quality gates
-The README and project checks SHALL describe and verify the current global mention policy, provider limitations, safe fallback semantics, report outcomes, and publication privacy without adding a new second-level README section.
+Canonical documentation and checks SHALL cover off/mapping policies, strict decision files, source-only inventory, offline editing, safe comment links, historical outcome readability, and publication privacy within the existing nine README sections.
 
 #### Scenario: Operator configures mention transfer
-- **WHEN** the operator reads `Конфигурация`
-- **THEN** the README SHALL show the disabled default plus concise template and auto examples, list valid placeholders and aliases, and explain native-resolution limitations once
+- **WHEN** the operator reads configuration and CLI guidance
+- **THEN** documentation SHALL show off and mappingFile, explain skip/url and missing-entry behavior, and give mention export plus JSON editing instructions without a migration guide
 
 #### Scenario: Operator interprets mention outcomes
-- **WHEN** the operator reads `Возможности` or `Отчёты и статусы`
-- **THEN** the documentation SHALL distinguish native, linked, text, preserved, unresolved, and failed mentions and state that verified unresolved fallback does not make a page partial
+- **WHEN** mention status conditions are inspected
+- **THEN** preserved and linked SHALL identify their exact active producers, historical values SHALL be marked historical, and reserved failed SHALL not have invented producers
 
 #### Scenario: Package checks run
-- **WHEN** the complete project or package verification runs
-- **THEN** it SHALL cover strict configuration, provider lookup contracts, normalized rendering, comment safety, retry selection, report reconciliation, and installed-package parsing without external provider access
+- **WHEN** complete project or installed-package checks run
+- **THEN** they SHALL exercise strict mapping validation, shared scanning, effective fingerprints, source-only export, offline import/edit/delete/save, and lack of destination lookup or background requests
 
 #### Scenario: Reports and package are inspected
-- **WHEN** report JSON, generated HTML, logs, state, or package contents are validated
-- **THEN** they SHALL contain no credentials, authorization values, configured secret tokens, or hidden destination email fields introduced by mention resolution
+- **WHEN** generated editor bundles, reports, logs, state, or npm contents are inspected
+- **THEN** they SHALL contain no credentials, hidden user fields, migration-specific source data, or runtime decision catalogs in the public package
 
 ### Requirement: Canonical maintenance documentation
 Current specifications SHALL describe the current product, README SHALL own operator guidance, AGENTS SHALL own the contributor workflow, and OpenSpec context SHALL summarize stable constraints without duplicating those references.

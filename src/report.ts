@@ -171,7 +171,7 @@ function issueAction(issue: MigrationIssue, category: IssueCategory): string {
   if (issue.lifecycle === 'resolved') return 'Recovered automatically; no action is required.';
   if (issue.severity === 'blocked') return 'Resolve the upstream page error, then repeat the same migration; this object will resume automatically.';
   if (issue.retryable) return 'Repeat the same migration to retry this object.';
-  if (category === 'mention') return 'Configure an exact alias or adjust the mention fallback template, then repeat the migration if a native mention is required.';
+  if (category === 'mention') return 'Review the source identity and explicit decisions mapping, then repeat the affected transfer if needed.';
   if (issue.severity === 'degradation') return 'Data remains represented; compare the source and destination previews.';
   if (issue.severity === 'adaptation') return 'No action is required; the destination uses an equivalent static or native representation.';
   if (issue.severity === 'normalization') return 'No action is required.';

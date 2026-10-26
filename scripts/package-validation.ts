@@ -60,7 +60,7 @@ const forbidden = packResult.files
     || filename.startsWith('reports/')
     || filename.startsWith('cache/'));
 if (forbidden.length > 0) throw new Error(`Packed archive contains runtime data: ${forbidden.join(', ')}`);
-for (const required of ['dist/report-ui/index.html', 'docs/assets/report-header-transparent.png']) {
+for (const required of ['dist/report-ui/index.html', 'dist/mentions-ui/index.html', 'docs/assets/report-header-transparent.png']) {
   if (!packResult.files.some((file) => file.path === required)) throw new Error(`Packed archive is missing ${required}`);
 }
 
@@ -316,7 +316,7 @@ const mentionSmoke = `
   import {normalizePageContent, renderConfluenceStorage} from ${JSON.stringify(pathToFileURL(installedContentModule).toString())};
   import {resolveMentionPresentations} from ${JSON.stringify(pathToFileURL(installedMentionModule).toString())};
   const config = parseWorkspaceConfig({
-    mentions: {mode: 'template', textTemplate: '{name}', urlTemplate: 'https://people.example/{username}'},
+    mentions: {mode: 'mapping', mappingFile: './decisions.json'},
     connections: {
       wiki: {
         type: 'yandex-wiki', apiUrl: 'https://api.wiki.yandex.net/v1', webUrl: 'https://wiki.example',
@@ -329,16 +329,47 @@ const mentionSmoke = `
     locator: 'mention', url: 'https://wiki.example/mention', rawFormat: 'yfm', references: [], rawContent: 'Hello @{ivan}',
   };
   const document = normalizePageContent(page);
-  const presentations = await resolveMentionPresentations(document.mentions ?? [], config.mentions, undefined, {staticDestination: true});
+  const policy = {mode: 'mapping', document: {source: {provider: 'yandex-wiki', instance: 'https://wiki.example'}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan'}]}};
+  const presentations = await resolveMentionPresentations(document.mentions ?? [], policy);
   const rendered = await renderConfluenceStorage(document, page, {
     pages: new Map(), resources: new Map(), sourcePages: new Map([[page.canonicalId, page]]),
     currentPageId: page.canonicalId, mentions: presentations,
   }, 'DOC');
   if (!rendered.body.includes('https://people.example/ivan') || rendered.mentions?.linked !== 1) {
-    throw new Error('Packaged mention template did not survive normalization and rendering');
+    throw new Error('Packaged mention decision did not survive normalization and rendering');
   }
 `;
 await execFileAsync(process.execPath, ['--input-type=module', '--eval', mentionSmoke], {encoding: 'utf8'});
+process.stdout.write('Verifying packaged source-only mention export and mapping acceptance...\n');
+const mentionsWorkspace = path.join(temporary, 'mentions-workspace');
+await mkdir(mentionsWorkspace);
+const mentionsRequests: string[] = [];
+const mentionsServer = createServer((request, response) => {
+  mentionsRequests.push(`${request.method} ${request.url}`);
+  response.setHeader('Content-Type', 'application/json');
+  if (request.url?.startsWith('/rest/api/settings/systemInfo')) response.end(JSON.stringify({version: '9.5.2'}));
+  else if (request.url?.startsWith('/rest/api/content/1')) response.end(JSON.stringify({id: '1', type: 'page', title: 'Mentions', status: 'current', space: {key: 'DOC'}, version: {number: 1}, ancestors: [], body: {storage: {value: '<p>Hello <ac:link><ri:user ri:username="ivan"/></ac:link></p>', representation: 'storage'}}, _links: {webui: '/pages/1'}}));
+  else {response.statusCode = 500;response.end(JSON.stringify({message: 'Unexpected endpoint in source-only export'}));}
+});
+await new Promise<void>(resolve => mentionsServer.listen(0, '127.0.0.1', resolve));
+try {
+  const address = mentionsServer.address();if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+  const instance = `http://127.0.0.1:${address.port}`;
+  const configPath = path.join(mentionsWorkspace, 'ywtc.config.yaml');
+  await writeFile(configPath, stringifyYaml({mentions: {mode: 'mapping', mappingFile: './does-not-exist.json'}, connections: {source: {type: 'confluence', deployment: 'data-center', baseUrl: instance, authType: 'pat', token: 'package-smoke-token'}}}), {mode: 0o600});
+  const output = path.join(temporary, 'installed-mentions');
+  const exported = await execFileAsync(executable, ['mentions', 'export', '-s', '1', '-S', 'source', '-m', 'page', '-N', '-w', mentionsWorkspace, '-o', output], {encoding: 'utf8'});
+  if (!exported.stdout.includes('file://') || !exported.stdout.includes('complete')) throw new Error('Packaged export did not print editor paths and completeness');
+  const decisions = JSON.parse(await readFile(path.join(output, 'decisions.json'), 'utf8'));
+  if (decisions.entries.length !== 1 || decisions.entries[0].decision !== 'skip') throw new Error('Packaged export did not initialize decisions');
+  const editor = await readFile(path.join(output, 'index.html'), 'utf8');
+  if (!editor.includes('ywtc-mentions-data') || /<script[^>]+src=/.test(editor) || editor.includes('{"__ywtc_mentions_payload__":true}')) throw new Error('Packaged editor is not autonomous');
+  const installedPolicyModule = path.join(path.dirname(installedConfigModule), 'mention-policy.js');
+  const accept = `import {readWorkspaceConfig} from ${JSON.stringify(pathToFileURL(installedConfigModule).toString())};import {loadMentionPolicy} from ${JSON.stringify(pathToFileURL(installedPolicyModule).toString())};const config = readWorkspaceConfig(${JSON.stringify(configPath)});config.mentions = {mode: 'mapping', mappingFile: ${JSON.stringify(path.join(output, 'decisions.json'))}};if (loadMentionPolicy(config, config.profiles.source).document.entries.length !== 1) throw Error('Mapping rejected');`;
+  await execFileAsync(process.execPath, ['--input-type=module', '--eval', accept], {encoding: 'utf8'});
+  if (mentionsRequests.some(value => !value.startsWith('GET ') || /attachment|grid|comment/.test(value))) throw new Error(`Export used non-source endpoints: ${mentionsRequests.join(', ')}`);
+  if ((await readdir(mentionsWorkspace)).includes('.states')) throw new Error('Mentions export mutated migration state');
+} finally {await new Promise<void>((resolve, reject) => mentionsServer.close(error => error ? reject(error) : resolve()));}
 process.stdout.write('Verifying packaged autonomous report generation...\n');
 const installedReportDirectory = path.join(temporary, 'installed-report');
 const reportSmoke = `

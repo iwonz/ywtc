@@ -2,6 +2,7 @@ import {createProviderAdapter} from './adapters/factory.js';
 import type {AppConfig} from './config.js';
 import {assertTransferCapabilities, type SourceStatus, type TransferScope} from './domain.js';
 import {discoverPageGraph} from './graph.js';
+import {loadMentionPolicy} from './mention-policy.js';
 import {sameRemoteInstance, type ResolvedLocator, type RemoteLocator} from './locators.js';
 
 export interface DoctorResult {
@@ -26,6 +27,7 @@ export async function runCapabilityDoctor(
   sourceStatus: SourceStatus = 'all',
   comments = true,
 ): Promise<DoctorResult> {
+  loadMentionPolicy(config, sourceLocator.profile);
   const source = createProviderAdapter(sourceLocator.profile, config);
   const destination = destinationLocator.type === 'remote' ? createProviderAdapter(destinationLocator.profile, config) : undefined;
   assertTransferCapabilities(source, destination, scope, sourceStatus, comments);
@@ -47,17 +49,6 @@ export async function runCapabilityDoctor(
       : 'unproven' as const;
   if (destinationCommentWrite === 'unproven') {
     commentWarnings.push(`${destination?.profile.name ?? 'Destination'} comment write access cannot be proven read-only; migrate will preserve the page and report a partial result if writing is denied.`);
-  }
-  if (config.mentions?.mode === 'auto' && destination) {
-    if (destination.capabilities.resolveMentions !== true || !destination.preflightMentionLookup) {
-      commentWarnings.push(`${destination.profile.name} cannot prove mention lookup support; migrate will use the configured safe fallback.`);
-    } else {
-      const mentionProbe = await destination.preflightMentionLookup();
-      if (mentionProbe.warning) commentWarnings.push(mentionProbe.warning);
-      if (!mentionProbe.available && !mentionProbe.warning) {
-        commentWarnings.push(`${destination.profile.name} mention lookup is unavailable; migrate will use the configured safe fallback.`);
-      }
-    }
   }
   if (
     container

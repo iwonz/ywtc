@@ -111,6 +111,31 @@ async function setup() {
 }
 
 describe('resume, conflicts, and cancellation', () => {
+  it('pins mapping before API calls and changes only effective page decisions on resume', async () => {
+    const {directory, config, options} = await setup();
+    config.mentions = {mode: 'mapping', mappingFile: './decisions.json'};
+    const adapters = fixture();
+    const mentioned = {...root, rawContent: 'Hello @ivan'};
+    adapters.source.resolvePage = async () => mentioned;adapters.source.getPage = async () => mentioned;
+    let factoryCalls = 0;
+    const migrator = new Migrator(config, logger, profile => {factoryCalls += 1;return profile.name === 'source' ? adapters.source : adapters.destination;});
+    await expect(migrator.run(options)).rejects.toThrow(/mappingFile/);
+    expect(factoryCalls).toBe(0);
+    const document = {source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{identity: {username: 'ivan'}, mention: '@ivan', decision: 'url', url: 'https://people.example/ivan', text: 'Ivan'}]};
+    const filename = path.join(directory, 'decisions.json');await writeFile(filename, JSON.stringify(document));
+    const first = await migrator.run(options);
+    expect(adapters.page()?.content).toContain('https://people.example/ivan');
+    const counts = adapters.counts();
+    await writeFile(filename, JSON.stringify({...document, entries: [...document.entries, {identity: {username: 'unrelated'}, mention: '@unrelated', decision: 'skip'}]}, null, 2));
+    await migrator.run(options);expect(adapters.counts()).toEqual(counts);
+    document.entries[0]!.url = 'https://people.example/changed';await writeFile(filename, JSON.stringify(document));
+    const changed = await migrator.run(options);
+    expect(changed.stateId).toBe(first.stateId);expect(adapters.counts().created).toBe(1);
+    expect(adapters.counts().updated).toBe(counts.updated + 1);
+    expect(adapters.page()?.content).toContain('https://people.example/changed');
+    await writeFile(filename, JSON.stringify({...document, entries: []}));
+    await migrator.run(options);expect(adapters.page()?.content).not.toContain('https://people.example/changed');
+  });
   it('rewrites an identical mapped page as a new version without changing its ID', async () => {
     const {config, options} = await setup();
     const adapters = fixture();

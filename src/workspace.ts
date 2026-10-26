@@ -12,6 +12,7 @@ export const CONFIG_TEMPLATE = `defaults:
 
 mentions:
   mode: off
+  # Use mode: mapping and mappingFile: ./mentions/decisions.json for explicit decisions.
 
 connections:
   yandex:

@@ -1,10 +1,11 @@
-import {Command, Option} from '@commander-js/extra-typings';
+import {Command, Option, type CommandUnknownOpts} from '@commander-js/extra-typings';
 import type {ExportFormat, SourceStatus, TransferScope} from './domain.js';
 import {packageVersion} from './version.js';
 
-export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'update';
+export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'mentions' | 'update';
 
 export type CliCommand =
+  | {command: 'mentions-export'; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
   | {command: 'help'; topic?: CliHelpTopic}
   | {command: 'version'}
   | {command: 'init'; workdir?: string; interactive: boolean}
@@ -185,6 +186,24 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       });
     });
 
+  program.command('mentions').description('Export source mentions for explicit decisions').command('export')
+    .description('Create decisions.json and an offline editor from source pages and comments')
+    .requiredOption('-s, --source <locator>', 'source page URL, ID, or slug')
+    .requiredOption('-o, --output <directory>', 'new or empty directory for decisions.json and index.html')
+    .option('-S, --source-profile <name>', 'named source connection')
+    .option('-w, --workdir <path>', 'workspace containing configuration')
+    .addOption(new Option('-m, --scope <scope>', 'selection scope').choices(['page', 'subtree', 'linked']).default('subtree'))
+    .addOption(new Option('-t, --source-status <status>', 'automatically discovered page status').choices(['all', 'current']).default('all'))
+    .option('-C, --comments', 'scan comments (default)', true)
+    .option('-N, --no-comments', 'skip comment API calls')
+    .option('-j, --concurrency <n>', 'concurrency from 1 to 64', concurrency)
+    .action(options => onCommand({command: 'mentions-export', source: nonEmpty(options.source, '--source')!, output: nonEmpty(options.output, '--output')!,
+      scope: options.scope as TransferScope, sourceStatus: options.sourceStatus as SourceStatus, comments: options.comments,
+      ...(options.sourceProfile ? {sourceProfile: nonEmpty(options.sourceProfile, '--source-profile')!} : {}),
+      ...(options.workdir ? {workdir: nonEmpty(options.workdir, '--workdir')!} : {}),
+      ...(options.concurrency !== undefined ? {concurrency: options.concurrency} : {}),
+    }));
+
   const reports = program.command('reports').description('List and open local migration reports');
   reports.command('list')
     .description('List valid reports from newest to oldest')
@@ -221,7 +240,7 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const helpIndex = argv.findIndex((value) => ['--help', '-h'].includes(value));
   if (helpIndex >= 0) {
     const topic = argv[0];
-    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'update'].includes(topic ?? '')
+    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'mentions', 'update'].includes(topic ?? '')
       ? {command: 'help', topic: topic as CliHelpTopic}
       : {command: 'help'};
   }
@@ -229,10 +248,12 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const output: string[] = [];
   const program = createCliProgram((command) => { parsed = command; });
   program.exitOverride();
-  for (const command of program.commands) command.exitOverride();
   const writers = {writeOut: (value: string) => output.push(value), writeErr: (value: string) => output.push(value)};
-  program.configureOutput(writers);
-  for (const command of program.commands) command.configureOutput(writers);
+  const configure = (command: Command | CommandUnknownOpts): void => {
+    command.exitOverride();command.configureOutput(writers);
+    for (const child of command.commands) configure(child);
+  };
+  configure(program);
   try {
     program.parse(['node', 'ywtc', ...argv], {from: 'node'});
   } catch (error) {
@@ -247,5 +268,6 @@ export function cliHelp(topic?: CliHelpTopic): string {
   const program = createCliProgram();
   if (!topic) return program.helpInformation();
   const command = program.commands.find((candidate) => candidate.name() === topic);
+  if (topic === 'mentions') return command!.commands[0]!.helpInformation();
   return command?.helpInformation() ?? program.helpInformation();
 }

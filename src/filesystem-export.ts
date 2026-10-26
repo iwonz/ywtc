@@ -8,7 +8,7 @@ import PQueue from 'p-queue';
 import {z} from 'zod';
 import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml, setSourceResourceBinding, sourceResourceBindings} from './content-model.js';
 import {commentAttachmentUses, createCommentArchiveZip, renderCommentArchive} from './comments.js';
-import type {CommentInventory, ExportFormat, MentionOutcomeCounts, MentionPolicy, MentionPresentation, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
+import type {CommentInventory, ExportFormat, MentionOutcomeCounts, MentionProcessingPolicy, MentionPresentation, PageGraph, RenderContext, RenderResourceBinding, SourceAdapter, SourcePage, SourceResource} from './domain.js';
 import type {CommentTransferStatus} from './state.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
 import {acquireExclusiveLease} from './exclusive-lease.js';
@@ -231,7 +231,7 @@ export class FilesystemExporter {
     resourcesByPage?: Map<string, SourceResource[]>;
     commentsByPage?: Map<string, CommentInventory>;
     mentionPresentationsByPage?: Map<string, Map<string, MentionPresentation>>;
-    mentionPolicy?: MentionPolicy;
+    mentionPolicy?: MentionProcessingPolicy;
     commentsEnabled?: boolean;
     retryPageIds?: ReadonlySet<string>;
     retryResourceIds?: ReadonlyMap<string, ReadonlySet<string>>;

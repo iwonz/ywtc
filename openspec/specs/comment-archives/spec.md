@@ -194,17 +194,21 @@ A comment archive with no linked comment attachments and no oversized full-text 
 - **WHEN** linked comment files, an oversized full-text fallback, or another archive payload must be attached
 - **THEN** the system SHALL invoke resource reconciliation only for the required archive objects and SHALL report attachment-specific failures independently from the comment text
 
-### Requirement: Non-notifying archived mentions
-The system SHALL preserve mentions found in archived page comments as escaped text or safe profile links and MUST NOT emit provider-native mention markup from an archive.
+### Requirement: Decision-based archived mentions
+The system SHALL preserve archived comment mentions as escaped source text or explicitly mapped literal links and MUST NOT emit provider-native mention markup or look up users from an archive.
 
-#### Scenario: Auto mode archives a comment mention
-- **WHEN** a source comment contains a recognized mention and the global policy selects `auto`
-- **THEN** ywtc SHALL apply the configured fallback presentation, record the occurrence as a comment adaptation, and SHALL NOT create a native mention
+#### Scenario: Mapping selects a comment link
+- **WHEN** a recognized comment or inline-context mention has a URL decision
+- **THEN** the archive SHALL contain the same literal URL and safe label used by page mentions without native notification markup
 
-#### Scenario: Comment mention lacks template data
-- **WHEN** a comment mention cannot populate a configured placeholder
-- **THEN** ywtc SHALL preserve the original source token, record an unresolved comment mention, and keep the comment archive verifiable without targeting a user
+#### Scenario: No comment replacement exists
+- **WHEN** processing is off, the entry is absent, or its decision is skip
+- **THEN** the archive SHALL preserve the readable source representation without an unresolved warning
 
 #### Scenario: Archived comments are verified
-- **WHEN** the archive comment or filesystem section is read back
-- **THEN** every source comment mention SHALL have one safe textual or linked representation and SHALL be counted separately from page-body mentions
+- **WHEN** an archive or filesystem section is read back
+- **THEN** all body and inline-context mentions SHALL have verified safe representations counted separately from page mentions
+
+#### Scenario: Only a relevant decision changes
+- **WHEN** source discussion is unchanged but one effective comment decision changes
+- **THEN** the mapped archive SHALL update or append a revision according to destination capability while retaining old comments and avoiding unchanged duplicate archives
