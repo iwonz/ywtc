@@ -2,6 +2,18 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.1.1](https://github.com/iwonz/ywtc/compare/v5.1.0...v5.1.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **mentions:** preserve literal links during space transfers ([f8aed1c](https://github.com/iwonz/ywtc/commit/f8aed1c3bede6405e8564b0a7b3917613e39010f))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v5.1.0 ([0f60aaf](https://github.com/iwonz/ywtc/commit/0f60aaf9ffd31baf223710911632a050d76f6950))
+
 ## [5.1.0](https://github.com/iwonz/ywtc/compare/v5.0.0...v5.1.0) (2026-10-26)
 
 
