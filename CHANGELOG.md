@@ -2,6 +2,18 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.2.0](https://github.com/iwonz/ywtc/compare/v5.1.1...v5.2.0) (2026-10-26)
+
+
+### Features
+
+* **hashtags:** add decision mapping and export ([629da8f](https://github.com/iwonz/ywtc/commit/629da8ffa993eee14edbe88e839eda900a8f3e5e))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v5.1.1 ([6d8f3c4](https://github.com/iwonz/ywtc/commit/6d8f3c422ed6c2f01be940eca032a43ff8a0cd92))
+
 ## [5.1.1](https://github.com/iwonz/ywtc/compare/v5.1.0...v5.1.1) (2026-10-26)
 
 
