@@ -16,6 +16,11 @@ const metadata: ReleaseMetadata = {
 };
 
 describe('release validation', () => {
+  it('tests supported stable Node majors without a floating prerelease alias', async () => {
+    const workflow = await readFile('.github/workflows/release.yml', 'utf8');
+    expect(workflow).toContain('node: [24, 26]');
+    expect(workflow).not.toMatch(/node:.*\b(?:current|latest|nightly|canary)\b/);
+  });
   it('parses stable, prerelease, and build metadata versions', () => {
     expect(parseSemanticVersion('1.2.3')).toMatchObject({major: 1n, minor: 2n, patch: 3n, prerelease: [], build: []});
     expect(parseSemanticVersion('2.0.0-rc.1+build.5')).toMatchObject({

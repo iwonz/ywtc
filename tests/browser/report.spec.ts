@@ -227,6 +227,7 @@ for (const snapshot of [
     await page.goto(reportUrl);
     await page.getByRole('button', {name: /Theme: System; next: Light/}).click();
     if (snapshot.theme === 'Dark') await page.getByRole('button', {name: /Theme: Light; next: Dark/}).click();
+    expect(await page.locator('.metadata-code').first().evaluate(element => getComputedStyle(element).fontFamily)).toContain('Inter Variable');
     await expect(page).toHaveScreenshot(`${snapshot.name}.png`, {animations: 'disabled', fullPage: true, maxDiffPixelRatio: 0.01});
   });
 }

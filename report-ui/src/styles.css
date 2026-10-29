@@ -175,7 +175,7 @@ code {
 	font-size: 14px;
 }
 .metadata-code {
-	font-family: ui-monospace, monospace;
+	font-family: "Inter Variable", sans-serif;
 }
 .metadata-link {
 	display: inline-flex;

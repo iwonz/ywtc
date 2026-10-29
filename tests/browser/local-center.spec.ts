@@ -34,6 +34,15 @@ test.beforeAll(async () => {
   throw Error(`UI startup timed out ${errors}`);
 });
 test.afterAll(async () => {child?.kill('SIGTERM');fixture?.closeAllConnections();await new Promise<void>(resolve => fixture?.close(() => resolve()));});
+test.beforeEach(async ({page, context}) => {
+  if (!cookies.length) {
+    await page.goto(`${origin}/#${bootstrap}`);
+    await expect(page.getByRole('button', {name: 'New migration', exact: true})).toBeVisible();
+    await expect(page).not.toHaveURL(/#/);
+    cookies = await context.cookies();
+  }
+  await context.addCookies(cookies);
+});
 
 test('connection forms, workspace focus and persistent theme use shared components', async ({page,context})=>{
   if(cookies.length)await context.addCookies(cookies);

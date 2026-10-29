@@ -2,6 +2,7 @@ import {spawnSync} from 'node:child_process';
 import {cp, mkdir, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {redactCheckoutPaths} from './build-paths.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const result = spawnSync(process.execPath, [path.join(root, 'node_modules/next/dist/bin/next'), 'build', 'web', '--webpack'], {cwd: root, env: {...process.env, NEXT_TELEMETRY_DISABLED: '1'}, stdio: 'inherit'});
 if (result.status !== 0) process.exit(result.status ?? 1);
@@ -15,7 +16,7 @@ async function portable(directory) {
     if (entry.isDirectory()) await portable(filename);
     else if (/\.(?:js|json|map)$/.test(entry.name)) {
       const source = await readFile(filename, 'utf8');
-      if (source.includes(root)) await writeFile(filename, source.replaceAll(root, '.'));
+      if (source.includes(root)) await writeFile(filename, redactCheckoutPaths(source, root));
     }
   }
 }

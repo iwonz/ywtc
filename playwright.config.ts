@@ -4,7 +4,7 @@ const browserChannel = process.env.PLAYWRIGHT_CHANNEL;
 
 export default defineConfig({
   testDir: './tests/browser',
-  snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{ext}',
+  snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{platform}/{arg}{ext}',
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
