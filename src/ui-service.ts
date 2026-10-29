@@ -16,6 +16,7 @@ import { jobRequestSchema, uuid } from './jobs/contracts.js';
 import { atomicJson, JobStore } from './jobs/store.js';
 import { boundedPath } from './local-paths.js';
 import { redact } from './logger.js';
+import {InteractiveConfigConflictError} from './interactive-config.js';
 import { readSelectivePreview } from './selective-execution.js';
 import {SyncPlanStore,SyncRevisionError} from './sync-store.js';
 import type {PreparedSync} from './sync-execution.js';
@@ -579,7 +580,7 @@ export class LocalControlCenter {
 			const status =
 				error instanceof HttpError
 					? error.status
-					: error instanceof SettingsRevisionError || error instanceof SyncRevisionError ||
+					: error instanceof SettingsRevisionError || error instanceof InteractiveConfigConflictError || error instanceof SyncRevisionError ||
 							(error instanceof Error &&
 								/revision changed|reload before|immutable/.test(error.message))
 						? 409

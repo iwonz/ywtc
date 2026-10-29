@@ -54,6 +54,7 @@ export function Decisions({
 		[comments, setComments] = useState(true),
 		[kind, setKind] = useState("both"),
 		[profiles, setProfiles] = useState<string[]>([]),
+		[configInvalid, setConfigInvalid] = useState(false),
 		[applying, setApplying] = useState(false),
 		[reports, setReports] = useState<any[]>([]),
 		[run, setRun] = useState(""),
@@ -71,8 +72,10 @@ export function Decisions({
 		refresh();
 		api(`${root}/settings`)
 			.then((s) => {
-				setProfiles(Object.keys(s.connections));
-				setProfile(Object.keys(s.connections)[0] ?? "");
+				setConfigInvalid(s.validation?.valid === false);
+				const available = s.validation?.valid === false ? [] : Object.keys(s.connections);
+				setProfiles(available);
+				setProfile(available[0] ?? "");
 			})
 			.catch(onError);
 	}, [root, refresh, onError]);
@@ -629,6 +632,7 @@ export function Decisions({
 				onDismiss={() => setAnalysis(false)}
 			>
 				<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+					{configInvalid && <Notice tone="orange">{t("Исправьте конфигурацию в разделе «Подключения» перед анализом.", "Repair configuration in Connections before analysis.")}</Notice>}
 					<ChoiceField
 						label={t("Профиль", "Profile")}
 						value={profile}

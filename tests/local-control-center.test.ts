@@ -1,8 +1,10 @@
-import {mkdtemp, readFile, symlink, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, stat, symlink, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {LocalControlCenter} from '../src/ui-service.js';
+import {readWorkspaceConfig} from '../src/config.js';
+import {initializeWorkspace, resolveWorkspace} from '../src/workspace.js';
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ywtc-ui-'));
@@ -13,6 +15,38 @@ async function fixture() {
   return {root, center, request, cookie};
 }
 describe('local control center boundaries', () => {
+  it('repairs an untouched init template from browser settings without requiring CLI init again',async()=>{
+    const {root,request,cookie}=await fixture();await initializeWorkspace(await resolveWorkspace({explicit:root}));
+    const spaces=await(await request('workspaces','GET',undefined,cookie)).json(),id=spaces.items[0].id,settings=await(await request(`w/${id}/settings`,'GET',undefined,cookie)).json();
+    expect(settings.validation.valid).toBe(false);expect(settings.validation.fields).toContain('connections.yandex.organization.id');
+    settings.connections.yandex.organization.id='1';
+    const saved=await request(`w/${id}/settings`,'PUT',{...settings,repairConfirmed:true},cookie);expect(saved.status).toBe(200);expect((await saved.json()).validation.valid).toBe(true);
+  });
+  it('repairs invalid settings in one validated commit without exposing or losing stored secrets', async () => {
+    const {root,request,cookie}=await fixture(),spaces=await(await request('workspaces','GET',undefined,cookie)).json(),id=spaces.items[0].id,file=path.join(root,'ywtc.config.yaml');
+    const original=JSON.stringify({connections:{wiki:{type:'yandex-wiki',apiUrl:'https://api.example.com',webUrl:'https://wiki.example.com',token:'kept-private-token',organization:{id:''},custom:{token:'unknown-private-token'}},cloud:{type:'confluence',deployment:'cloud',baseUrl:'',authType:'api-token',token:'cloud-private-token',email:'private@example.com'}},mentions:{mode:'auto',urlTemplate:'private-template'}});
+    await writeFile(file,original);
+    const response=await request(`w/${id}/settings`,'GET',undefined,cookie);expect(response.status).toBe(200);const settings=await response.json();
+    expect(settings.validation.valid).toBe(false);expect(settings.validation.readable).toBe(true);expect(settings.connections.wiki.hasToken).toBe(true);
+    for(const secret of ['kept-private-token','unknown-private-token','cloud-private-token','private@example.com','private-template'])expect(JSON.stringify(settings)).not.toContain(secret);
+    const candidate={...settings,repairConfirmed:true,mentions:{mode:'off'},connections:{...settings.connections,wiki:{...settings.connections.wiki,organization:{type:'yandex360',id:'1'}}}};
+    expect((await request(`w/${id}/settings`,'PUT',candidate,cookie)).status).toBe(400);expect(await readFile(file,'utf8')).toBe(original);
+    candidate.connections.cloud.baseUrl='https://confluence.example.com/wiki';
+    expect((await request(`w/${id}/settings`,'PUT',{...candidate,repairConfirmed:false},cookie)).status).toBe(400);
+    const saved=await request(`w/${id}/settings`,'PUT',candidate,cookie);expect(saved.status).toBe(200);const result=await saved.json();expect(result.validation.valid).toBe(true);expect(result.backupPath).toMatch(/^\.states\/backups\//);
+    expect(await readFile(path.join(root,result.backupPath),'utf8')).toBe(original);expect((await stat(path.join(root,result.backupPath))).mode&0o777).toBe(0o600);
+    const config=readWorkspaceConfig(file);expect(config.profiles.wiki!.token).toBe('kept-private-token');expect((config.profiles.cloud as any).email).toBe('private@example.com');expect(config.mentions?.mode).toBe('off');
+    expect((await readFile(file,'utf8'))).not.toContain('unknown-private-token');expect(JSON.stringify(result)).not.toContain('kept-private-token');
+  });
+  it('offers masked replacement for malformed YAML and preserves its exact backup', async()=>{
+    const {root,request,cookie}=await fixture(),spaces=await(await request('workspaces','GET',undefined,cookie)).json(),id=spaces.items[0].id,file=path.join(root,'ywtc.config.yaml'),original='connections: [\n token: never-return-this-secret';await writeFile(file,original);
+    const response=await request(`w/${id}/settings`,'GET',undefined,cookie);expect(response.status).toBe(200);const settings=await response.json();expect(settings.validation.readable).toBe(false);expect(JSON.stringify(settings)).not.toContain('never-return-this-secret');
+    const saved=await request(`w/${id}/settings`,'PUT',{...settings,repairConfirmed:true,connections:{wiki:{type:'yandex-wiki',apiUrl:'https://api.example.com',webUrl:'https://wiki.example.com',token:'new-token',organization:{id:'1'}}}},cookie);expect(saved.status).toBe(200);const result=await saved.json();expect(await readFile(path.join(root,result.backupPath),'utf8')).toBe(original);
+  });
+  it('rejects stale invalid-configuration repair before writing a backup',async()=>{
+    const {root,request,cookie}=await fixture(),spaces=await(await request('workspaces','GET',undefined,cookie)).json(),id=spaces.items[0].id,file=path.join(root,'ywtc.config.yaml');await writeFile(file,'connections: {}');const settings=await(await request(`w/${id}/settings`,'GET',undefined,cookie)).json();const latest='# external change\nconnections: {}';await writeFile(file,latest);
+    expect((await request(`w/${id}/settings`,'PUT',{...settings,repairConfirmed:true},cookie)).status).toBe(409);expect(await readFile(file,'utf8')).toBe(latest);expect(await readdir(path.join(root,'.states'))).not.toContain('backups');
+  });
   it('uses a one-time bootstrap, authenticated session, exact Host and Origin', async () => {
     const {request, cookie, center} = await fixture();
     expect((await request('workspaces')).status).toBe(401);

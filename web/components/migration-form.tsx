@@ -97,6 +97,7 @@ export function MigrationForm({
 	}
 	return (
 		<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+			{settings?.validation?.valid === false && <Notice tone="orange">{t("Исправьте конфигурацию в разделе «Подключения» перед запуском.", "Repair configuration in Connections before starting.")}</Notice>}
 			{!profiles.length && (
 				<Notice tone={"orange"}>
 					{t(
@@ -279,6 +280,7 @@ export function MigrationForm({
 			<Button
 				onClick={submit}
 				disabled={
+					settings?.validation?.valid === false ||
 					(concurrency !== "" &&
 						(Number(concurrency) < 1 || Number(concurrency) > 64)) ||
 					!source.trim() ||

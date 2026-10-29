@@ -1,6 +1,6 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:http';
-import {mkdtemp, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {expect, test} from '@playwright/test';
@@ -42,6 +42,20 @@ test.beforeEach(async ({page, context}) => {
     cookies = await context.cookies();
   }
   await context.addCookies(cookies);
+});
+
+test('repairs invalid settings through staged drafts, preserving server credentials and original backup',async({page})=>{
+  const filename=path.join(workdir,'ywtc.config.yaml'),original=await readFile(filename,'utf8'),invalid=JSON.parse(original);invalid.connections.wiki.organization.id='';invalid.mentions={mode:'auto'};const broken=JSON.stringify(invalid);
+  await writeFile(filename,broken);
+  try{
+    await page.goto(origin);await page.getByRole('button',{name:'New migration',exact:true}).click();await expect(page.getByText('Repair configuration in Connections before starting.')).toBeVisible();await expect(page.getByRole('button',{name:'Start dry-run',exact:true})).toBeDisabled();await page.keyboard.press('Escape');
+    await page.getByRole('button',{name:'Connections',exact:true}).click();await expect(page.getByText('Repair configuration',{exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Probe access',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'Apply repair',exact:true})).toBeDisabled();
+    await page.getByRole('button',{name:'Edit',exact:true}).click();await page.getByLabel('Organization ID',{exact:true}).fill('1');await expect(page.getByLabel('Token · empty keeps current',{exact:true})).toHaveValue('');await page.getByRole('button',{name:'Stage profile',exact:true}).click();expect(await readFile(filename,'utf8')).toBe(broken);
+    await page.getByRole('combobox',{name:'Mentions',exact:true}).click();await page.getByRole('option',{name:'off',exact:true}).click();await page.getByRole('checkbox',{name:'Confirm repair with a private backup',exact:true}).check();await page.getByRole('button',{name:'Apply repair',exact:true}).click();await expect(page.getByText(/Configuration repaired. Backup/)).toBeVisible();await expect(page.getByRole('button',{name:'Probe access',exact:true})).toBeEnabled();
+    const spaces=await page.evaluate(async()=>fetch('/api/workspaces').then(r=>r.json())),settings=await page.evaluate(async(id)=>fetch(`/api/w/${id}/settings`).then(r=>r.json()),spaces.items[0].id);expect(settings.validation.valid).toBe(true);expect(JSON.stringify(settings)).not.toContain('browser-fixture-token');expect(await readFile(filename,'utf8')).toContain('browser-fixture-token');
+    const notice=await page.getByText(/Configuration repaired. Backup/).textContent(),backup=notice!.split('Backup: ')[1]!;expect(await readFile(path.join(workdir,backup),'utf8')).toBe(broken);expect((await stat(path.join(workdir,backup))).mode&0o777).toBe(0o600);
+    await page.reload();await page.getByRole('button',{name:'Connections',exact:true}).click();await expect(page.getByText('Repair configuration',{exact:true})).not.toBeVisible();
+  }finally{await writeFile(filename,original);}
 });
 
 test('connection forms, workspace focus and persistent theme use shared components', async ({page,context})=>{
