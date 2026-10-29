@@ -2,6 +2,19 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.4.1](https://github.com/iwonz/ywtc/compare/v5.4.0...v5.4.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **ui:** replace mantine with shared shadcn components ([70f8998](https://github.com/iwonz/ywtc/commit/70f89988f96e9d5bd3179223515886dbd2ad1e3c))
+* **ui:** stabilize cross-platform builds and browser checks ([5443ece](https://github.com/iwonz/ywtc/commit/5443ece578cff6f2acc2054e8cae4e32618da39e))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v5.4.0 ([b7999e6](https://github.com/iwonz/ywtc/commit/b7999e6ad80be7d830a63a75d10b1b53121cb6e4))
+
 ## [5.4.0](https://github.com/iwonz/ywtc/compare/v5.3.0...v5.4.0) (2026-10-29)
 
 
