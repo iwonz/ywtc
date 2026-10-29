@@ -10,7 +10,19 @@ import {
 } from "../../ui/fields";
 import { Button } from "../../ui/components/button";
 import { useCallback, useEffect, useState } from "react";
-import { Languages, Monitor, Moon, Plus, Sun } from "lucide-react";
+import {
+	ArrowRightLeft,
+	Files,
+	Languages,
+	ListTodo,
+	Monitor,
+	Moon,
+	Plug,
+	Plus,
+	RefreshCw,
+	Sun,
+	Tags,
+} from "lucide-react";
 import { api, type Translate } from "./api";
 import { Tasks } from "./tasks";
 import { Reports } from "./reports";
@@ -33,6 +45,56 @@ export function ControlCenter() {
 		[revision, setRevision] = useState(0);
 	const { theme: colorScheme, setTheme: setColorScheme } = useUiTheme();
 	const t: Translate = (ru, en) => (language === "ru" ? ru : en);
+	const navigation = [
+		{
+			id: "reports",
+			label: t("Миграции и отчёты", "Migrations & reports"),
+			icon: Files,
+			hint: t(
+				"История запусков, дерево страниц и точечное восстановление.",
+				"Run history, page hierarchy and targeted recovery.",
+			),
+		},
+		{
+			id: "jobs",
+			label: t("Задачи", "Tasks"),
+			icon: ListTodo,
+			hint: t(
+				"Очередь операций, прогресс и журнал выполнения.",
+				"Operation queue, progress and execution log.",
+			),
+		},
+		{
+			id: "decisions",
+			label: "Decisions",
+			icon: Tags,
+			hint: t(
+				"Анализ и решения для упоминаний и тегов.",
+				"Analysis and decisions for mentions and hashtags.",
+			),
+		},
+		{
+			id: "sync",
+			label: t("Синхронизация", "Synchronization"),
+			icon: RefreshCw,
+			hint: t(
+				"Сравнение изменений и подтверждённое обновление переноса.",
+				"Review changes and apply confirmed migration updates.",
+			),
+		},
+		{
+			id: "settings",
+			label: t("Подключения", "Connections"),
+			icon: Plug,
+			hint: t(
+				"Профили, доступы и настройки рабочего каталога.",
+				"Profiles, access and workspace settings.",
+			),
+		},
+	];
+	const activeArea =
+		navigation.find((area) => area.id === tab) ?? navigation[0]!;
+	const AreaIcon = activeArea.icon;
 	const root = `w/${workspace}`;
 	const fail = useCallback(
 		(error: unknown) =>
@@ -82,21 +144,14 @@ export function ControlCenter() {
 				ywtc control center
 			</h1>
 			<header className="top">
-				<div
-					style={{
-						display: "flex",
-						flexDirection: "row",
-						alignItems: "center",
-						flexWrap: "wrap",
-						gap: 24,
-					}}
-				>
-					<span className="brand">
-						ywtc<span style={{ color: "var(--primary)" }}>_</span>
-					</span>
-					<span className="muted">
-						{t("Центр миграций", "Migration control center")}
-					</span>
+				<div className="product-identity">
+					<ArrowRightLeft className="product-mark" aria-hidden="true" />
+					<div>
+						<span className="brand">ywtc</span>
+						<p className="product-caption">
+							{t("Центр миграций", "Migration control center")}
+						</p>
+					</div>
 				</div>
 				<div
 					className="workspace-controls"
@@ -194,91 +249,83 @@ export function ControlCenter() {
 					)}
 				</div>
 			) : (
-				<>
-					<div
-						className="nav"
-						style={{
-							display: "flex",
-							flexDirection: "row",
-							gap: 8,
-							alignItems: "center",
-							flexWrap: "wrap",
-							justifyContent: "space-between",
-						}}
-					>
-						<div
-							style={{
-								display: "flex",
-								flexDirection: "row",
-								alignItems: "center",
-								flexWrap: "wrap",
-								gap: 8,
-							}}
+				<div className="workspace-layout">
+					<aside className="workspace-navigation">
+						<Button
+							className="create-migration"
+							onClick={() => setNewMigration(true)}
 						>
-							{[
-								["reports", t("Миграции и отчёты", "Migrations & reports")],
-								["jobs", t("Задачи", "Tasks")],
-								["decisions", "Decisions"],
-								["sync", t("Синхронизация", "Synchronization")],
-								["settings", t("Подключения", "Connections")],
-							].map(([id, label]) => (
-								<Button
-									key={id}
-									onClick={() => setTab(id)}
-									variant={tab === id ? "secondary" : "ghost"}
-								>
-									{label}
-								</Button>
-							))}
-						</div>
-						<Button onClick={() => setNewMigration(true)}>
-							{<Plus size={16} />}
+							<Plus size={16} aria-hidden="true" />
 							{t("Новая миграция", "New migration")}
 						</Button>
+						<nav
+							className="work-area-nav"
+							aria-label={t("Рабочие разделы", "Work areas")}
+						>
+							{navigation.map(({ id, label, icon: Icon, hint }) => (
+								<Hint key={id} content={hint}>
+									<Button
+										className="nav-link"
+										aria-current={tab === id ? "page" : undefined}
+										onClick={() => setTab(id)}
+										variant="ghost"
+									>
+										<Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+										<span>{label}</span>
+									</Button>
+								</Hint>
+							))}
+						</nav>
+					</aside>
+					<div className="workspace-content">
+						<div className="context-strip">
+							<AreaIcon size={15} aria-hidden="true" />
+							<p>{activeArea.hint}</p>
+						</div>
+						{workspace && tab === "jobs" && (
+							<Tasks
+								key={`${workspace}-${revision}`}
+								root={root}
+								t={t}
+								initialJob={job}
+								onError={fail}
+								onReport={showRun}
+								onJob={showJob}
+							/>
+						)}
+						{workspace && tab === "reports" && (
+							<Reports
+								key={workspace}
+								root={root}
+								t={t}
+								initialRun={run}
+								onError={fail}
+								onJob={showJob}
+							/>
+						)}
+						{workspace && tab === "decisions" && (
+							<Decisions
+								key={workspace}
+								root={root}
+								t={t}
+								onError={fail}
+								onJob={showJob}
+							/>
+						)}
+						{workspace && tab === "sync" && (
+							<Synchronization
+								key={workspace}
+								root={root}
+								t={t}
+								onError={fail}
+								onJob={showJob}
+							/>
+						)}
+						{workspace && tab === "settings" && (
+							<Settings key={workspace} root={root} t={t} onError={fail} />
+						)}
 					</div>
-					{workspace && tab === "jobs" && (
-						<Tasks
-							key={`${workspace}-${revision}`}
-							root={root}
-							t={t}
-							initialJob={job}
-							onError={fail}
-							onReport={showRun}
-							onJob={showJob}
-						/>
-					)}
-					{workspace && tab === "reports" && (
-						<Reports
-							key={workspace}
-							root={root}
-							t={t}
-							initialRun={run}
-							onError={fail}
-							onJob={showJob}
-						/>
-					)}
-					{workspace && tab === "decisions" && (
-						<Decisions
-							key={workspace}
-							root={root}
-							t={t}
-							onError={fail}
-							onJob={showJob}
-						/>
-					)}
-					{workspace && tab === "sync" && (
-						<Synchronization
-							key={workspace}
-							root={root}
-							t={t}
-							onError={fail}
-							onJob={showJob}
-						/>
-					)}
-					{workspace && tab === "settings" && (
-						<Settings key={workspace} root={root} t={t} onError={fail} />
-					)}
-				</>
+				</div>
 			)}
 			<AppDialog
 				title={t(

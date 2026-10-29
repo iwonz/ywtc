@@ -16,13 +16,32 @@ a {
 	color: var(--primary);
 }
 .shell {
-	max-width: 1500px;
+	max-width: 1600px;
 	margin: auto;
-	padding: 28px 36px 80px;
+	padding: 24px 32px 80px;
+	min-height: 100dvh;
+}
+.product-identity {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+.product-mark {
+	width: 28px;
+	height: 28px;
+	color: var(--primary);
+	stroke-width: 1.6;
+}
+.product-caption {
+	margin: 2px 0 0;
+	font-size: 11px;
+	letter-spacing: 0.025em;
+	color: var(--muted-foreground);
 }
 .brand {
-	font-size: 29px;
-	letter-spacing: -1.7px;
+	font-size: 28px;
+	line-height: 1;
+	letter-spacing: -1.5px;
 	font-weight: 800;
 }
 .top {
@@ -31,11 +50,79 @@ a {
 	justify-content: space-between;
 	gap: 16px;
 	margin-bottom: 28px;
-}
-.nav {
+	padding-bottom: 22px;
 	border-bottom: 1px solid var(--border);
-	padding-bottom: 20px;
-	margin-bottom: 28px;
+}
+.workspace-layout {
+	display: grid;
+	grid-template-columns: 212px minmax(0, 1fr);
+	gap: 32px;
+	align-items: start;
+}
+.workspace-navigation {
+	position: sticky;
+	top: 24px;
+	padding-right: 20px;
+	border-right: 1px solid var(--border);
+	min-width: 0;
+}
+.create-migration {
+	width: 100%;
+	margin-bottom: 24px;
+}
+.work-area-nav {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+.work-area-nav .nav-link {
+	justify-content: flex-start;
+	text-align: left;
+	height: auto;
+	min-height: 42px;
+	padding: 10px 12px;
+	gap: 10px;
+	border-left: 2px solid transparent;
+	border-radius: 0 6px 6px 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 1.45;
+}
+.nav-link svg {
+	color: var(--muted-foreground);
+}
+.work-area-nav .nav-link[aria-current="page"] {
+	color: var(--foreground);
+	border-left-color: var(--primary);
+	background: color-mix(in oklch, var(--primary) 9%, var(--background));
+	font-weight: 600;
+}
+.workspace-content {
+	min-width: 0;
+}
+.context-strip {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.6;
+	margin: 0 0 24px;
+}
+.context-strip svg {
+	flex-shrink: 0;
+	color: var(--primary);
+}
+.nav-link[aria-current="page"] svg {
+	color: var(--primary);
+}
+.context-strip p {
+	margin: 0;
+}
+.workspace-content h2 {
+	font-size: 20px;
+	font-weight: 600;
+	letter-spacing: -0.035em;
 }
 .section {
 	padding: 22px 0;
@@ -48,6 +135,7 @@ a {
 	font-family: ui-monospace, monospace;
 	font-size: 12px;
 	overflow-wrap: anywhere;
+	font-variant-numeric: tabular-nums;
 }
 .row > * {
 	min-width: 0;
@@ -69,7 +157,7 @@ a {
 	border-bottom: 1px solid var(--border);
 }
 .row:hover {
-	background: var(--accent);
+	background: color-mix(in oklch, var(--accent) 50%, transparent);
 }
 .grow {
 	flex: 1;
@@ -132,6 +220,7 @@ a {
 	font-weight: 600;
 	font-size: 19px;
 	margin-bottom: 18px;
+	letter-spacing: -0.025em;
 }
 .toolbar {
 	display: flex;
@@ -149,6 +238,9 @@ a {
 .summary strong {
 	font-size: 24px;
 	margin-right: 6px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+	letter-spacing: -0.04em;
 }
 .decision-row a {
 	overflow-wrap: anywhere;
@@ -166,6 +258,30 @@ a {
 	grid-template-columns: 1fr 1fr;
 	gap: 10px;
 	margin-top: 10px;
+}
+@media (max-width: 960px) {
+	.workspace-layout {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 24px;
+	}
+	.workspace-navigation {
+		position: static;
+		border-right: 0;
+		padding: 0 0 18px;
+		border-bottom: 1px solid var(--border);
+	}
+	.create-migration {
+		width: auto;
+		margin-bottom: 16px;
+	}
+	.work-area-nav {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 4px;
+	}
+	.work-area-nav .nav-link {
+		min-width: 0;
+	}
 }
 @media (max-width: 720px) {
 	[role="treeitem"].row {
@@ -198,9 +314,19 @@ a {
 	.top div[style*="flex"] {
 		gap: 8px;
 	}
-	.nav button {
+	.work-area-nav {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.work-area-nav .nav-link:first-child {
+		grid-column: 1 / -1;
+	}
+	.work-area-nav .nav-link {
 		font-size: 12px;
-		padding: 6px 8px;
+		padding: 8px;
+		min-height: 40px;
+	}
+	.context-strip {
+		margin-bottom: 20px;
 	}
 	.summary {
 		font-size: 13px;
@@ -228,9 +354,6 @@ a {
 	}
 	.row {
 		flex-wrap: wrap;
-	}
-	.nav {
-		gap: 4px;
 	}
 	.scroll-list {
 		height: 60vh;

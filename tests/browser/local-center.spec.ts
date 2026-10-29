@@ -44,6 +44,19 @@ test.beforeEach(async ({page, context}) => {
   await context.addCookies(cookies);
 });
 
+test('recognizable navigation keeps labels, active semantics and keyboard access on desktop and mobile',async({page})=>{
+  await page.setViewportSize({width:1280,height:900});await page.goto(origin);await expect(page.locator('.brand')).toHaveText('ywtc');
+  const nav=page.getByRole('navigation',{name:'Work areas'});await expect(nav.getByRole('button')).toHaveCount(5);
+  for(const label of ['Migrations & reports','Tasks','Decisions','Synchronization','Connections']){
+    const button=nav.getByRole('button',{name:label,exact:true});await expect(button.locator('svg')).toHaveAttribute('aria-hidden','true');await button.focus();await page.keyboard.press('Enter');await expect(button).toHaveAttribute('aria-current','page');await expect(nav.locator('[aria-current=page]')).toHaveCount(1);await expect(page.locator('.context-strip')).not.toBeEmpty();
+  }
+  expect(await page.locator('.workspace-navigation').evaluate((el)=>el.getBoundingClientRect().right)).toBeLessThan(await page.locator('.workspace-content').evaluate((el)=>el.getBoundingClientRect().left));
+  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Language',exact:true}).click();
+  const mobileNav=page.getByRole('navigation',{name:'Рабочие разделы'});await expect(mobileNav.getByRole('button',{name:'Подключения',exact:true})).toHaveAttribute('aria-current','page');
+  for(const button of await mobileNav.getByRole('button').all())await expect(button).toBeVisible();await expect(page.getByRole('button',{name:'Новая миграция',exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)).toBe(true);
+});
+
 test('repairs invalid settings through staged drafts, preserving server credentials and original backup',async({page})=>{
   const filename=path.join(workdir,'ywtc.config.yaml'),original=await readFile(filename,'utf8'),invalid=JSON.parse(original);invalid.connections.wiki.organization.id='';invalid.mentions={mode:'auto'};const broken=JSON.stringify(invalid);
   await writeFile(filename,broken);
@@ -136,6 +149,7 @@ test('report hierarchy, keyboard modal, sandbox, and paginated read-only evidenc
   await page.getByLabel('Search tree').fill('');
   for (const theme of ['light', 'dark']) for (const [name, viewport] of [['desktop', {width: 1280, height: 900}], ['mobile', {width: 390, height: 844}]] as const) {
     await page.evaluate(value => {localStorage.setItem('ywtc-ui-theme', value);document.documentElement.classList.toggle('dark', value === 'dark');document.documentElement.classList.toggle('light', value === 'light');}, theme);await page.setViewportSize(viewport);
+    await page.mouse.move(0,0);await page.evaluate(()=>{(document.activeElement as HTMLElement)?.blur();window.scrollTo(0,0);});
     await expect(page).toHaveScreenshot(`local-center-${theme}-${name}.png`, {fullPage: true, maxDiffPixelRatio: 0.01, mask: [page.getByRole('combobox', {name: 'Workspace'})]});
   }
 });
@@ -143,7 +157,7 @@ test('report hierarchy, keyboard modal, sandbox, and paginated read-only evidenc
 test('synchronization review uses revision-checked decisions, keyboard modal and explicit confirmation',async({page,context})=>{await context.addCookies(cookies);await page.goto(origin);await page.getByRole('button',{name:'Synchronization',exact:true}).click();await page.getByRole('combobox',{name:'Synchronization plan',exact:true}).click();await page.getByRole('option').filter({hasText:'review'}).click();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeDisabled();await page.getByRole('button',{name:'Reviewed page',exact:true}).click();await expect(page.getByRole('dialog')).toContainText('Current <script>window.xss=true</script>');expect(await page.evaluate(()=>(window as any).xss)).toBeUndefined();await page.keyboard.press('Escape');
  const tab=await context.newPage();await tab.goto(origin);await tab.getByRole('button',{name:'Synchronization',exact:true}).click();await tab.getByRole('combobox',{name:'Synchronization plan',exact:true}).click();await tab.getByRole('option').filter({hasText:'review'}).click();
  await page.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await page.getByRole('option',{name:'Keep',exact:true}).click();await expect(page.getByText(/Decisions remaining/)).not.toBeVisible();
- await tab.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await tab.getByRole('option',{name:'Update',exact:true}).click();await expect(tab.getByText(/revision.*changed|decisions.*changed/i)).toBeVisible();await tab.close();
+ await tab.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await tab.getByRole('option',{name:'Update',exact:true}).click();await expect(tab.getByRole('alert').getByText(/revision.*changed|decisions.*changed/i)).toBeVisible();await tab.close();
  await page.getByRole('checkbox',{name:/Confirm decisions/}).check();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeEnabled();
  await page.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await page.getByRole('option',{name:'Trash',exact:true}).click();await page.getByRole('checkbox',{name:/Confirm decisions/}).check();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeDisabled();await page.getByRole('checkbox',{name:/Separately confirm/}).check();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeEnabled();
  const spaces=await page.evaluate(async()=>fetch('/api/workspaces').then(r=>r.json())),w=spaces.items[0].id;const projection=await page.evaluate(async({w,id})=>fetch(`/api/w/${w}/sync/${id}`).then(r=>r.json()),{w,id:syncPlanId});expect(JSON.stringify(projection)).not.toContain('window.xss');await page.setViewportSize({width:390,height:844});await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeVisible();});
