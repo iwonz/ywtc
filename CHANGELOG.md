@@ -2,6 +2,13 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.4.2](https://github.com/iwonz/ywtc/compare/v5.4.1...v5.4.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **release:** isolate audited renderer dependencies for npm 12 ([9881215](https://github.com/iwonz/ywtc/commit/9881215eb5813baf95a82c85f4ebf5af28da93c0))
+
 ## [5.4.1](https://github.com/iwonz/ywtc/compare/v5.4.0...v5.4.1) (2026-10-29)
 
 
