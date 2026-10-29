@@ -556,4 +556,6 @@ npm run check
 
 `npm run check` запускает release hygiene и security audit, TypeScript, Biome, Knip, Vitest, Playwright, сборку, package smoke-test и строгую OpenSpec-валидацию. Любое изменение проходит цикл из [`AGENTS.md`](AGENTS.md).
 
+Артефакт после сборки: `npm run package:pack -- /tmp/ywtc-release`. Этот же packer используется проверками и публикацией: он сохраняет аудированные зависимости с корректными версиями в отдельном staging, не меняя исходные файлы. Прямой `npm pack` несовместим с сочетанием root overrides и bundled dependencies в npm 12.
+
 Release Please рассчитывает SemVer из Conventional Commits. После merge release PR GitHub Actions публикует GitHub Release и npm-пакет с OIDC provenance, затем генерирует, устанавливает и тестирует Homebrew-формулу.

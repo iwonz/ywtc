@@ -91,10 +91,14 @@ describe('release validation', () => {
     expect(workflow).toContain(`git show "\${validator_commit}:scripts/release-validation.ts"`);
     expect(workflow).toContain(`git show "\${validator_commit}:scripts/validate-release-tag.ts"`);
     expect(workflow).toContain(`git show "\${validator_commit}:scripts/package-validation.ts"`);
+    expect(workflow).toContain(`git show "\${validator_commit}:scripts/release-package.ts"`);
+    expect(workflow).toContain(`git show "\${validator_commit}:scripts/pack-release.ts"`);
     expect(workflow).toContain('node --import tsx "$RECOVERY_VALIDATOR" "$RELEASE_TAG"');
     expect(workflow).toContain('git restore --source=HEAD -- scripts/package-validation.ts');
     expect(workflow).toContain("const values=Array.isArray(p)?p:Object.values(p)");
-    expect(workflow).toContain('npm pack');
+    expect(workflow).toContain(`node --import tsx "\${RECOVERY_PACKER:-scripts/pack-release.ts}" "$release_dir"`);
+    expect(workflow).toContain('git restore --source=HEAD -- scripts/release-package.ts');
+    expect(workflow).toContain('rm scripts/release-package.ts');
     expect(workflow).toContain('npm publish "$ARCHIVE" --access public --provenance');
     expect(workflow).toContain('gh release upload');
     expect(workflow).toContain(

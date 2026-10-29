@@ -59,6 +59,7 @@
     "commitlint": "commitlint",
     "migrate": "tsx src/cli.ts migrate",
     "package:verify": "node --import tsx scripts/package-validation.ts",
+    "package:pack": "node --import tsx scripts/pack-release.ts",
     "prepack": "npm run release:check && npm run build",
     "release:check": "node scripts/release-check.mjs",
     "release:bootstrap": "node --import tsx scripts/npm-bootstrap.ts",

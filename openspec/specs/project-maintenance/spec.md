@@ -532,6 +532,11 @@ Published artifacts SHALL retain security-critical runtime dependency substituti
 - **WHEN** an audited replacement is required for a legacy runtime dependency
 - **THEN** isolated installation SHALL resolve the replacement and verify its called API and content behavior before publication
 
+#### Scenario: Audited bundle requires overridden dependencies
+- **WHEN** the release artifact carries the audited dependency closure
+- **THEN** bundled manifests SHALL describe actual installed versions and aliases with valid consumer edges, preserve dependency code/licenses, and omit root-only override policy from the publication manifest
+- **AND** incomplete or escaping package paths and mismatched installed versions SHALL fail packaging without changing source files
+
 ### Requirement: Stable and isolated browser validation
 Publication gates SHALL validate supported stable Node.js majors and independent authenticated browser fixtures. Prerelease runtime selection SHALL NOT silently replace a stable-runtime gate; retrying or isolating a scenario SHALL NOT require a previous scenario's session.
 

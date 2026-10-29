@@ -161,8 +161,11 @@ jobs:
           git show "${validator_commit}:scripts/release-validation.ts" > "$validator_dir/release-validation.ts"
           git show "${validator_commit}:scripts/validate-release-tag.ts" > "$validator_dir/validate-release-tag.ts"
           git show "${validator_commit}:scripts/package-validation.ts" > "$validator_dir/package-validation.ts"
+          git show "${validator_commit}:scripts/release-package.ts" > "$validator_dir/release-package.ts"
+          git show "${validator_commit}:scripts/pack-release.ts" > "$validator_dir/pack-release.ts"
           echo "entry=$validator_dir/validate-release-tag.ts" >> "$GITHUB_OUTPUT"
           echo "package_verifier=$validator_dir/package-validation.ts" >> "$GITHUB_OUTPUT"
+          echo "packer=$validator_dir/pack-release.ts" >> "$GITHUB_OUTPUT"
           echo "commit=$validator_commit" >> "$GITHUB_OUTPUT"
       - name: Set up Node.js and npm trusted publishing
         uses: actions/setup-node@v7
@@ -182,6 +185,7 @@ jobs:
           npx playwright install chromium --with-deps
           if [[ -n "$RECOVERY_PACKAGE_VERIFIER" ]]; then
             cp "$RECOVERY_PACKAGE_VERIFIER" scripts/package-validation.ts
+            cp "$(dirname "$RECOVERY_PACKAGE_VERIFIER")/release-package.ts" scripts/release-package.ts
           fi
           if [[ -n "$RECOVERY_VALIDATOR" ]]; then
             node --import tsx "$RECOVERY_VALIDATOR" "$RELEASE_TAG"
@@ -192,16 +196,23 @@ jobs:
           if [[ -n "$RECOVERY_PACKAGE_VERIFIER" ]]; then
             git restore --source=HEAD -- scripts/package-validation.ts
             git diff --exit-code -- scripts/package-validation.ts
+            if git cat-file -e HEAD:scripts/release-package.ts 2>/dev/null; then
+              git restore --source=HEAD -- scripts/release-package.ts
+              git diff --exit-code -- scripts/release-package.ts
+            else
+              rm scripts/release-package.ts
+            fi
           fi
       - name: Pack exact publication artifact
         id: pack
         env:
           RELEASE_VERSION: ${{ steps.context.outputs.version }}
+          RECOVERY_PACKER: ${{ steps.recovery-tools.outputs.packer }}
         shell: bash
         run: |
           release_dir="$RUNNER_TEMP/ywtc-release"
           mkdir -p "$release_dir"
-          npm pack --ignore-scripts --json --pack-destination "$release_dir" > "$release_dir/pack.json"
+          node --import tsx "${RECOVERY_PACKER:-scripts/pack-release.ts}" "$release_dir" > "$release_dir/pack.json"
           archive_name="$(node -e "const p=require(process.argv[1]); const values=Array.isArray(p)?p:Object.values(p); const result=values.length===1?values[0]:undefined; if(!result||typeof result.filename!=='string'||!result.filename) throw new Error('npm pack returned no single valid artifact'); process.stdout.write(result.filename)" "$release_dir/pack.json")"
           archive="$release_dir/$archive_name"
           shasum -a 256 "$archive" > "$archive.sha256"

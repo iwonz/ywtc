@@ -7,6 +7,7 @@ import {pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
 import {createRequire} from 'node:module';
 import {stringify as stringifyYaml} from 'yaml';
+import {packRelease} from './release-package.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -40,12 +41,7 @@ function readPackResult(output: string): PackResult {
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-package-'));
 const npmEnvironment = {...process.env, npm_config_cache: path.join(temporary, 'npm-cache')};
 process.stdout.write('Packing release artifact...\n');
-const packed = await execFileAsync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', temporary], {
-  cwd: process.cwd(),
-  encoding: 'utf8',
-  env: npmEnvironment,
-});
-const packResult = readPackResult(packed.stdout);
+const packResult = readPackResult(await packRelease(process.cwd(), temporary));
 const archive = path.join(temporary, packResult.filename);
 await stat(archive);
 
@@ -76,8 +72,10 @@ await execFileAsync('npm', ['install', '--global', '--ignore-scripts', '--prefix
   encoding: 'utf8',
   env: npmEnvironment,
 });
+await execFileAsync('npm', ['ls', '--all', '--omit=dev', '--global', '--prefix', prefix, '--json'], {cwd: temporary, encoding: 'utf8', env: npmEnvironment, maxBuffer: 16 * 1024 * 1024});
 const executable = path.join(prefix, 'bin', 'ywtc');
 const installedRequire = createRequire(path.join(prefix, 'lib/node_modules/@iwonz/ywtc/package.json'));
+if (installedRequire('./package.json').overrides) throw Error('Published package retained root-only override policy');
 const rendererRequire = createRequire(installedRequire.resolve('@diplodoc/transform'));
 const installedCssPackage = rendererRequire('css/package.json');
 const installedCssNamespace = rendererRequire('css');
