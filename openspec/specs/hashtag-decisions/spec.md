@@ -31,7 +31,7 @@ The CLI SHALL expose hashtags export with the same source options and defaults a
 - **THEN** export SHALL NOT depend on that file and SHALL preserve available results with incomplete diagnostics and exit one for incomplete reads; invalid arguments SHALL return two and signals 130/143
 
 ### Requirement: Private offline hashtag editing
-The system SHALL atomically publish decisions.json and a self-contained Mantine index.html into absent or empty output with search, skip/text/url filters, contexts, preview, delete/undo, import/download, keyboard, mobile, themes and virtualization. No background network requests SHALL occur.
+The system SHALL atomically publish decisions.json and a self-contained shadcn/ui index.html into absent or empty output with search, skip/text/url filters, contexts, preview, delete/undo, import/download, keyboard, mobile, themes and virtualization. No background network requests SHALL occur.
 
 #### Scenario: Invalid or unsaved edits
 - **WHEN** import is invalid, current edits are unsaved or a decision is incomplete

@@ -150,7 +150,7 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | Команда | Назначение |
 | --- | --- |
 | `ywtc init [-i] [-w <path>]` | Создать workspace или настроить оба подключения в TTY-мастере |
-| `ywtc ui [-w <path>] [-p <port>] [--no-open]` | Локальный Mantine-интерфейс, порт `3000`; занятый порт не освобождается автоматически |
+| `ywtc ui [-w <path>] [-p <port>] [--no-open]` | Локальный интерфейс на shadcn/ui, порт `3000`; занятый порт не освобождается автоматически |
 | `ywtc migrations [list --all] [-w <path>]` | Активные/ожидающие задачи либо вся история workspace |
 | `ywtc migrations show <job-id> [--json]` | Запрос, lifecycle, Run ID и подтверждённый результат задачи |
 | `ywtc migrations logs <job-id> [-f]` | Последовательный журнал; `--follow` ожидает новые события |

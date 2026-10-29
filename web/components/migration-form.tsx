@@ -1,17 +1,15 @@
-'use client';
-import { useEffect, useState } from 'react';
+"use client";
 import {
-	Alert,
-	Button,
-	Checkbox,
-	Group,
-	NativeSelect,
-	NumberInput,
-	Select,
-	Stack,
-	TextInput,
-} from '@mantine/core';
-import { api, type Translate } from './api';
+	Notice,
+	ChoiceField,
+	InputField,
+	CheckboxField,
+	NumberField,
+	Spinner,
+} from "../../ui/fields";
+import { Button } from "../../ui/components/button";
+import { useEffect, useState } from "react";
+import { api, type Translate } from "./api";
 export function MigrationForm({
 	root,
 	t,
@@ -24,36 +22,37 @@ export function MigrationForm({
 	onJob: (id: string) => void;
 }) {
 	const [settings, setSettings] = useState<any>(),
-		[sourceProfile, setSourceProfile] = useState(''),
-		[destinationProfile, setDestinationProfile] = useState(''),
-		[destinationType, setDestinationType] = useState('confluence'),
-		[source, setSource] = useState(''),
-		[destination, setDestination] = useState(''),
-		[scope, setScope] = useState('subtree'),
-		[sourceStatus, setSourceStatus] = useState('all'),
+		[sourceProfile, setSourceProfile] = useState(""),
+		[destinationProfile, setDestinationProfile] = useState(""),
+		[destinationType, setDestinationType] = useState("confluence"),
+		[source, setSource] = useState(""),
+		[destination, setDestination] = useState(""),
+		[scope, setScope] = useState("subtree"),
+		[sourceStatus, setSourceStatus] = useState("all"),
 		[comments, setComments] = useState(true),
 		[archive, setArchive] = useState(false),
 		[live, setLive] = useState(false),
 		[confirmed, setConfirmed] = useState(false),
 		[busy, setBusy] = useState(false);
-  const [concurrency, setConcurrency] = useState<number | string>('');
-  const [stateFilename, setStateFilename] = useState('');
-  const [fresh, setFresh] = useState(false), [rewrite, setRewrite] = useState(false);
+	const [concurrency, setConcurrency] = useState<number | string>("");
+	const [stateFilename, setStateFilename] = useState("");
+	const [fresh, setFresh] = useState(false),
+		[rewrite, setRewrite] = useState(false);
 	useEffect(() => {
 		api(`${root}/settings`)
 			.then((value) => {
 				setSettings(value);
 				setSourceProfile(
 					Object.keys(value.connections).find(
-						(n) => value.connections[n].type === 'yandex-wiki',
+						(n) => value.connections[n].type === "yandex-wiki",
 					) ??
 						Object.keys(value.connections)[0] ??
-						'',
+						"",
 				);
 				setDestinationProfile(
 					Object.keys(value.connections).find(
-						(n) => value.connections[n].type === 'confluence',
-					) ?? '',
+						(n) => value.connections[n].type === "confluence",
+					) ?? "",
 				);
 			})
 			.catch(onError);
@@ -62,12 +61,12 @@ export function MigrationForm({
 		string,
 		any,
 	][];
-	const file = ['markdown', 'html'].includes(destinationType);
+	const file = ["markdown", "html"].includes(destinationType);
 	async function submit() {
 		setBusy(true);
 		try {
 			const request = {
-				kind: 'migrate',
+				kind: "migrate",
 				source,
 				sourceProfile,
 				destination,
@@ -77,11 +76,14 @@ export function MigrationForm({
 				comments,
 				archive: file && archive,
 				dryRun: !live,
-        ...(concurrency !== '' ? {concurrency: Number(concurrency)} : {}),
-        ...(stateFilename.trim() ? {stateFilename: stateFilename.trim()} : {}),
-        ...(fresh ? {fresh: true} : {}), ...(rewrite && !file ? {rewrite: true} : {}),
+				...(concurrency !== "" ? { concurrency: Number(concurrency) } : {}),
+				...(stateFilename.trim()
+					? { stateFilename: stateFilename.trim() }
+					: {}),
+				...(fresh ? { fresh: true } : {}),
+				...(rewrite && !file ? { rewrite: true } : {}),
 			};
-			const job = await api(`${root}/jobs`, 'POST', {
+			const job = await api(`${root}/jobs`, "POST", {
 				request,
 				confirmed: live && confirmed,
 				...(file ? { exportRoot: destination } : {}),
@@ -94,147 +96,204 @@ export function MigrationForm({
 		}
 	}
 	return (
-		<Stack>
+		<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 			{!profiles.length && (
-				<Alert color="orange">
+				<Notice tone={"orange"}>
 					{t(
-						'Сначала создайте подключения в настройках.',
-						'Create connections in settings first.',
+						"Сначала создайте подключения в настройках.",
+						"Create connections in settings first.",
 					)}
-				</Alert>
+				</Notice>
 			)}
-			<Select
-				label={t('Профиль источника', 'Source profile')}
+			<ChoiceField
+				label={t("Профиль источника", "Source profile")}
 				value={sourceProfile}
-				data={profiles.map(([name, p]) => ({
+				options={profiles.map(([name, p]) => ({
 					value: name,
 					label: `${name} · ${p.type}`,
 				}))}
-				onChange={(v) => setSourceProfile(v ?? '')}
+				onValueChange={(v) => setSourceProfile(v ?? "")}
 			/>
-			<TextInput
+			<InputField
 				label={t(
-					'Источник · URL / ID / slug / space URL',
-					'Source · URL / ID / slug / space URL',
+					"Источник · URL / ID / slug / space URL",
+					"Source · URL / ID / slug / space URL",
 				)}
 				value={source}
 				onChange={(e) => setSource(e.target.value)}
 				required
 			/>
-			<NativeSelect
-				label={t('Назначение', 'Destination')}
+			<ChoiceField
+				label={t("Назначение", "Destination")}
 				value={destinationType}
-				onChange={(e) => {
-					setDestinationType(e.target.value);
+				options={[
+					{ value: "confluence", label: "Confluence" },
+					{ value: "yandex-wiki", label: "Yandex Wiki" },
+					{ value: "markdown", label: "Markdown" },
+					{ value: "html", label: "HTML" },
+				]}
+				onValueChange={(e) => {
+					setDestinationType(e);
 					setArchive(false);
 					setDestinationProfile(
-						profiles.find(([, p]) => p.type === e.target.value)?.[0] ?? '',
+						profiles.find(([, p]) => p.type === e)?.[0] ?? "",
 					);
 				}}
-				data={[
-					{ value: 'confluence', label: 'Confluence' },
-					{ value: 'yandex-wiki', label: 'Yandex Wiki' },
-					{ value: 'markdown', label: 'Markdown' },
-					{ value: 'html', label: 'HTML' },
-				]}
 			/>
 			{!file && (
-				<Select
-					label={t('Профиль назначения', 'Destination profile')}
+				<ChoiceField
+					label={t("Профиль назначения", "Destination profile")}
 					value={destinationProfile}
-					data={profiles
+					options={profiles
 						.filter(([, p]) => p.type === destinationType)
 						.map(([name]) => name)}
-					onChange={(v) => setDestinationProfile(v ?? '')}
+					onValueChange={(v) => setDestinationProfile(v ?? "")}
 				/>
 			)}
-			<TextInput
+			<InputField
 				label={
 					file
-						? t('Каталог экспорта', 'Export directory')
-						: t('Родительская страница назначения', 'Destination parent page')
+						? t("Каталог экспорта", "Export directory")
+						: t("Родительская страница назначения", "Destination parent page")
 				}
 				value={destination}
 				onChange={(e) => setDestination(e.target.value)}
 				required
 			/>
-			<Group grow>
-				<NativeSelect
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "row",
+					gap: 8,
+					alignItems: "center",
+					flexWrap: "wrap",
+				}}
+				className="ui-grow"
+			>
+				<ChoiceField
 					label="Scope"
 					value={scope}
-					onChange={(e) => setScope(e.target.value)}
-					data={['page', 'subtree', 'linked']}
+					options={["page", "subtree", "linked"]}
+					onValueChange={(e) => setScope(e)}
 				/>
-				<NativeSelect
-					label={t('Статус источника', 'Source status')}
+				<ChoiceField
+					label={t("Статус источника", "Source status")}
 					value={sourceStatus}
-					onChange={(e) => setSourceStatus(e.target.value)}
-					data={['all', 'current']}
+					options={["all", "current"]}
+					onValueChange={(e) => setSourceStatus(e)}
 				/>
-			</Group>
-			<Checkbox
-				label={t('Переносить комментарии', 'Include comments')}
+			</div>
+			<CheckboxField
+				label={t("Переносить комментарии", "Include comments")}
 				checked={comments}
-				onChange={(e) => setComments(e.target.checked)}
+				onCheckedChange={(e) => setComments(e)}
 			/>
 			{file && (
-				<Checkbox
-					label={t('Создать ZIP', 'Create ZIP')}
+				<CheckboxField
+					label={t("Создать ZIP", "Create ZIP")}
 					checked={archive}
-					onChange={(e) => setArchive(e.target.checked)}
+					onCheckedChange={(e) => setArchive(e)}
 				/>
 			)}
-			<Checkbox
+			<CheckboxField
 				label={t(
-					'Live · записать в destination',
-					'Live · write to destination',
+					"Live · записать в destination",
+					"Live · write to destination",
 				)}
 				checked={live}
-				onChange={(e) => {
-					setLive(e.target.checked);
+				onCheckedChange={(e) => {
+					setLive(e);
 					setConfirmed(false);
 				}}
 			/>
 			{live && (
 				<>
-					<Alert color="orange">
+					<Notice tone={"orange"}>
 						{t(
-							'Source заменит содержимое сопоставленных страниц. Сначала рекомендуется dry-run.',
-							'Source replaces mapped destination content. A dry-run is recommended first.',
+							"Source заменит содержимое сопоставленных страниц. Сначала рекомендуется dry-run.",
+							"Source replaces mapped destination content. A dry-run is recommended first.",
 						)}
-					</Alert>
-					<Checkbox
+					</Notice>
+					<CheckboxField
 						label={t(
-							'Подтверждаю запись выбранной миграции',
-							'I confirm this migration will write destination data',
+							"Подтверждаю запись выбранной миграции",
+							"I confirm this migration will write destination data",
 						)}
 						checked={confirmed}
-						onChange={(e) => setConfirmed(e.target.checked)}
+						onCheckedChange={(e) => setConfirmed(e)}
 					/>
 				</>
 			)}
-      <details><summary>{t('Дополнительные параметры', 'Advanced options')}</summary><Stack mt="md">
-        <NumberInput label={t('Параллельность', 'Concurrency')} placeholder={String(settings?.defaults?.concurrency ?? 4)} value={concurrency} onChange={setConcurrency} min={1} max={64} allowDecimal={false}/>
-        <TextInput label={t('State · путь внутри workspace (необязательно)', 'State · path inside workspace (optional)')} value={stateFilename} onChange={e => setStateFilename(e.target.value)}/>
-        <Checkbox label={t('Fresh · новые mappings; возможны дубликаты', 'Fresh · new mappings; may create duplicates')} checked={fresh} onChange={e => {setFresh(e.target.checked);if (e.target.checked) setRewrite(false);}}/>
-        {!file && <Checkbox label={t('Rewrite · только существующие IDs, без создания страниц', 'Rewrite · existing IDs only; no new pages')} checked={rewrite} onChange={e => {setRewrite(e.target.checked);if (e.target.checked) setFresh(false);}}/>}
-      </Stack></details>
+			<details>
+				<summary>{t("Дополнительные параметры", "Advanced options")}</summary>
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "column",
+						gap: 16,
+						marginTop: 16,
+					}}
+				>
+					<NumberField
+						label={t("Параллельность", "Concurrency")}
+						placeholder={String(settings?.defaults?.concurrency ?? 4)}
+						value={concurrency}
+						min={1}
+						max={64}
+						onValueChange={setConcurrency}
+					/>
+					<InputField
+						label={t(
+							"State · путь внутри workspace (необязательно)",
+							"State · path inside workspace (optional)",
+						)}
+						value={stateFilename}
+						onChange={(e) => setStateFilename(e.target.value)}
+					/>
+					<CheckboxField
+						label={t(
+							"Fresh · новые mappings; возможны дубликаты",
+							"Fresh · new mappings; may create duplicates",
+						)}
+						checked={fresh}
+						onCheckedChange={(e) => {
+							setFresh(e);
+							if (e) setRewrite(false);
+						}}
+					/>
+					{!file && (
+						<CheckboxField
+							label={t(
+								"Rewrite · только существующие IDs, без создания страниц",
+								"Rewrite · existing IDs only; no new pages",
+							)}
+							checked={rewrite}
+							onCheckedChange={(e) => {
+								setRewrite(e);
+								if (e) setFresh(false);
+							}}
+						/>
+					)}
+				</div>
+			</details>
 			<Button
+				onClick={submit}
 				disabled={
-        concurrency !== '' && (Number(concurrency) < 1 || Number(concurrency) > 64) ||
+					(concurrency !== "" &&
+						(Number(concurrency) < 1 || Number(concurrency) > 64)) ||
 					!source.trim() ||
 					!destination.trim() ||
 					!sourceProfile ||
 					(!file && !destinationProfile) ||
-					(live && !confirmed)
+					(live && !confirmed) ||
+					busy
 				}
-				loading={busy}
-				onClick={submit}
 			>
+				{busy && <Spinner />}
 				{live
-					? t('Запустить перенос', 'Start migration')
-					: t('Сначала dry-run', 'Start dry-run')}
+					? t("Запустить перенос", "Start migration")
+					: t("Сначала dry-run", "Start dry-run")}
 			</Button>
-		</Stack>
+		</div>
 	);
 }

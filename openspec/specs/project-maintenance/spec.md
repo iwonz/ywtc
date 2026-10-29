@@ -348,8 +348,8 @@ The interactive report SHALL prioritize non-zero outcomes, actionable diagnostic
 
 #### Scenario: UI dependencies are inspected
 - **WHEN** project dependencies and report source are reviewed
-- **THEN** the report SHALL use one maintained component system rather than a parallel custom shadcn-style primitive layer
-- **AND** report-only Radix, Tailwind, CVA, clsx, and tailwind-merge dependencies SHALL be absent
+- **THEN** all interactive operator interfaces SHALL use shared local shadcn/ui components and semantic design tokens
+- **AND** Mantine dependencies, providers, hooks, selectors and variables SHALL be absent from active frontend sources and package dependencies
 
 ### Requirement: Packaged interactive migration verification
 Project and package checks SHALL exercise interactive migration parsing and the wizard state machine without contacting provider APIs or relying on a real TTY.
@@ -505,3 +505,29 @@ Project, browser and installed-package checks SHALL cover reviewed synchronizati
 #### Scenario: Published package is checked
 - **WHEN** the installed package runs synchronization and its review UI
 - **THEN** shared jobs, offline assets, private plans, linked reports and decision revision checks SHALL work without bundling real runtime data, credentials or internal migration identifiers
+
+### Requirement: Shared operator interface system
+The control center, offline reports and mention/hashtag editors SHALL use a common shadcn/ui component system. Existing workflows, flat presentation, nonzero metrics, themes, localization, keyboard support, virtualization and security boundaries SHALL remain available.
+
+#### Scenario: Operator changes interface surfaces
+- **WHEN** the operator uses the control center, a generated report or either decision editor
+- **THEN** controls SHALL use shared components, theme tokens and consistent focus/error/disabled states without a parallel Mantine implementation
+
+#### Scenario: Dialog and choice controls are used
+- **WHEN** the operator opens dialogs, changes tabs, selects values or dismisses an overlay with Escape
+- **THEN** accessible labels, keyboard behavior, focus containment and return SHALL remain functional on desktop and mobile
+
+#### Scenario: Autonomous bundle is opened
+- **WHEN** a new report or editor is opened using file:// from the installed package
+- **THEN** scripts, CSS, fonts and components SHALL load locally without background requests and previews SHALL remain sandboxed
+
+#### Scenario: Presentation is validated
+- **WHEN** project and package checks run
+- **THEN** checks SHALL cover each surface, both themes, responsive overflow, unsafe data, strict visual baselines and absence of Mantine dependencies without changing migration or JSON contracts
+
+### Requirement: Verified runtime dependency handoff
+Published artifacts SHALL retain security-critical runtime dependency substitutions proved by repository checks. Installed-package verification SHALL inspect actual resolved dependencies rather than assume root-only override policies propagate to consumers.
+
+#### Scenario: A transitive security fix is packaged
+- **WHEN** an audited replacement is required for a legacy runtime dependency
+- **THEN** isolated installation SHALL resolve the replacement and verify its called API and content behavior before publication

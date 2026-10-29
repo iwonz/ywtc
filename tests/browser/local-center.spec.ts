@@ -34,23 +34,47 @@ test.beforeAll(async () => {
   throw Error(`UI startup timed out ${errors}`);
 });
 test.afterAll(async () => {child?.kill('SIGTERM');fixture?.closeAllConnections();await new Promise<void>(resolve => fixture?.close(() => resolve()));});
+
+test('connection forms, workspace focus and persistent theme use shared components', async ({page,context})=>{
+  if(cookies.length)await context.addCookies(cookies);
+  await page.emulateMedia({colorScheme:'light'});
+  await page.goto(cookies.length?origin:`${origin}/#${bootstrap}`);
+  await expect(page.getByRole('button',{name:'New migration',exact:true})).toBeVisible();
+  cookies=await context.cookies();
+  const connect=page.getByRole('button',{name:'Connect workspace',exact:true});
+  await connect.click();await expect(page.getByLabel('Absolute path', {exact:true})).toBeFocused();
+  await page.keyboard.press('Escape');await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);await expect(connect).toBeFocused();
+  await page.getByRole('button',{name:'Connections',exact:true}).click();
+  await page.getByRole('button',{name:'Edit',exact:true}).click();
+  await expect(page.getByLabel('Profile name',{exact:true})).toBeDisabled();
+  await page.getByLabel('Auth',{exact:true}).click();await page.getByRole('option',{name:'iam',exact:true}).click();
+  const token=page.getByLabel('Token · empty keeps current',{exact:true});await expect(token).toHaveValue('');await expect(token).toHaveAttribute('type','password');
+  await page.getByRole('button',{name:'Show password',exact:true}).click();await expect(token).toHaveAttribute('type','text');
+  await page.keyboard.press('Escape');await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+  const theme=page.getByRole('button',{name:'Theme',exact:true});await theme.click();await expect(page.locator('html')).toHaveClass(/light/);await theme.click();await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.reload();await expect(page.locator('html')).toHaveClass(/dark/);await expect(page.locator('[data-slot=button]').first()).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)).toBe(true);
+});
 test('localhost analysis, editor revisions, cross-tab conflict, mobile and no external UI requests', async ({page, context}) => {
   const errors: string[] = [], external: string[] = [];
   page.on('pageerror', error => errors.push(error.message));page.on('request', request => {if (!request.url().startsWith(origin) && /^https?:/.test(request.url())) external.push(request.url());});
-  await page.goto(`${origin}/#${bootstrap}`);
+  if(cookies.length)await context.addCookies(cookies);
+  await page.goto(cookies.length?origin:`${origin}/#${bootstrap}`);
   await expect(page.getByRole('button', {name: 'New migration', exact: true})).toBeVisible();
   cookies = await context.cookies();
   await expect(page).not.toHaveURL(/#/);
   await page.getByRole('button', {name: 'New migration', exact: true}).click();
   await expect(page.getByRole('button', {name: 'Start dry-run', exact: true})).toBeDisabled();
   await expect(page.getByLabel('Include comments')).toBeChecked();
-  await page.getByLabel('Destination', {exact: true}).selectOption('html');await expect(page.getByLabel('Create ZIP')).toBeVisible();await page.getByLabel('Create ZIP').check();
-  await page.getByLabel('Destination', {exact: true}).selectOption('markdown');await expect(page.getByLabel('Create ZIP')).not.toBeChecked();
-  await page.getByLabel('Destination', {exact: true}).selectOption('yandex-wiki');await expect(page.getByLabel('Create ZIP')).not.toBeVisible();await page.keyboard.press('Escape');
+  await page.getByLabel('Destination', {exact: true}).click();await page.getByRole('option', {name: 'HTML', exact: true}).click();await expect(page.getByLabel('Create ZIP')).toBeVisible();await page.getByLabel('Create ZIP').check();
+  await page.getByLabel('Destination', {exact: true}).click();await page.getByRole('option', {name: 'Markdown', exact: true}).click();await expect(page.getByLabel('Create ZIP')).not.toBeChecked();
+  await page.getByLabel('Destination', {exact: true}).click();await page.getByRole('option', {name: 'Yandex Wiki', exact: true}).click();await expect(page.getByLabel('Create ZIP')).not.toBeVisible();await page.keyboard.press('Escape');
+  await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+  expect(errors).toEqual([]);
   await page.getByRole('button', {name: 'Decisions', exact: true}).click();
   await page.getByRole('button', {name: 'Analyze source'}).click();
   await page.getByLabel('Source URL / ID / slug / space URL').fill('page');
-  await page.getByLabel('Scope', {exact: true}).selectOption('page');
+  await page.getByLabel('Scope', {exact: true}).click();await page.getByRole('option', {name: 'page', exact: true}).click();
   await page.getByLabel('Comments', {exact: true}).uncheck();
   await page.getByRole('button', {name: 'Start analysis'}).click();
   await expect(page.getByText('completed · exit 0')).toBeVisible({timeout: 20000});
@@ -59,13 +83,13 @@ test('localhost analysis, editor revisions, cross-tab conflict, mobile and no ex
   const catalogRow = page.locator('.row').filter({has: page.getByText('mentions', {exact: true})});
   await catalogRow.getByRole('button').click();
   await expect(page.getByRole('list', {name: 'Decisions'})).toBeVisible();
-  await page.getByLabel('Decision @ivan', {exact: true}).selectOption('url');
+  await page.getByLabel('Decision @ivan', {exact: true}).click();await page.getByRole('option', {name: 'url', exact: true}).click();
   await page.getByLabel('URL @ivan', {exact: true}).fill('https://people.example.com/ivan');
   await page.getByLabel('Text @ivan', {exact: true}).fill('@ivan');
   const tab = await context.newPage();await tab.goto(origin);await tab.getByRole('button', {name: 'Decisions', exact: true}).click();
   await tab.locator('.row').filter({has: tab.getByText('mentions', {exact: true})}).getByRole('button').click();
   await page.getByRole('button', {name: 'Save draft', exact: true}).click();
-  await tab.getByLabel('Decision @ivan', {exact: true}).selectOption('url');await tab.getByLabel('URL @ivan', {exact: true}).fill('https://people.example.com/other');
+  await tab.getByLabel('Decision @ivan', {exact: true}).click();await tab.getByRole('option', {name: 'url', exact: true}).click();await tab.getByLabel('URL @ivan', {exact: true}).fill('https://people.example.com/other');
   await tab.getByRole('button', {name: 'Save draft', exact: true}).click();await expect(tab.getByText(/revision changed/)).toBeVisible();await tab.close();
   await page.getByRole('button', {name: 'Publish revision', exact: true}).click();await expect(page.getByRole('button', {name: 'Activate in workspace'})).toBeVisible();
   page.once('dialog', dialog => dialog.accept());await page.getByRole('button', {name: 'Activate in workspace'}).click();
@@ -88,8 +112,8 @@ test('report hierarchy, keyboard modal, sandbox, and paginated read-only evidenc
   await page.getByRole('link', {name: 'https://wiki.example.com/root', exact: true}).getAttribute('href').then(href => expect(href).toBe('https://wiki.example.com/root'));
   await page.getByLabel('Search tree').fill('');
   for (const theme of ['light', 'dark']) for (const [name, viewport] of [['desktop', {width: 1280, height: 900}], ['mobile', {width: 390, height: 844}]] as const) {
-    await page.evaluate(value => {localStorage.setItem('mantine-color-scheme-value', value);document.documentElement.setAttribute('data-mantine-color-scheme', value);}, theme);await page.setViewportSize(viewport);
-    await expect(page).toHaveScreenshot(`local-center-${theme}-${name}.png`, {fullPage: true, maxDiffPixelRatio: 0.04, mask: [page.getByRole('combobox', {name: 'Workspace'})]});
+    await page.evaluate(value => {localStorage.setItem('ywtc-ui-theme', value);document.documentElement.classList.toggle('dark', value === 'dark');document.documentElement.classList.toggle('light', value === 'light');}, theme);await page.setViewportSize(viewport);
+    await expect(page).toHaveScreenshot(`local-center-${theme}-${name}.png`, {fullPage: true, maxDiffPixelRatio: 0.01, mask: [page.getByRole('combobox', {name: 'Workspace'})]});
   }
 });
 

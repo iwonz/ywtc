@@ -10,9 +10,14 @@
     "web/app/**/layout.tsx",
     "web/app/**/route.ts",
     "web/proxy.ts",
-    "web/next.config.mjs"
+    "web/next.config.mjs",
+    "web/postcss.config.mjs"
   ],
+  "compilers": {"css": true},
   "project": [
+    "ui/**/*.css",
+    "ui/**/*.ts",
+    "ui/**/*.tsx",
     "src/**/*.ts",
     "report-ui/src/**/*.ts",
     "report-ui/src/**/*.tsx",

@@ -1,21 +1,24 @@
 "use client";
-import { useCallback, useEffect, useState, useRef } from "react";
 import {
-	Alert,
-	Badge,
-	Button,
-	Checkbox,
-	Group,
-	Modal,
-	Pagination,
-	Select,
-	Stack,
+	InputField,
+	ChoiceField,
+	Notice,
+	PageControls,
+	CheckboxField,
+	AppDialog,
+} from "../../ui/fields";
+import { Button } from "../../ui/components/button";
+import {
+	TableHead,
+	TableRow,
+	TableHeader,
+	TableCell,
+	TableBody,
 	Table,
-	Text,
-	TextInput,
-} from "@mantine/core";
+} from "../../ui/components/table";
+import { Badge } from "../../ui/components/badge";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { api, safeLink, type Translate } from "./api";
-
 export function Synchronization({
 	root,
 	t,
@@ -108,15 +111,23 @@ export function Synchronization({
 		}
 	}
 	return (
-		<Stack gap="xl">
-			<Group align="end">
-				<TextInput
+		<div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "row",
+					gap: 8,
+					flexWrap: "wrap",
+					alignItems: "flex-end",
+				}}
+			>
+				<InputField
 					label={t("Run ID исходной миграции", "Original migration Run ID")}
 					value={runId}
 					onChange={(e) => setRunId(e.currentTarget.value)}
-					w={340}
+					style={{ width: 340 }}
 				/>
-				<TextInput
+				<InputField
 					label={t("Подраздел — необязательно", "Subtree — optional")}
 					value={source}
 					onChange={(e) => setSource(e.currentTarget.value)}
@@ -130,38 +141,46 @@ export function Synchronization({
 				>
 					{t("Анализировать без записи", "Analyze without writes")}
 				</Button>
-			</Group>
-			<Group>
-				<Select
+			</div>
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "row",
+					gap: 8,
+					alignItems: "center",
+					flexWrap: "wrap",
+				}}
+			>
+				<ChoiceField
 					label={t("План синхронизации", "Synchronization plan")}
 					value={planId}
-					data={plans.map((p) => ({
+					style={{ flex: 1 }}
+					searchable
+					options={plans.map((p) => ({
 						value: p.id,
 						label: `${p.createdAt} · ${p.status} · ${p.sourceUrl}`,
 					}))}
-					onChange={(v) => {
+					onValueChange={(v) => {
 						setPlanId(v ?? "");
 						setPage(1);
 						setConfirm(false);
 						setTrash(false);
 					}}
-					style={{ flex: 1 }}
-					searchable
 				/>
 				<Button
-					variant="subtle"
 					onClick={() => {
 						refresh().catch(onError);
 						load().catch(onError);
 					}}
+					variant="ghost"
 				>
 					{t("Обновить", "Refresh")}
 				</Button>
-			</Group>
+			</div>
 			{plan && (
 				<>
 					{!plan.inventory.complete && (
-						<Alert color="orange">
+						<Notice tone={"orange"}>
 							{t(
 								"Inventory неполон. Применение запрещено; устраните причины и повторите анализ.",
 								"Inventory is incomplete. Resolve the failures and analyze again before applying.",
@@ -169,16 +188,16 @@ export function Synchronization({
 							{plan.inventory.failures
 								.map((f: any) => `${f.code}: ${f.message}`)
 								.join("; ")}
-						</Alert>
+						</Notice>
 					)}
-					<Text size="sm" c="dimmed">
+					<p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>
 						{t(
 							"Новые страницы добавляются. Изменившиеся и страницы без baseline требуют решения. Неизменённые сохраняют ID и тело.",
 							"New pages are added. Changed pages and unknown baselines require a decision. Unchanged pages retain their IDs and bodies.",
 						)}
-					</Text>
+					</p>
 					{plan.references.unreadable?.length > 0 && (
-						<Alert color="yellow">
+						<Notice tone={"yellow"}>
 							{t(
 								"Аудит входящих ссылок неполон. Обязательная ветка проверена; ссылки в этих непрочитанных объектах пока не исправляются. Корзина недоступна.",
 								"Inbound link audit is incomplete. Required dependencies were checked; links in these unreadable objects cannot be patched. Trash is unavailable.",
@@ -186,10 +205,18 @@ export function Synchronization({
 							{plan.references.unreadable
 								.map((failure: any) => `${failure.pageId}: ${failure.message}`)
 								.join("; ")}
-						</Alert>
+						</Notice>
 					)}
-					<Group>
-						<TextInput
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							gap: 8,
+							alignItems: "center",
+							flexWrap: "wrap",
+						}}
+					>
+						<InputField
 							aria-label={t("Поиск страниц", "Search pages")}
 							placeholder={t("Название или ID", "Title or ID")}
 							value={query}
@@ -199,14 +226,10 @@ export function Synchronization({
 							}}
 							style={{ flex: 1 }}
 						/>
-						<Select
+						<ChoiceField
 							aria-label={t("Фильтр изменений", "Change filter")}
 							value={filter}
-							onChange={(v) => {
-								setFilter(v ?? "all");
-								setPage(1);
-							}}
-							data={[
+							options={[
 								"all",
 								"add",
 								"changed",
@@ -218,23 +241,26 @@ export function Synchronization({
 								value,
 								label: value === "all" ? t("Все", "All") : value,
 							}))}
+							onValueChange={(v) => {
+								setFilter(v ?? "all");
+								setPage(1);
+							}}
 						/>
-					</Group>
-					<Table.ScrollContainer minWidth={650}>
+					</div>
+					<div className="table-scroll overflow-x-auto">
 						<Table>
-							<Table.Thead>
-								<Table.Tr>
-									<Table.Th>{t("Страница", "Page")}</Table.Th>
-									<Table.Th>{t("Изменение", "Change")}</Table.Th>
-									<Table.Th>{t("Решение", "Decision")}</Table.Th>
-								</Table.Tr>
-							</Table.Thead>
-							<Table.Tbody>
+							<TableHeader>
+								<TableRow>
+									<TableHead>{t("Страница", "Page")}</TableHead>
+									<TableHead>{t("Изменение", "Change")}</TableHead>
+									<TableHead>{t("Решение", "Decision")}</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
 								{plan.items.map((item: any) => (
-									<Table.Tr key={item.id}>
-										<Table.Td>
+									<TableRow key={item.id}>
+										<TableCell>
 											<Button
-												variant="subtle"
 												onClick={async () => {
 													try {
 														setDetail(
@@ -246,10 +272,19 @@ export function Synchronization({
 														onError(error);
 													}
 												}}
+												variant="ghost"
 											>
 												{item.title}
 											</Button>
-											<Group gap="xs">
+											<div
+												style={{
+													display: "flex",
+													flexDirection: "row",
+													alignItems: "center",
+													flexWrap: "wrap",
+													gap: 8,
+												}}
+											>
 												{safeLink(item.sourceUrl) && (
 													<a
 														href={safeLink(item.sourceUrl)}
@@ -268,32 +303,36 @@ export function Synchronization({
 														destination
 													</a>
 												)}
-											</Group>
-										</Table.Td>
-										<Table.Td>
+											</div>
+										</TableCell>
+										<TableCell>
 											<Badge
-												color={
+												data-tone={
 													["changed", "unknown-baseline"].includes(
 														item.classification,
 													)
 														? "orange"
 														: "gray"
 												}
+												variant="secondary"
 											>
 												{item.classification}
 											</Badge>
-											<Text size="xs">{item.reasons.join(" · ")}</Text>
-										</Table.Td>
-										<Table.Td>
+											<p style={{ fontSize: 12 }}>{item.reasons.join(" · ")}</p>
+										</TableCell>
+										<TableCell>
 											{["changed", "unknown-baseline"].includes(
 												item.classification,
 											) ? (
-												<Select
+												<ChoiceField
 													aria-label={`${t("Решение", "Decision")}: ${item.title}`}
 													placeholder={t("Выберите", "Choose")}
 													value={plan.decisions.decisions[item.id] ?? null}
-													onChange={(v) => decide(item.id, v)}
-													data={[
+													description={
+														!item.trash.allowed ? item.trash.reason : undefined
+													}
+													disabled={plan.status === "applied" || decisionBusy}
+													options={[
 														{ value: "update", label: t("Обновить", "Update") },
 														{ value: "keep", label: t("Оставить", "Keep") },
 														{
@@ -302,33 +341,38 @@ export function Synchronization({
 															disabled: !item.trash.allowed,
 														},
 													]}
-													description={
-														!item.trash.allowed ? item.trash.reason : undefined
-													}
-													disabled={plan.status === "applied" || decisionBusy}
+													onValueChange={(v) => decide(item.id, v)}
 												/>
 											) : (
-												<Text size="sm">
+												<p style={{ fontSize: 14 }}>
 													{item.classification === "add"
 														? t("Добавить", "Add")
 														: t("Без записи", "No body update")}
-												</Text>
+												</p>
 											)}
-										</Table.Td>
-									</Table.Tr>
+										</TableCell>
+									</TableRow>
 								))}
-							</Table.Tbody>
+							</TableBody>
 						</Table>
-					</Table.ScrollContainer>
+					</div>
 					{plan.total > 50 && (
-						<Pagination
+						<PageControls
 							total={Math.ceil(plan.total / 50)}
 							value={page}
-							onChange={setPage}
+							onValueChange={setPage}
 						/>
 					)}
-					<Group>
-						<Text size="sm">
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							gap: 8,
+							alignItems: "center",
+							flexWrap: "wrap",
+						}}
+					>
+						<p style={{ fontSize: 14 }}>
 							{t("Проверка входящих ссылок", "Inbound link audit")}:{" "}
 							{plan.references.pages} {t("страниц", "pages")}
 							{plan.references.comments > 0
@@ -337,8 +381,8 @@ export function Synchronization({
 							{plan.references.patches > 0
 								? ` · ${plan.references.patches} patches`
 								: ""}
-						</Text>
-					</Group>
+						</p>
+					</div>
 					<SyncLinkReview
 						root={root}
 						planId={planId}
@@ -358,31 +402,31 @@ export function Synchronization({
 						}}
 					/>
 					{plan.missingDecisions > 0 && (
-						<Alert color="blue">
+						<Notice tone={"blue"}>
 							{t("Осталось выбрать решения", "Decisions remaining")}:{" "}
 							{plan.missingDecisions}
-						</Alert>
+						</Notice>
 					)}
 					{plan.status !== "applied" && (
-						<Stack gap="sm">
-							<Checkbox
+						<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+							<CheckboxField
 								checked={confirm}
 								disabled={decisionBusy}
-								onChange={(e) => setConfirm(e.currentTarget.checked)}
 								label={t(
 									"Подтверждаю решения и показанные исправления ссылок. Изменения destination могут быть заменены source-версией.",
 									"Confirm decisions and disclosed link repairs. Destination edits may be replaced by the source version.",
 								)}
+								onCheckedChange={(e) => setConfirm(e)}
 							/>
 							{Object.values(plan.decisions.decisions).includes("trash") && (
-								<Checkbox
+								<CheckboxField
 									checked={trash}
 									disabled={decisionBusy}
-									onChange={(e) => setTrash(e.currentTarget.checked)}
 									label={t(
 										"Отдельно подтверждаю обратимое перемещение выбранных leaf-страниц в корзину.",
 										"Separately confirm reversible trash of the selected leaf pages.",
 									)}
+									onCheckedChange={(e) => setTrash(e)}
 								/>
 							)}
 							<Button
@@ -406,62 +450,81 @@ export function Synchronization({
 							>
 								{t("Применить план", "Apply plan")}
 							</Button>
-						</Stack>
+						</div>
 					)}
 				</>
 			)}
-			<Modal
-				opened={Boolean(detail)}
-				onClose={() => setDetail(undefined)}
+			<AppDialog
 				title={detail?.item.title}
-				size="90%"
+				open={Boolean(detail)}
+				onDismiss={() => setDetail(undefined)}
+				width={"90%"}
 			>
-				<Stack>
-					<Text>{detail?.item.id}</Text>
+				<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+					<p>{detail?.item.id}</p>
 					{detail?.resources?.length > 0 && (
-						<Table.ScrollContainer minWidth={650}>
+						<div className="table-scroll overflow-x-auto">
 							<Table>
-								<Table.Thead>
-									<Table.Tr>
-										<Table.Th>{t("Файл", "File")}</Table.Th>
-										<Table.Th>
+								<TableHeader>
+									<TableRow>
+										<TableHead>{t("Файл", "File")}</TableHead>
+										<TableHead>
 											{t("Проверенные bytes", "Verified bytes")}
-										</Table.Th>
-										<Table.Th>
+										</TableHead>
+										<TableHead>
 											{t("Прежний SHA-256", "Previous SHA-256")}
-										</Table.Th>
-										<Table.Th>Source SHA-256</Table.Th>
-									</Table.Tr>
-								</Table.Thead>
-								<Table.Tbody>
+										</TableHead>
+										<TableHead>Source SHA-256</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
 									{detail.resources.map((file: any) => (
-										<Table.Tr key={file.id}>
-											<Table.Td>{file.name}</Table.Td>
-											<Table.Td>{file.size}</Table.Td>
-											<Table.Td>
-												<Text size="xs" style={{ overflowWrap: "anywhere" }}>
+										<TableRow key={file.id}>
+											<TableCell>{file.name}</TableCell>
+											<TableCell>{file.size}</TableCell>
+											<TableCell>
+												<p
+													style={{
+														fontSize: 12,
+														...{ overflowWrap: "anywhere" },
+													}}
+												>
 													{file.previousSha256 ??
 														t("Нет baseline", "No baseline")}
-												</Text>
-											</Table.Td>
-											<Table.Td>
-												<Text size="xs" style={{ overflowWrap: "anywhere" }}>
+												</p>
+											</TableCell>
+											<TableCell>
+												<p
+													style={{
+														fontSize: 12,
+														...{ overflowWrap: "anywhere" },
+													}}
+												>
 													{file.sha256}
-												</Text>
-											</Table.Td>
-										</Table.Tr>
+												</p>
+											</TableCell>
+										</TableRow>
 									))}
-								</Table.Tbody>
+								</TableBody>
 							</Table>
-						</Table.ScrollContainer>
+						</div>
 					)}
 					{detail?.comments &&
 						(detail.comments.current || detail.comments.proposed) && (
-							<Group grow align="start">
+							<div
+								style={{
+									display: "flex",
+									flexDirection: "row",
+									gap: 8,
+									flexWrap: "wrap",
+									alignItems: "flex-start",
+								}}
+								className="ui-grow"
+							>
 								<div>
-									<Text fw={600}>
+									<p style={{ fontWeight: 600 }}>
 										{t("Архив комментариев сейчас", "Current comment archive")}
-									</Text>
+									</p>
 									<pre
 										style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
 									>
@@ -469,22 +532,31 @@ export function Synchronization({
 									</pre>
 								</div>
 								<div>
-									<Text fw={600}>
+									<p style={{ fontWeight: 600 }}>
 										{t("Предлагаемый архив", "Proposed archive")}
-									</Text>
+									</p>
 									<pre
 										style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
 									>
 										{detail.comments.proposed}
 									</pre>
 								</div>
-							</Group>
+							</div>
 						)}
-					<Group grow align="start">
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							gap: 8,
+							flexWrap: "wrap",
+							alignItems: "flex-start",
+						}}
+						className="ui-grow"
+					>
 						<div>
-							<Text fw={600}>
+							<p style={{ fontWeight: 600 }}>
 								{t("Сейчас в destination", "Current destination")}
-							</Text>
+							</p>
 							<pre
 								style={{
 									whiteSpace: "pre-wrap",
@@ -497,9 +569,9 @@ export function Synchronization({
 							</pre>
 						</div>
 						<div>
-							<Text fw={600}>
+							<p style={{ fontWeight: 600 }}>
 								{t("Source-derived результат", "Source-derived result")}
-							</Text>
+							</p>
 							<pre
 								style={{
 									whiteSpace: "pre-wrap",
@@ -511,13 +583,12 @@ export function Synchronization({
 								{detail?.preview?.proposed ?? t("Нет preview", "No preview")}
 							</pre>
 						</div>
-					</Group>
-				</Stack>
-			</Modal>
-		</Stack>
+					</div>
+				</div>
+			</AppDialog>
+		</div>
 	);
 }
-
 function SyncLinkReview({
 	root,
 	planId,
@@ -550,58 +621,58 @@ function SyncLinkReview({
 	}, [root, planId, revision, page, onError]);
 	if (!links?.total) return null;
 	return (
-		<Stack gap="sm">
-			<Text fw={600}>
+		<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+			<p style={{ fontWeight: 600 }}>
 				{t("Изменения входящих ссылок", "Incoming link changes")} ·{" "}
 				{links.total}
-			</Text>
-			<Table.ScrollContainer minWidth={600}>
+			</p>
+			<div className="table-scroll overflow-x-auto">
 				<Table>
-					<Table.Thead>
-						<Table.Tr>
-							<Table.Th>{t("Откуда", "From")}</Table.Th>
-							<Table.Th>{t("Текущая ссылка", "Current reference")}</Table.Th>
-							<Table.Th>{t("Куда", "Target")}</Table.Th>
-						</Table.Tr>
-					</Table.Thead>
-					<Table.Tbody>
+					<TableHeader>
+						<TableRow>
+							<TableHead>{t("Откуда", "From")}</TableHead>
+							<TableHead>{t("Текущая ссылка", "Current reference")}</TableHead>
+							<TableHead>{t("Куда", "Target")}</TableHead>
+						</TableRow>
+					</TableHeader>
+					<TableBody>
 						{links.items.map((link: any) => (
-							<Table.Tr key={link.id}>
-								<Table.Td>
+							<TableRow key={link.id}>
+								<TableCell>
 									<Button
-										variant="subtle"
 										onClick={() => onInspect(link.pageId)}
+										variant="ghost"
 									>
 										{link.title}
 									</Button>
-									<Text size="xs">
+									<p style={{ fontSize: 12 }}>
 										{link.location}
 										{link.occurrences > 1 ? ` ×${link.occurrences}` : ""}
-									</Text>
-								</Table.Td>
-								<Table.Td style={{ overflowWrap: "anywhere" }}>
+									</p>
+								</TableCell>
+								<TableCell style={{ overflowWrap: "anywhere" }}>
 									{link.href}
-								</Table.Td>
-								<Table.Td style={{ overflowWrap: "anywhere" }}>
+								</TableCell>
+								<TableCell style={{ overflowWrap: "anywhere" }}>
 									{link.destinationUrl ??
 										t(
 											"Destination ID будет подтверждён после создания",
 											"Destination ID will be verified after creation",
 										)}
-									<Text size="xs">{link.targetId}</Text>
-								</Table.Td>
-							</Table.Tr>
+									<p style={{ fontSize: 12 }}>{link.targetId}</p>
+								</TableCell>
+							</TableRow>
 						))}
-					</Table.Tbody>
+					</TableBody>
 				</Table>
-			</Table.ScrollContainer>
+			</div>
 			{links.total > 50 && (
-				<Pagination
+				<PageControls
 					total={Math.ceil(links.total / 50)}
 					value={page}
-					onChange={setPage}
+					onValueChange={setPage}
 				/>
 			)}
-		</Stack>
+		</div>
 	);
 }

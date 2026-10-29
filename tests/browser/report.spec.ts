@@ -4,6 +4,7 @@ import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {expect, test} from '@playwright/test';
 import {TransferReport, type TransferReportPage} from '../../src/report.js';
+test.use({timezoneId: 'UTC', locale: 'en-US'});
 
 function reportPage(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sourceCanonicalId' | 'sourceId' | 'sourceTitle' | 'status'>): TransferReportPage {
   return {
@@ -105,6 +106,8 @@ test.beforeAll(async () => {
   report.issue({code: 'destination-page-staging-failed', severity: 'error', phase: 'page', pageId: 'wiki:3', retryable: true, message: 'All deterministic destination titles are occupied'});
   report.issue({code: 'destination-parent-unavailable', severity: 'blocked', phase: 'page', pageId: 'wiki:4', retryable: false, blockedByPageId: 'wiki:3', blockedByCode: 'destination-page-staging-failed', message: 'Destination parent is unavailable'});
   report.finish('partial');
+  report.data.startedAt = '2026-01-01T12:00:00.000Z';
+  report.data.finishedAt = '2026-01-01T12:01:00.000Z';
   reportUrl = pathToFileURL((await report.write(temporary)).html).toString();
 });
 
@@ -131,7 +134,8 @@ test('interactive report works offline through file:// with exact details and ke
   const overview = page.locator('.overview-section');
   await expect(overview.getByRole('link', {name: 'https://wiki.example.com/root'})).toHaveAttribute('href', 'https://wiki.example.com/root');
   await expect(overview.getByRole('link', {name: 'https://docs.example.com/pages/10'})).toHaveAttribute('href', 'https://docs.example.com/pages/10');
-  await expect(page.locator('main .mantine-Card-root, main .mantine-Paper-root')).toHaveCount(0);
+  await expect(page.locator('main [data-slot=card]')).toHaveCount(0);
+  await expect(page.locator('[data-slot=button]').first()).toBeVisible();
   await expect(page.getByText('Quality', {exact: true})).toBeVisible();
   await expect(page.getByText(/0 unknown sizes/i)).toHaveCount(0);
   await expect(page.getByText(/0 safe normalization/i)).toHaveCount(0);
@@ -213,19 +217,16 @@ test('language, theme, filters, comment details, and responsive layout are avail
 });
 
 for (const snapshot of [
-  {name: 'desktop-light', width: 1440, height: 900, canvasHeight: 2400, theme: 'Light'},
-  {name: 'desktop-dark', width: 1440, height: 900, canvasHeight: 2400, theme: 'Dark'},
-  {name: 'mobile-light', width: 390, height: 844, canvasHeight: 2960, theme: 'Light'},
-  {name: 'mobile-dark', width: 390, height: 844, canvasHeight: 2960, theme: 'Dark'},
+  {name: 'desktop-light', width: 1440, height: 900, theme: 'Light'},
+  {name: 'desktop-dark', width: 1440, height: 900, theme: 'Dark'},
+  {name: 'mobile-light', width: 390, height: 844, theme: 'Light'},
+  {name: 'mobile-dark', width: 390, height: 844, theme: 'Dark'},
 ]) {
   test(`visual snapshot ${snapshot.name}`, async ({page}) => {
     await page.setViewportSize({width: snapshot.width, height: snapshot.height});
     await page.goto(reportUrl);
-    await page.addStyleTag({
-      content: `html, body, #root, .report-background { min-height: ${snapshot.canvasHeight}px !important; }`,
-    });
     await page.getByRole('button', {name: /Theme: System; next: Light/}).click();
     if (snapshot.theme === 'Dark') await page.getByRole('button', {name: /Theme: Light; next: Dark/}).click();
-    await expect(page).toHaveScreenshot(`${snapshot.name}.png`, {animations: 'disabled', fullPage: true, maxDiffPixelRatio: 0.04});
+    await expect(page).toHaveScreenshot(`${snapshot.name}.png`, {animations: 'disabled', fullPage: true, maxDiffPixelRatio: 0.01});
   });
 }

@@ -1,11 +1,11 @@
 export async function api(
 	route: string,
-	method = 'GET',
+	method = "GET",
 	body?: unknown,
 ): Promise<any> {
 	const response = await fetch(`/api/${route}`, {
 		method,
-		headers: { 'content-type': 'application/json' },
+		headers: { "content-type": "application/json" },
 		...(body === undefined ? {} : { body: JSON.stringify(body) }),
 	});
 	const data = await response.json();
@@ -13,11 +13,11 @@ export async function api(
 	return data;
 }
 export function safeLink(value: unknown): string | undefined {
-	if (typeof value !== 'string') return;
+	if (typeof value !== "string") return;
 	try {
 		const url = new URL(value);
 		if (
-			['http:', 'https:'].includes(url.protocol) &&
+			["http:", "https:"].includes(url.protocol) &&
 			!url.username &&
 			!url.password
 		)
@@ -27,9 +27,9 @@ export function safeLink(value: unknown): string | undefined {
 }
 export function download(value: unknown, filename: string) {
 	const url = URL.createObjectURL(
-		new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }),
+		new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }),
 	);
-	const a = document.createElement('a');
+	const a = document.createElement("a");
 	a.href = url;
 	a.download = filename;
 	a.click();
@@ -37,10 +37,10 @@ export function download(value: unknown, filename: string) {
 }
 export type Translate = (ru: string, en: string) => string;
 export const statusColor = (status: string) =>
-	status === 'complete' || status === 'completed'
-		? 'teal'
-		: ['failed', 'conflict'].includes(status)
-			? 'red'
-			: ['partial', 'blocked', 'interrupted'].includes(status)
-				? 'orange'
-				: 'gray';
+	status === "complete" || status === "completed"
+		? "teal"
+		: ["failed", "conflict"].includes(status)
+			? "red"
+			: ["partial", "blocked", "interrupted"].includes(status)
+				? "orange"
+				: "gray";

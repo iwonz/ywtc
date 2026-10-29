@@ -1,15 +1,10 @@
-'use client';
-import { useEffect, useRef, useState } from 'react';
-import {
-	Alert,
-	Badge,
-	Button,
-	Checkbox,
-	Group,
-	Progress,
-	Stack,
-} from '@mantine/core';
-import { api, statusColor, type Translate } from './api';
+"use client";
+import { Badge } from "../../ui/components/badge";
+import { Button } from "../../ui/components/button";
+import { Notice, CheckboxField } from "../../ui/fields";
+import { Progress } from "../../ui/components/progress";
+import { useEffect, useRef, useState } from "react";
+import { api, statusColor, type Translate } from "./api";
 export function Tasks({
 	root,
 	t,
@@ -58,13 +53,13 @@ export function Tasks({
 		const source = new EventSource(`/api/${root}/jobs/${selected}/events`);
 		source.onopen = () => setDisconnected(false);
 		source.onerror = () => setDisconnected(true);
-		source.addEventListener('event', (event) => {
+		source.addEventListener("event", (event) => {
 			const e = JSON.parse((event as MessageEvent).data);
 			cursor.current = e.sequence;
 			setEvents((items) => [...items, e].slice(-300));
-			if (e.data?.type === 'progress') setSnapshot(e.data);
+			if (e.data?.type === "progress") setSnapshot(e.data);
 		});
-		source.addEventListener('snapshot', (event) => {
+		source.addEventListener("snapshot", (event) => {
 			const j = JSON.parse((event as MessageEvent).data);
 			setJob(j);
 			if (j.progress) setSnapshot(j.progress);
@@ -72,7 +67,7 @@ export function Tasks({
 				api(`${root}/previews/${j.result.previewId}`)
 					.then(setPreview)
 					.catch(onError);
-			if (['finished', 'interrupted'].includes(j.status)) {
+			if (["finished", "interrupted"].includes(j.status)) {
 				source.close();
 				setDisconnected(false);
 			}
@@ -81,7 +76,7 @@ export function Tasks({
 	}, [root, selected, onError]);
 	const submit = async (request: any, live = false) => {
 		try {
-			const next = await api(`${root}/jobs`, 'POST', {
+			const next = await api(`${root}/jobs`, "POST", {
 				request,
 				confirmed: live,
 			});
@@ -94,22 +89,25 @@ export function Tasks({
 	return (
 		<>
 			<div className="section-title">
-				{t('Очередь и история задач', 'Queue & task history')}
+				{t("Очередь и история задач", "Queue & task history")}
 			</div>
 			{jobs.map((item) => (
 				<div className="row" key={item.id}>
-					<Badge color={statusColor(item.result?.status ?? item.status)}>
+					<Badge
+						data-tone={statusColor(item.result?.status ?? item.status)}
+						variant="secondary"
+					>
 						{item.status}
 					</Badge>
-					<Button variant="subtle" onClick={() => setSelected(item.id)}>
+					<Button onClick={() => setSelected(item.id)} variant="ghost">
 						{item.request.kind} · {item.id.slice(0, 8)}
 					</Button>
 					<span className="grow muted">
 						{new Date(item.createdAt).toLocaleString()}
 					</span>
 					{item.runId && (
-						<Button variant="subtle" onClick={() => onReport(item.runId)}>
-							{t('Отчёт', 'Report')}
+						<Button onClick={() => onReport(item.runId)} variant="ghost">
+							{t("Отчёт", "Report")}
 						</Button>
 					)}
 					{item.result && (
@@ -120,73 +118,99 @@ export function Tasks({
 				</div>
 			))}
 			{!jobs.length && (
-				<div className="empty">{t('Задач пока нет.', 'No jobs yet.')}</div>
+				<div className="empty">{t("Задач пока нет.", "No jobs yet.")}</div>
 			)}
-			<Group mt="md">
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "row",
+					gap: 8,
+					alignItems: "center",
+					flexWrap: "wrap",
+					marginTop: 16,
+				}}
+			>
 				<Button
-					variant="subtle"
 					disabled={!offset}
 					onClick={() => setOffset(Math.max(0, offset - 100))}
+					variant="ghost"
 				>
 					←
 				</Button>
 				<Button
-					variant="subtle"
 					disabled={offset + 100 >= total}
 					onClick={() => setOffset(offset + 100)}
+					variant="ghost"
 				>
 					→
 				</Button>
-			</Group>
+			</div>
 			{job && (
 				<section className="section">
-					<Group justify="space-between">
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							gap: 8,
+							alignItems: "center",
+							flexWrap: "wrap",
+							justifyContent: "space-between",
+						}}
+					>
 						<div className="section-title">
-							{t('Задача', 'Task')} <span className="mono">{job.id}</span>
+							{t("Задача", "Task")} <span className="mono">{job.id}</span>
 						</div>
-						{['queued', 'running', 'stopping'].includes(job.status) && (
+						{["queued", "running", "stopping"].includes(job.status) && (
 							<Button
-								color="orange"
-								disabled={job.status === 'stopping'}
+								disabled={job.status === "stopping"}
 								onClick={() =>
-									api(`${root}/jobs/${job.id}/stop`, 'POST', {})
+									api(`${root}/jobs/${job.id}/stop`, "POST", {})
 										.then(setJob)
 										.catch(onError)
 								}
 							>
-								{job.status === 'stopping'
-									? t('Остановка запрошена', 'Stop requested')
-									: t('Мягкая остановка', 'Graceful stop')}
+								{job.status === "stopping"
+									? t("Остановка запрошена", "Stop requested")
+									: t("Мягкая остановка", "Graceful stop")}
 							</Button>
 						)}
-					</Group>
+					</div>
 					{disconnected && (
-						<Alert color="orange">
+						<Notice tone={"orange"}>
 							{t(
-								'Потеряно наблюдение. Работа может продолжаться; соединение восстанавливается.',
-								'Observability lost. Work may continue; reconnecting.',
+								"Потеряно наблюдение. Работа может продолжаться; соединение восстанавливается.",
+								"Observability lost. Work may continue; reconnecting.",
 							)}
-						</Alert>
+						</Notice>
 					)}
 					{job.heartbeatAt && (
 						<p className="muted">
-							{t('Последний сигнал', 'Last heartbeat')}:{' '}
+							{t("Последний сигнал", "Last heartbeat")}:{" "}
 							{new Date(job.heartbeatAt).toLocaleString()}
 						</p>
 					)}
 					{job.inventory && (
-						<Group my="md">
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "row",
+								gap: 8,
+								alignItems: "center",
+								flexWrap: "wrap",
+								marginBlock: 16,
+							}}
+						>
 							{Object.entries(job.inventory)
 								.filter(([, count]) => Number(count) > 0)
 								.map(([key, count]) => (
-									<Badge variant="outline" key={key}>
+									<Badge key={key} variant="outline">
 										Source {key}: {String(count)}
 									</Badge>
 								))}
-						</Group>
+						</div>
 					)}
 					{snapshot && (
-						<Stack gap="xs">
+						<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
 							<strong>{snapshot.phase}</strong>
 							{snapshot.total > 0 && (
 								<Progress
@@ -195,42 +219,50 @@ export function Tasks({
 								/>
 							)}
 							<span>
-								{snapshot.completed ?? ''}
-								{snapshot.total ? ` / ${snapshot.total}` : ''}{' '}
-								{snapshot.unit ?? ''} {snapshot.detail}
+								{snapshot.completed ?? ""}
+								{snapshot.total ? ` / ${snapshot.total}` : ""}{" "}
+								{snapshot.unit ?? ""} {snapshot.detail}
 							</span>
-							<Group>
+							<div
+								style={{
+									display: "flex",
+									flexDirection: "row",
+									gap: 8,
+									alignItems: "center",
+									flexWrap: "wrap",
+								}}
+							>
 								{Object.entries(snapshot.counters ?? {}).map(
 									([key, count]: [string, any]) =>
 										count.total || count.completed ? (
-											<Badge variant="light" key={key}>
+											<Badge key={key} variant="secondary">
 												{key} {count.completed}
-												{count.total === undefined ? '' : `/${count.total}`}
+												{count.total === undefined ? "" : `/${count.total}`}
 											</Badge>
 										) : null,
 								)}
 								{snapshot.inFlight > 0 && (
 									<Badge variant="outline">
-										{t('В работе', 'In flight')} {snapshot.inFlight}
+										{t("В работе", "In flight")} {snapshot.inFlight}
 									</Badge>
 								)}
 								{snapshot.queued > 0 && (
 									<Badge variant="outline">
-										{t('В очереди', 'Queued')} {snapshot.queued}
+										{t("В очереди", "Queued")} {snapshot.queued}
 									</Badge>
 								)}
-							</Group>
+							</div>
 							<span className="muted">
-								{snapshot.rate ? `${snapshot.rate.toFixed(1)} op/s · ` : ''}
+								{snapshot.rate ? `${snapshot.rate.toFixed(1)} op/s · ` : ""}
 								{snapshot.etaMs
 									? `ETA ${Math.ceil(snapshot.etaMs / 60000)} min · `
-									: ''}
-								{t('Прошло', 'Elapsed')} {Math.round(snapshot.elapsedMs / 1000)}{' '}
-								s · {t('Без завершений', 'Since last completion')}{' '}
+									: ""}
+								{t("Прошло", "Elapsed")} {Math.round(snapshot.elapsedMs / 1000)}{" "}
+								s · {t("Без завершений", "Since last completion")}{" "}
 								{Math.max(
 									0,
 									Math.round((Date.now() - snapshot.lastCompletedAt) / 1000),
-								)}{' '}
+								)}{" "}
 								s
 							</span>
 							{snapshot.active?.map((a: any) => (
@@ -238,57 +270,72 @@ export function Tasks({
 									{a.label} · {Math.round((Date.now() - a.startedAt) / 1000)} s
 								</span>
 							))}
-						</Stack>
+						</div>
 					)}
-					{job.error && <Alert color="red">{job.error}</Alert>}
+					{job.error && <Notice tone={"red"}>{job.error}</Notice>}
 					{job.result?.runId && (
 						<Button
-							mt="md"
-							variant="light"
 							onClick={() => onReport(job.result.runId)}
+							variant="secondary"
+							style={{ marginTop: 16 }}
 						>
-							{t('Открыть отчёт', 'Open report')}
+							{t("Открыть отчёт", "Open report")}
 						</Button>
 					)}
-					{job.status === 'interrupted' && (
-						<Alert color="orange" mt="md">
+					{job.status === "interrupted" && (
+						<Notice tone={"orange"} style={{ marginTop: 16 }}>
 							{t(
-								'Задача прервана. Автоматических повторных записей нет.',
-								'Task interrupted. No writes are automatically retried.',
+								"Задача прервана. Автоматических повторных записей нет.",
+								"Task interrupted. No writes are automatically retried.",
 							)}
 							<Button
-								ml="md"
 								onClick={() =>
-									job.request.kind === 'targeted'
-                    ? submit({...job.request, dryRun: true, previewId: undefined})
-                    : job.runId
-										? submit({ kind: 'retry', runId: job.runId, dryRun: true })
-										: submit({
+									job.request.kind === "targeted"
+										? submit({
 												...job.request,
-												...(job.request.kind === 'migrate'
-													? { dryRun: true }
-													: {}),
+												dryRun: true,
+												previewId: undefined,
 											})
+										: job.runId
+											? submit({
+													kind: "retry",
+													runId: job.runId,
+													dryRun: true,
+												})
+											: submit({
+													...job.request,
+													...(job.request.kind === "migrate"
+														? { dryRun: true }
+														: {}),
+												})
 								}
+								style={{ marginLeft: 16 }}
 							>
-								{t('Подготовить продолжение', 'Prepare continuation')}
+								{t("Подготовить продолжение", "Prepare continuation")}
 							</Button>
-						</Alert>
+						</Notice>
 					)}
-					{['migrate', 'retry'].includes(job.request.kind) &&
+					{["migrate", "retry"].includes(job.request.kind) &&
 						job.request.dryRun &&
 						job.result?.runId &&
-						!['failed', 'cancelled', 'interrupted'].includes(
+						!["failed", "cancelled", "interrupted"].includes(
 							job.result.status,
 						) && (
-							<Stack mt="md">
-								<Checkbox
+							<div
+								style={{
+									display: "flex",
+									flexDirection: "column",
+									gap: 16,
+									marginTop: 16,
+								}}
+							>
+								<CheckboxField
 									checked={confirmed}
-									onChange={(e) => setConfirmed(e.target.checked)}
 									label={t(
-										'Подтверждаю live-запуск с этими параметрами',
-										'Confirm live migration with these parameters',
+										"Подтверждаю live-запуск с этими параметрами",
+										"Confirm live migration with these parameters",
 									)}
+									onCheckedChange={(e) => setConfirmed(e)}
 								/>
 								<Button
 									disabled={!confirmed}
@@ -296,24 +343,49 @@ export function Tasks({
 										submit({ ...job.request, dryRun: false }, true)
 									}
 								>
-									{t('Запустить live', 'Run live')}
+									{t("Запустить live", "Run live")}
 								</Button>
-							</Stack>
+							</div>
 						)}
-					{job.request.kind === 'targeted' && !job.request.dryRun && job.result?.status === 'failed' && (
-              <Button mt="md" variant="light" onClick={() => submit({...job.request, dryRun: true, previewId: undefined})}>
-                {t('Подготовить новый preview', 'Prepare a new preview')}
-              </Button>
-            )}
+					{job.request.kind === "targeted" &&
+						!job.request.dryRun &&
+						job.result?.status === "failed" && (
+							<Button
+								onClick={() =>
+									submit({ ...job.request, dryRun: true, previewId: undefined })
+								}
+								variant="secondary"
+								style={{ marginTop: 16 }}
+							>
+								{t("Подготовить новый preview", "Prepare a new preview")}
+							</Button>
+						)}
 					{preview && (
-						<Stack mt="lg">
-							<strong>{t('Предварительный план', 'Preview plan')}</strong>
-							<Group>
-								<Badge>{preview.plan.retryPageIds.length} pages</Badge>
-								<Badge>
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "column",
+								gap: 16,
+								marginTop: 24,
+							}}
+						>
+							<strong>{t("Предварительный план", "Preview plan")}</strong>
+							<div
+								style={{
+									display: "flex",
+									flexDirection: "row",
+									gap: 8,
+									alignItems: "center",
+									flexWrap: "wrap",
+								}}
+							>
+								<Badge variant="secondary">
+									{preview.plan.retryPageIds.length} pages
+								</Badge>
+								<Badge variant="secondary">
 									{preview.plan.contextPageIds?.length ?? 0} context
 								</Badge>
-							</Group>
+							</div>
 							{Object.entries(preview.pages).map(([id, p]: [string, any]) => (
 								<details key={id}>
 									<summary>{p.title}</summary>
@@ -327,7 +399,7 @@ export function Tasks({
 								([id, c]: [string, any]) => (
 									<details key={id}>
 										<summary>
-											{t('Архив комментариев', 'Comment archive')} · {id}
+											{t("Архив комментариев", "Comment archive")} · {id}
 										</summary>
 										<div className="preview-grid">
 											<pre className="code">{c.current}</pre>
@@ -336,19 +408,19 @@ export function Tasks({
 									</details>
 								),
 							)}
-							<Alert color="orange">
+							<Notice tone={"orange"}>
 								{t(
-									'Будут применены только выбранные объекты. Новое содержимое source заменит текущий destination. Изменение данных потребует нового preview.',
-									'Only selected objects will be applied. New source content replaces current destination. Data changes require a new preview.',
+									"Будут применены только выбранные объекты. Новое содержимое source заменит текущий destination. Изменение данных потребует нового preview.",
+									"Only selected objects will be applied. New source content replaces current destination. Data changes require a new preview.",
 								)}
-							</Alert>
-							<Checkbox
+							</Notice>
+							<CheckboxField
 								checked={confirmed}
-								onChange={(e) => setConfirmed(e.target.checked)}
 								label={t(
-									'Я проверил preview и подтверждаю запись',
-									'I reviewed the preview and confirm writes',
+									"Я проверил preview и подтверждаю запись",
+									"I reviewed the preview and confirm writes",
 								)}
+								onCheckedChange={(e) => setConfirmed(e)}
 							/>
 							<Button
 								disabled={!confirmed || preview.ready === false}
@@ -359,26 +431,26 @@ export function Tasks({
 									)
 								}
 							>
-								{t('Применить', 'Apply')}
+								{t("Применить", "Apply")}
 							</Button>
 							{preview.blockers?.map((s: string) => (
-								<Alert color="red" key={s}>
+								<Notice key={s} tone={"red"}>
 									{s}
-								</Alert>
+								</Notice>
 							))}
-						</Stack>
+						</div>
 					)}
-					<h3>{t('Журнал', 'Event log')}</h3>
+					<h3>{t("Журнал", "Event log")}</h3>
 					<div className="code" aria-live="polite">
 						{events.map((e) => (
 							<div key={e.sequence}>
 								<span className="muted">
 									{e.sequence} {new Date(e.at).toLocaleTimeString()}
-								</span>{' '}
+								</span>{" "}
 								{e.message ??
 									e.data?.message ??
 									e.data?.detail ??
-									`${e.type}: ${e.data?.status ?? ''}`}
+									`${e.type}: ${e.data?.status ?? ""}`}
 							</div>
 						))}
 					</div>

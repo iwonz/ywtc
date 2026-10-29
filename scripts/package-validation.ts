@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {promisify} from 'node:util';
+import {createRequire} from 'node:module';
 import {stringify as stringifyYaml} from 'yaml';
 
 const execFileAsync = promisify(execFile);
@@ -64,7 +65,7 @@ for (const file of packResult.files.filter(file => file.path.startsWith('dist/we
   if (file.path.includes('/node_modules/') || file.path.includes('/.next/cache/')) throw Error(`Unexpected web build intermediate: ${file.path}`);
   if (/\.(?:js|json|map)$/.test(file.path) && (await readFile(file.path, 'utf8')).includes(process.cwd())) throw Error(`Non-portable web artifact: ${file.path}`);
 }
-for (const required of ['dist/report-ui/index.html', 'dist/mentions-ui/index.html', 'dist/web/server.js', 'dist/ui-service.js', 'dist/jobs/worker.js', 'docs/assets/report-header-transparent.png']) {
+for (const required of ['dist/report-ui/index.html', 'dist/mentions-ui/index.html', 'dist/web/server.js', 'dist/ui-service.js', 'dist/jobs/worker.js', 'docs/assets/report-header-transparent.png', 'ui/LICENSE']) {
   if (!packResult.files.some((file) => file.path === required)) throw new Error(`Packed archive is missing ${required}`);
 }
 
@@ -76,6 +77,17 @@ await execFileAsync('npm', ['install', '--global', '--ignore-scripts', '--prefix
   env: npmEnvironment,
 });
 const executable = path.join(prefix, 'bin', 'ywtc');
+const installedRequire = createRequire(path.join(prefix, 'lib/node_modules/@iwonz/ywtc/package.json'));
+const rendererRequire = createRequire(installedRequire.resolve('@diplodoc/transform'));
+const installedCssPackage = rendererRequire('css/package.json');
+const installedCssNamespace = rendererRequire('css');
+const installedCss = installedCssNamespace.__esModule ? installedCssNamespace.default : installedCssNamespace;
+if (installedCssPackage.name !== '@adobe/css-tools' || typeof installedCss?.parse !== 'function' || typeof installedCss?.stringify !== 'function') {
+  throw new Error('Installed renderer did not retain its audited CommonJS-compatible CSS dependency');
+}
+if (!installedCss.stringify(installedCss.parse('.fixture { color: red; }')).includes('color: red')) {
+  throw new Error('Installed renderer CSS API changed stylesheet content');
+}
 const version = await execFileAsync(executable, ['--version'], {encoding: 'utf8'});
 const uiHelp = await execFileAsync(executable, ['ui', '--help'], {encoding: 'utf8'});
 if (!uiHelp.stdout.includes('--port') || !uiHelp.stdout.includes('--no-open')) throw Error('Packaged UI help is incomplete');

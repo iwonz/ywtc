@@ -1,27 +1,25 @@
-'use client';
-import { useEffect, useState } from 'react';
+"use client";
+import { Button } from "../../ui/components/button";
 import {
-	Alert,
-	Button,
-	Group,
-	Modal,
-	NativeSelect,
-	NumberInput,
-	PasswordInput,
-	Stack,
-	TextInput,
-} from '@mantine/core';
-import { api, type Translate } from './api';
+	Notice,
+	NumberField,
+	InputField,
+	ChoiceField,
+	PasswordField,
+	AppDialog,
+} from "../../ui/fields";
+import { useEffect, useState } from "react";
+import { api, type Translate } from "./api";
 const fresh = (type: string) =>
-	type === 'yandex-wiki'
+	type === "yandex-wiki"
 		? {
 				type,
-				apiUrl: 'https://api.wiki.yandex.net/v1',
-				webUrl: 'https://wiki.example.com',
-				authType: 'oauth',
-				organization: { type: 'yandex360', id: '' },
+				apiUrl: "https://api.wiki.yandex.net/v1",
+				webUrl: "https://wiki.example.com",
+				authType: "oauth",
+				organization: { type: "yandex360", id: "" },
 			}
-		: { type, deployment: 'data-center', baseUrl: '', authType: 'pat' };
+		: { type, deployment: "data-center", baseUrl: "", authType: "pat" };
 export function Settings({
 	root,
 	t,
@@ -33,8 +31,8 @@ export function Settings({
 }) {
 	const [settings, setSettings] = useState<any>(),
 		[edit, setEdit] = useState<any>(),
-		[name, setName] = useState(''),
-		[previous, setPrevious] = useState(''),
+		[name, setName] = useState(""),
+		[previous, setPrevious] = useState(""),
 		[probe, setProbe] = useState<any>();
 	useEffect(() => {
 		api(`${root}/settings`).then(setSettings).catch(onError);
@@ -46,7 +44,7 @@ export function Settings({
 			const connections = { ...settings.connections };
 			if (previous && previous !== name) delete connections[previous];
 			connections[name] = edit;
-			const value = await api(`${root}/settings`, 'PUT', {
+			const value = await api(`${root}/settings`, "PUT", {
 				...settings,
 				connections,
 			});
@@ -58,20 +56,29 @@ export function Settings({
 	};
 	return (
 		<>
-			<Group justify="space-between">
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "row",
+					gap: 8,
+					alignItems: "center",
+					flexWrap: "wrap",
+					justifyContent: "space-between",
+				}}
+			>
 				<div className="section-title">
-					{t('Подключения и настройки', 'Connections & settings')}
+					{t("Подключения и настройки", "Connections & settings")}
 				</div>
 				<Button
 					onClick={() => {
-						setPrevious('');
-						setName('');
-						setEdit(fresh('confluence'));
+						setPrevious("");
+						setName("");
+						setEdit(fresh("confluence"));
 					}}
 				>
-					{t('Добавить подключение', 'Add connection')}
+					{t("Добавить подключение", "Add connection")}
 				</Button>
-			</Group>
+			</div>
 			{Object.entries(settings?.connections ?? {}).map(
 				([key, value]: [string, any]) => (
 					<div className="row" key={key}>
@@ -81,66 +88,73 @@ export function Settings({
 						</span>
 						<span>
 							{value.hasToken
-								? t('Токен сохранён', 'Token stored')
-								: t('Нет токена', 'No token')}
+								? t("Токен сохранён", "Token stored")
+								: t("Нет токена", "No token")}
 						</span>
 						<Button
-							variant="subtle"
 							onClick={() => {
 								setName(key);
 								setPrevious(key);
 								setEdit(structuredClone(value));
 							}}
+							variant="ghost"
 						>
-							{t('Изменить', 'Edit')}
+							{t("Изменить", "Edit")}
 						</Button>
 						<Button
-							variant="light"
 							onClick={() =>
-								api(`${root}/settings/probe`, 'POST', { profile: key })
+								api(`${root}/settings/probe`, "POST", { profile: key })
 									.then(setProbe)
 									.catch(onError)
 							}
+							variant="secondary"
 						>
-							{t('Проверить доступ', 'Probe access')}
+							{t("Проверить доступ", "Probe access")}
 						</Button>
 					</div>
 				),
 			)}
 			{probe && (
-				<Alert
-					mt="md"
-					color={probe.warnings?.length ? 'orange' : 'teal'}
-					withCloseButton
-					onClose={() => setProbe(undefined)}
+				<Notice
+					tone={probe.warnings?.length ? "orange" : "teal"}
+					onDismiss={() => setProbe(undefined)}
+					style={{ marginTop: 16 }}
 				>
 					{probe.product} {probe.version}
 					{probe.warnings?.map((w: string) => (
 						<p key={w}>{w}</p>
 					))}
-				</Alert>
+				</Notice>
 			)}
 			{settings && (
 				<section className="section">
-					<Group align="end">
-						<NumberInput
-							label={t('Параллельность по умолчанию', 'Default concurrency')}
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							gap: 8,
+							flexWrap: "wrap",
+							alignItems: "flex-end",
+						}}
+					>
+						<NumberField
+							label={t("Параллельность по умолчанию", "Default concurrency")}
 							min={1}
 							max={64}
 							value={settings.defaults?.concurrency ?? 4}
-							onChange={(v) =>
+							onValueChange={(v) =>
 								setSettings({
 									...settings,
 									defaults: { ...settings.defaults, concurrency: Number(v) },
 								})
 							}
 						/>
-						<NumberInput
-							label={t('Timeout (ms)', 'Timeout (ms)')}
+						<NumberField
+							label={t("Timeout (ms)", "Timeout (ms)")}
 							min={1000}
 							max={300000}
 							value={settings.defaults?.timeoutMs ?? 30000}
-							onChange={(v) =>
+							onValueChange={(v) =>
 								setSettings({
 									...settings,
 									defaults: { ...settings.defaults, timeoutMs: Number(v) },
@@ -148,134 +162,133 @@ export function Settings({
 							}
 						/>
 						<Button
-							variant="light"
 							onClick={() =>
-								api(`${root}/settings`, 'PUT', settings)
+								api(`${root}/settings`, "PUT", settings)
 									.then(setSettings)
 									.catch(onError)
 							}
+							variant="secondary"
 						>
-							{t('Сохранить defaults', 'Save defaults')}
+							{t("Сохранить defaults", "Save defaults")}
 						</Button>
-					</Group>
+					</div>
 					<p className="muted">
-						Mentions: {settings.mentions?.mode ?? 'off'} · Hashtags:{' '}
-						{settings.hashtags?.mode ?? 'off'}
+						Mentions: {settings.mentions?.mode ?? "off"} · Hashtags:{" "}
+						{settings.hashtags?.mode ?? "off"}
 					</p>
 				</section>
 			)}
-			<Modal
-				opened={Boolean(edit)}
-				onClose={() => setEdit(undefined)}
-				title={t('Профиль подключения', 'Connection profile')}
-				size="lg"
+			<AppDialog
+				title={t("Профиль подключения", "Connection profile")}
+				open={Boolean(edit)}
+				onDismiss={() => setEdit(undefined)}
+				width="48rem"
 			>
 				{edit && (
-					<Stack>
-						<TextInput
-							label={t('Имя профиля', 'Profile name')}
+					<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+						<InputField
+							label={t("Имя профиля", "Profile name")}
 							disabled={Boolean(previous)}
 							value={name}
 							onChange={(e) => setName(e.target.value)}
 							required
 						/>
-						<NativeSelect
-							label={t('Система', 'Provider')}
+						<ChoiceField
+							label={t("Система", "Provider")}
 							value={edit.type}
-							data={['yandex-wiki', 'confluence']}
-							onChange={(e) => setEdit(fresh(e.target.value))}
+							options={["yandex-wiki", "confluence"]}
+							onValueChange={(e) => setEdit(fresh(e))}
 						/>
-						{edit.type === 'yandex-wiki' ? (
+						{edit.type === "yandex-wiki" ? (
 							<>
-								<TextInput
+								<InputField
 									label="API URL"
 									value={edit.apiUrl}
-									onChange={(e) => patch('apiUrl', e.target.value)}
+									onChange={(e) => patch("apiUrl", e.target.value)}
 								/>
-								<TextInput
+								<InputField
 									label="Web URL"
 									value={edit.webUrl}
-									onChange={(e) => patch('webUrl', e.target.value)}
+									onChange={(e) => patch("webUrl", e.target.value)}
 								/>
-								<NativeSelect
-									label={t('Тип организации', 'Organization type')}
+								<ChoiceField
+									label={t("Тип организации", "Organization type")}
 									value={edit.organization.type}
-									data={['yandex360', 'cloud']}
-									onChange={(e) =>
-										patch('organization', {
+									options={["yandex360", "cloud"]}
+									onValueChange={(e) =>
+										patch("organization", {
 											...edit.organization,
-											type: e.target.value,
+											type: e,
 										})
 									}
 								/>
-								<TextInput
-									label={t('ID организации', 'Organization ID')}
+								<InputField
+									label={t("ID организации", "Organization ID")}
 									value={edit.organization.id}
 									onChange={(e) =>
-										patch('organization', {
+										patch("organization", {
 											...edit.organization,
 											id: e.target.value,
 										})
 									}
 								/>
-								<NativeSelect
+								<ChoiceField
 									label="Auth"
-									data={['oauth', 'iam']}
 									value={edit.authType}
-									onChange={(e) => patch('authType', e.target.value)}
+									options={["oauth", "iam"]}
+									onValueChange={(e) => patch("authType", e)}
 								/>
 							</>
 						) : (
 							<>
-								<NativeSelect
+								<ChoiceField
 									label="Deployment"
 									value={edit.deployment}
-									data={['data-center', 'cloud']}
-									onChange={(e) =>
+									options={["data-center", "cloud"]}
+									onValueChange={(e) =>
 										setEdit({
 											...edit,
-											deployment: e.target.value,
-											authType:
-												e.target.value === 'cloud' ? 'api-token' : 'pat',
+											deployment: e,
+											authType: e === "cloud" ? "api-token" : "pat",
 										})
 									}
 								/>
-								<TextInput
+								<InputField
 									label="Base URL"
 									value={edit.baseUrl}
-									onChange={(e) => patch('baseUrl', e.target.value)}
+									onChange={(e) => patch("baseUrl", e.target.value)}
 								/>
-								{edit.deployment === 'cloud' && (
-									<PasswordInput
+								{edit.deployment === "cloud" && (
+									<PasswordField
 										label={t(
-											'Email · пусто = сохранить текущий',
-											'Email · empty keeps current',
+											"Email · пусто = сохранить текущий",
+											"Email · empty keeps current",
 										)}
 										autoComplete="off"
-										value={edit.email ?? ''}
-										onChange={(e) => patch('email', e.target.value)}
+										value={edit.email ?? ""}
+										onChange={(e) => patch("email", e.target.value)}
 									/>
 								)}
 							</>
 						)}
-						<PasswordInput
+						<PasswordField
 							label={t(
-								'Токен · пусто = сохранить текущий',
-								'Token · empty keeps current',
+								"Токен · пусто = сохранить текущий",
+								"Token · empty keeps current",
 							)}
 							autoComplete="new-password"
-							value={edit.token ?? ''}
-							onChange={(e) => patch('token', e.target.value)}
+							value={edit.token ?? ""}
+							onChange={(e) => patch("token", e.target.value)}
 						/>
 						<Button
 							disabled={!/^[a-z0-9][a-z0-9._-]*$/.test(name)}
 							onClick={save}
 						>
-							{t('Сохранить профиль', 'Save profile')}
+							{t("Сохранить профиль", "Save profile")}
 						</Button>
-					</Stack>
+					</div>
 				)}
-			</Modal>
+			</AppDialog>
 		</>
 	);
 }

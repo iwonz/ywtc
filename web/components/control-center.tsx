@@ -1,41 +1,38 @@
-'use client';
-import { useCallback, useEffect, useState } from 'react';
+"use client";
+import { useUiTheme } from "../../ui/theme";
 import {
-	ActionIcon,
-	Alert,
-	Button,
-	Group,
-	Loader,
-	Modal,
-	Select,
-	TextInput,
-	Tooltip,
-	useMantineColorScheme,
-} from '@mantine/core';
-import { Languages, Monitor, Moon, Plus, Sun } from 'lucide-react';
-import { api, type Translate } from './api';
-import { Tasks } from './tasks';
-import { Reports } from './reports';
-import { Decisions } from './decisions';
-import { Settings } from './settings';
-import { MigrationForm } from './migration-form';
-import {Synchronization} from './synchronization';
-
+	ChoiceField,
+	Hint,
+	Notice,
+	Spinner,
+	InputField,
+	AppDialog,
+} from "../../ui/fields";
+import { Button } from "../../ui/components/button";
+import { useCallback, useEffect, useState } from "react";
+import { Languages, Monitor, Moon, Plus, Sun } from "lucide-react";
+import { api, type Translate } from "./api";
+import { Tasks } from "./tasks";
+import { Reports } from "./reports";
+import { Decisions } from "./decisions";
+import { Settings } from "./settings";
+import { MigrationForm } from "./migration-form";
+import { Synchronization } from "./synchronization";
 export function ControlCenter() {
 	const [connected, setConnected] = useState(false),
-		[error, setError] = useState(''),
+		[error, setError] = useState(""),
 		[workspaces, setWorkspaces] = useState<any[]>([]),
-		[workspace, setWorkspace] = useState(''),
-		[tab, setTab] = useState('reports'),
-		[language, setLanguage] = useState('ru'),
+		[workspace, setWorkspace] = useState(""),
+		[tab, setTab] = useState("reports"),
+		[language, setLanguage] = useState("ru"),
 		[add, setAdd] = useState(false),
-		[directory, setDirectory] = useState(''),
+		[directory, setDirectory] = useState(""),
 		[newMigration, setNewMigration] = useState(false),
 		[job, setJob] = useState<string>(),
 		[run, setRun] = useState<string>(),
 		[revision, setRevision] = useState(0);
-	const { colorScheme, setColorScheme } = useMantineColorScheme();
-	const t: Translate = (ru, en) => (language === 'ru' ? ru : en);
+	const { theme: colorScheme, setTheme: setColorScheme } = useUiTheme();
+	const t: Translate = (ru, en) => (language === "ru" ? ru : en);
 	const root = `w/${workspace}`;
 	const fail = useCallback(
 		(error: unknown) =>
@@ -43,163 +40,203 @@ export function ControlCenter() {
 		[],
 	);
 	const refresh = useCallback(async () => {
-		const data = await api('workspaces');
+		const data = await api("workspaces");
 		setWorkspaces(data.items);
-		setWorkspace((value) => value || data.items[0]?.id || '');
+		setWorkspace((value) => value || data.items[0]?.id || "");
 		setConnected(true);
 	}, []);
 	useEffect(() => {
 		try {
 			setLanguage(
-				localStorage.getItem('ywtc-ui-language') ??
-					(navigator.language.startsWith('ru') ? 'ru' : 'en'),
+				localStorage.getItem("ywtc-ui-language") ??
+					(navigator.language.startsWith("ru") ? "ru" : "en"),
 			);
 		} catch {}
 		const secret = location.hash.slice(1);
-		history.replaceState(null, '', location.pathname);
+		history.replaceState(null, "", location.pathname);
 		(async () => {
-			if (secret) await api('session', 'POST', { secret });
+			if (secret) await api("session", "POST", { secret });
 			await refresh();
 		})().catch(fail);
 	}, [fail, refresh]);
 	const showJob = (id: string) => {
 		setJob(id);
-		setTab('jobs');
+		setTab("jobs");
 		setRevision((r) => r + 1);
 		setNewMigration(false);
 	};
 	const showRun = (id: string) => {
 		setRun(id);
-		setTab('reports');
+		setTab("reports");
 	};
 	return (
 		<main className="shell">
 			<h1
 				style={{
-					position: 'absolute',
+					position: "absolute",
 					width: 1,
 					height: 1,
-					overflow: 'hidden',
+					overflow: "hidden",
 				}}
 			>
 				ywtc control center
 			</h1>
 			<header className="top">
-				<Group gap="lg">
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "row",
+						alignItems: "center",
+						flexWrap: "wrap",
+						gap: 24,
+					}}
+				>
 					<span className="brand">
-						ywtc<span style={{ color: 'var(--mantine-color-cyan-5)' }}>_</span>
+						ywtc<span style={{ color: "var(--primary)" }}>_</span>
 					</span>
 					<span className="muted">
-						{t('Центр миграций', 'Migration control center')}
+						{t("Центр миграций", "Migration control center")}
 					</span>
-				</Group>
-				<Group gap="xs">
-					<Select
-						aria-label={t('Рабочая директория', 'Workspace')}
-						w={260}
+				</div>
+				<div
+					className="workspace-controls"
+					style={{
+						display: "flex",
+						flexDirection: "row",
+						alignItems: "center",
+						flexWrap: "nowrap",
+						gap: 8,
+					}}
+				>
+					<ChoiceField
+						aria-label={t("Рабочая директория", "Workspace")}
 						value={workspace}
-						data={workspaces.map((w) => ({ value: w.id, label: w.path }))}
-						onChange={(value) => {
-							setWorkspace(value ?? '');
+						options={workspaces.map((w) => ({ value: w.id, label: w.path }))}
+						onValueChange={(value) => {
+							setWorkspace(value ?? "");
 							setJob(undefined);
 							setRun(undefined);
 						}}
+						style={{ width: 260, flex: "1 1 160px" }}
 					/>
-					<Tooltip label={t('Подключить workspace', 'Connect workspace')}>
-						<ActionIcon
-							aria-label={t('Подключить workspace', 'Connect workspace')}
-							variant="subtle"
+					<Hint content={t("Подключить workspace", "Connect workspace")}>
+						<Button
+							aria-label={t("Подключить workspace", "Connect workspace")}
 							onClick={() => setAdd(true)}
+							variant="ghost"
+							size="icon-sm"
 						>
 							<Plus size={18} />
-						</ActionIcon>
-					</Tooltip>
-					<Tooltip
-						label={`${colorScheme} → ${colorScheme === 'auto' ? 'light' : colorScheme === 'light' ? 'dark' : 'auto'}`}
+						</Button>
+					</Hint>
+					<Hint
+						content={`${colorScheme} → ${colorScheme === "system" ? "light" : colorScheme === "light" ? "dark" : "system"}`}
 					>
-						<ActionIcon
+						<Button
 							aria-label="Theme"
-							variant="subtle"
 							onClick={() =>
 								setColorScheme(
-									colorScheme === 'auto'
-										? 'light'
-										: colorScheme === 'light'
-											? 'dark'
-											: 'auto',
+									colorScheme === "system"
+										? "light"
+										: colorScheme === "light"
+											? "dark"
+											: "system",
 								)
 							}
+							variant="ghost"
+							size="icon-sm"
 						>
-							{colorScheme === 'auto' ? (
+							{colorScheme === "system" ? (
 								<Monitor size={18} />
-							) : colorScheme === 'light' ? (
+							) : colorScheme === "light" ? (
 								<Sun size={18} />
 							) : (
 								<Moon size={18} />
 							)}
-						</ActionIcon>
-					</Tooltip>
-					<Tooltip label={language === 'ru' ? 'English' : 'Русский'}>
-						<ActionIcon
+						</Button>
+					</Hint>
+					<Hint content={language === "ru" ? "English" : "Русский"}>
+						<Button
 							aria-label="Language"
-							variant="subtle"
 							onClick={() => {
-								const next = language === 'ru' ? 'en' : 'ru';
+								const next = language === "ru" ? "en" : "ru";
 								setLanguage(next);
 								try {
-									localStorage.setItem('ywtc-ui-language', next);
+									localStorage.setItem("ywtc-ui-language", next);
 								} catch {}
 							}}
+							variant="ghost"
+							size="icon-sm"
 						>
 							<Languages size={18} />
-						</ActionIcon>
-					</Tooltip>
-				</Group>
+						</Button>
+					</Hint>
+				</div>
 			</header>
 			{error && (
-				<Alert color="red" withCloseButton onClose={() => setError('')} mb="lg">
+				<Notice
+					tone={"red"}
+					onDismiss={() => setError("")}
+					style={{ marginBottom: 24 }}
+				>
 					{error}
-				</Alert>
+				</Notice>
 			)}
 			{!connected ? (
 				<div className="empty">
 					{error ? (
 						t(
-							'Для подключения откройте URL из команды ywtc ui.',
-							'Connect using the URL printed by ywtc ui.',
+							"Для подключения откройте URL из команды ywtc ui.",
+							"Connect using the URL printed by ywtc ui.",
 						)
 					) : (
-						<Loader size="sm" />
+						<Spinner />
 					)}
 				</div>
 			) : (
 				<>
-					<Group className="nav" justify="space-between">
-						<Group gap="xs">
+					<div
+						className="nav"
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							gap: 8,
+							alignItems: "center",
+							flexWrap: "wrap",
+							justifyContent: "space-between",
+						}}
+					>
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "row",
+								alignItems: "center",
+								flexWrap: "wrap",
+								gap: 8,
+							}}
+						>
 							{[
-								['reports', t('Миграции и отчёты', 'Migrations & reports')],
-								['jobs', t('Задачи', 'Tasks')],
-								['decisions', 'Decisions'],
-								['sync',t('Синхронизация','Synchronization')],
-								['settings', t('Подключения', 'Connections')],
+								["reports", t("Миграции и отчёты", "Migrations & reports")],
+								["jobs", t("Задачи", "Tasks")],
+								["decisions", "Decisions"],
+								["sync", t("Синхронизация", "Synchronization")],
+								["settings", t("Подключения", "Connections")],
 							].map(([id, label]) => (
 								<Button
 									key={id}
-									variant={tab === id ? 'light' : 'subtle'}
 									onClick={() => setTab(id)}
+									variant={tab === id ? "secondary" : "ghost"}
 								>
 									{label}
 								</Button>
 							))}
-						</Group>
-						<Button
-							onClick={() => setNewMigration(true)}
-							leftSection={<Plus size={16} />}
-						>
-							{t('Новая миграция', 'New migration')}
+						</div>
+						<Button onClick={() => setNewMigration(true)}>
+							{<Plus size={16} />}
+							{t("Новая миграция", "New migration")}
 						</Button>
-					</Group>
-					{workspace && tab === 'jobs' && (
+					</div>
+					{workspace && tab === "jobs" && (
 						<Tasks
 							key={`${workspace}-${revision}`}
 							root={root}
@@ -210,7 +247,7 @@ export function ControlCenter() {
 							onJob={showJob}
 						/>
 					)}
-					{workspace && tab === 'reports' && (
+					{workspace && tab === "reports" && (
 						<Reports
 							key={workspace}
 							root={root}
@@ -220,7 +257,7 @@ export function ControlCenter() {
 							onJob={showJob}
 						/>
 					)}
-					{workspace && tab === 'decisions' && (
+					{workspace && tab === "decisions" && (
 						<Decisions
 							key={workspace}
 							root={root}
@@ -229,30 +266,46 @@ export function ControlCenter() {
 							onJob={showJob}
 						/>
 					)}
-					{workspace&&tab==='sync'&&<Synchronization key={workspace} root={root} t={t} onError={fail} onJob={showJob}/>}
-					{workspace && tab === 'settings' && (
+					{workspace && tab === "sync" && (
+						<Synchronization
+							key={workspace}
+							root={root}
+							t={t}
+							onError={fail}
+							onJob={showJob}
+						/>
+					)}
+					{workspace && tab === "settings" && (
 						<Settings key={workspace} root={root} t={t} onError={fail} />
 					)}
 				</>
 			)}
-			<Modal
-				opened={add}
-				onClose={() => setAdd(false)}
+			<AppDialog
 				title={t(
-					'Подключить или создать workspace',
-					'Connect or create workspace',
+					"Подключить или создать workspace",
+					"Connect or create workspace",
 				)}
+				open={add}
+				onDismiss={() => setAdd(false)}
 			>
-				<TextInput
-					label={t('Полный путь', 'Absolute path')}
+				<InputField
+					label={t("Полный путь", "Absolute path")}
 					value={directory}
 					onChange={(e) => setDirectory(e.target.value)}
-					autoFocus
 				/>
-				<Group mt="lg">
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "row",
+						gap: 8,
+						alignItems: "center",
+						flexWrap: "wrap",
+						marginTop: 24,
+					}}
+				>
 					<Button
 						onClick={() =>
-							api('workspaces', 'POST', { path: directory })
+							api("workspaces", "POST", { path: directory })
 								.then(() => {
 									setAdd(false);
 									return refresh();
@@ -260,31 +313,31 @@ export function ControlCenter() {
 								.catch(fail)
 						}
 					>
-						{t('Подключить', 'Connect')}
+						{t("Подключить", "Connect")}
 					</Button>
 					<Button
-						variant="light"
 						onClick={() =>
-							api('workspaces', 'POST', { path: directory, create: true })
+							api("workspaces", "POST", { path: directory, create: true })
 								.then(() => {
 									setAdd(false);
 									return refresh();
 								})
 								.catch(fail)
 						}
+						variant="secondary"
 					>
-						{t('Создать', 'Create')}
+						{t("Создать", "Create")}
 					</Button>
-				</Group>
-			</Modal>
-			<Modal
-				opened={newMigration}
-				onClose={() => setNewMigration(false)}
-				title={t('Новая миграция', 'New migration')}
-				size="lg"
+				</div>
+			</AppDialog>
+			<AppDialog
+				title={t("Новая миграция", "New migration")}
+				open={newMigration}
+				onDismiss={() => setNewMigration(false)}
+				width="48rem"
 			>
 				<MigrationForm root={root} t={t} onError={fail} onJob={showJob} />
-			</Modal>
+			</AppDialog>
 		</main>
 	);
 }

@@ -67,7 +67,7 @@ test('virtualized large lists work on mobile in both themes with keyboard and ho
   await page.getByRole('textbox', {name: 'Поиск упоминаний'}).fill('user9999');
   await expect(page.getByText('<script>window.injected=true</script>', {exact: true})).toBeVisible();
   for (let index = 0; index < 2; index++) await page.getByRole('button', {name: /тема/}).click();
-  await expect(page.locator('html')).toHaveAttribute('data-mantine-color-scheme', /dark|light/);
+  await expect(page.locator('html')).toHaveClass(/dark|light/);
   expect(await page.evaluate(() => 'injected' in window)).toBe(false);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
 });
