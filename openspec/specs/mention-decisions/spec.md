@@ -87,3 +87,14 @@ Source-only mention export SHALL accept the same personal page and space roots a
 #### Scenario: Empty personal space is scanned
 - **WHEN** a complete subtree inventory contains no real pages
 - **THEN** the document SHALL contain an empty entries list and complete inventory without invented page or comment occurrences
+
+### Requirement: Shared analysis and revision-safe editing
+The local application SHALL collect selected mentions and hashtags in one source-only traversal, preserve existing JSON contracts and maintain drafts and immutable published revisions with compare-and-swap editing.
+
+#### Scenario: Source is rescanned
+- **WHEN** an existing catalog is rescanned
+- **THEN** matching identities SHALL retain decisions, new identities SHALL default to skip, absent identities SHALL not be silently deleted and incomplete inventory SHALL remain visible
+
+#### Scenario: Another tab saves first
+- **WHEN** an editor submits a stale revision or invalid import
+- **THEN** the current valid document SHALL remain unchanged and the operator SHALL receive an actionable error

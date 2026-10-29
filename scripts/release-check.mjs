@@ -12,7 +12,7 @@ const localRuntimeNames = new Set(['.env', '.states', 'ywtc.config.yaml']);
 const runtimeDirectoryPrefixes = ['.states/'];
 const forbiddenExtensions = new Set(['.key', '.p12', '.pem', '.pfx']);
 const textExtensions = new Set([
-  '', '.cjs', '.css', '.env', '.example', '.html', '.js', '.json', '.jsonc', '.md', '.mjs', '.ts', '.yaml', '.yml',
+  '', '.cjs', '.css', '.env', '.example', '.html', '.js', '.json', '.jsonc', '.md', '.mjs', '.ts', '.tsx', '.yaml', '.yml',
 ]);
 const findings = [];
 
@@ -28,6 +28,8 @@ async function walk(directory) {
   for (const entry of await readdir(directory, {withFileTypes: true})) {
     const filename = path.join(directory, entry.name);
     if (entry.isDirectory()) {
+      // Next's ignored intermediate traces are not release artifacts; dist/web is audited by package:verify.
+      if (relative(filename) === path.join('web', '.next')) continue;
       if (ignoredDirectories.has(entry.name)) continue;
       if (localRuntimeNames.has(entry.name)) continue;
       await walk(filename);

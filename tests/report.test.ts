@@ -37,6 +37,15 @@ function page(input: Partial<TransferReportPage> & Pick<TransferReportPage, 'sou
 }
 
 describe('transfer report', () => {
+  it('emits typed verified object outcomes and redacted diagnostics', () => {
+    const events: import('../src/operation-events.js').OperationEvent[] = [];
+    const report = new TransferReport({runId: '10000000-0000-4000-8000-000000000098', dryRun: false, scope: 'page', direction: 'yandex-wiki → confluence', secrets: ['secret-value'], source: {provider: 'yandex-wiki', profile: 'wiki', rootId: '1', title: 'Root', url: 'https://wiki.example/root'}, destination: {provider: 'confluence', profile: 'docs', id: '10'}, state: {id: 'state', path: '/tmp/state.json', mode: 'automatic', source: 'new'}}, event => events.push(event));
+    report.addPage(page({sourceCanonicalId: 'wiki:1', sourceId: '1', sourceTitle: 'Root', status: 'complete'}));
+    report.issue({code: 'test-error', severity: 'error', phase: 'page', pageId: 'wiki:1', retryable: true, message: 'bad secret-value'});
+    expect(events).toContainEqual({type: 'outcome', objectType: 'page', objectId: 'wiki:1', status: 'complete'});
+    expect(JSON.stringify(events)).not.toContain('secret-value');
+    expect(events.at(-1)).toMatchObject({type: 'diagnostic', code: 'test-error', retryable: true});
+  });
   it('injects arbitrary report data without interpreting replacement metacharacters', () => {
     const shell = `<!doctype html><html><body><script id="data" type="application/json">${REPORT_DATA_MARKER}</script></body></html>`;
     const dangerous = String.raw`literal $& $' $\` </script> \u2028 \u2029`;
@@ -372,6 +381,7 @@ describe('transfer report', () => {
     expect(JSON.stringify(json)).not.toContain('\u001b');
     expect(JSON.stringify(json)).not.toContain('private source preview');
     expect(JSON.stringify(json)).not.toContain('private destination preview');
+    expect(JSON.stringify(json)).not.toContain('Архив комментариев из оригинала');
     expect(JSON.stringify(json)).not.toContain('top-secret');
     expect(JSON.stringify(json)).not.toContain('admin@example.com');
     expect(json.source.url).toContain('view=1');

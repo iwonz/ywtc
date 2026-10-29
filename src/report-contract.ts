@@ -55,6 +55,8 @@ export interface TransferReportMention {
 }
 
 export interface TransferReportPage {
+  bodyAttemptedInRun?: boolean;
+  bodyOutcomeRunId?: string;
   sourceCanonicalId: string;
   sourceId: string;
   sourceTitle: string;

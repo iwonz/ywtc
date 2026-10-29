@@ -24,6 +24,7 @@ const requiredExampleLabels = [
 ];
 
 const statusHeadings = [
+  'Статусы задач',
   'Статусы страниц',
   'Статусы файлов',
   'Статусы архивов комментариев',

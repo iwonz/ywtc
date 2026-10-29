@@ -10,6 +10,10 @@ interface LeaseMetadata {
   target: string;
 }
 
+export class ExclusiveLeaseBusyError extends Error {
+  constructor(message: string) {super(message);this.name = 'ExclusiveLeaseBusyError';}
+}
+
 export interface ExclusiveLease {
   filename: string;
   metadata: LeaseMetadata;
@@ -89,7 +93,7 @@ export async function acquireExclusiveLease(filename: string, purpose: string, t
       const detail = current
         ? `PID ${current.pid} on ${current.hostname}, started ${current.startedAt}`
         : 'the lock metadata is unreadable and cannot be proven active';
-      throw new Error(`Another ${purpose} is active for "${target}" (${detail}). Wait for it to finish or remove the lock only after proving that process is no longer running.`);
+      throw new ExclusiveLeaseBusyError(`Another ${purpose} is active for "${target}" (${detail}). Wait for it to finish or remove the lock only after proving that process is no longer running.`);
     }
   }
   throw new Error(`Could not acquire ${purpose} lock for "${target}"`);

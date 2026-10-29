@@ -1,6 +1,9 @@
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 
+import type {OperationEvent, ProgressCounter} from './operation-events.js';
+
 export interface ContinuousProgressOptions {
+  onEvent?: (event: OperationEvent) => void;
   heartbeatMs?: number;
   maxActive?: number;
   maxLabelLength?: number;
@@ -9,6 +12,7 @@ export interface ContinuousProgressOptions {
 }
 
 export interface ProgressMeasure {
+  counters?: Record<string, ProgressCounter>;
   phase: string;
   completed: number;
   total?: number;
@@ -54,6 +58,8 @@ export class ContinuousProgress {
   private lastCompletedAt: number;
   private current = 'Starting transfer';
   private readonly active = new Map<ProgressOperation, string>();
+  private readonly activeMetadata = new Map<ProgressOperation, {id: number; startedAt: number}>();
+  private nextOperation = 0;
   private readonly heartbeat: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
   private readonly now: () => number;
@@ -64,7 +70,7 @@ export class ContinuousProgress {
 
   constructor(
     private readonly emit: ((message: string) => void) | undefined,
-    options: ContinuousProgressOptions = {},
+    private readonly options: ContinuousProgressOptions = {},
   ) {
     this.now = options.now ?? Date.now;
     this.maxActive = options.maxActive ?? 3;
@@ -72,7 +78,7 @@ export class ContinuousProgress {
     this.redact = options.redact ?? ((value) => value);
     this.startedAt = this.now();
     this.lastCompletedAt = this.startedAt;
-    if (emit) {
+    if (emit || options.onEvent) {
       this.heartbeat = setInterval(() => this.emitHeartbeat(), options.heartbeatMs ?? 5_000);
       this.heartbeat.unref?.();
     }
@@ -108,6 +114,7 @@ export class ContinuousProgress {
       completed,
       ...(total !== undefined ? {total} : {}),
       unit,
+      ...(input.counters ? {counters: input.counters} : {}),
       ...(input.detail ? {detail: this.clean(input.detail)} : {}),
       ...(input.queued !== undefined ? {queued: Math.max(0, Math.floor(input.queued))} : {}),
       ...(input.inFlight !== undefined ? {inFlight: Math.max(0, Math.floor(input.inFlight))} : {}),
@@ -123,6 +130,7 @@ export class ContinuousProgress {
     const operation = Symbol('progress-operation');
     if (this.stopped) return operation;
     this.active.set(operation, this.clean(label));
+    this.activeMetadata.set(operation, {id: ++this.nextOperation, startedAt: this.now()});
     this.emitSnapshot(false);
     return operation;
   }
@@ -136,6 +144,7 @@ export class ContinuousProgress {
   end(operation: ProgressOperation): void {
     if (this.stopped) return;
     this.active.delete(operation);
+    this.activeMetadata.delete(operation);
   }
 
   stop(): void {
@@ -143,6 +152,7 @@ export class ContinuousProgress {
     this.stopped = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.active.clear();
+    this.activeMetadata.clear();
   }
 
   private clean(value: string): string {
@@ -184,6 +194,23 @@ export class ContinuousProgress {
   }
 
   private emitSnapshot(heartbeat: boolean): void {
+    const at = this.now(), measure = this.measureState;
+    const delta = measure ? measure.completed - measure.startedCompleted : 0;
+    const elapsed = measure ? at - measure.startedAt : 0;
+    const rate = delta >= 2 && elapsed >= 2_000 ? delta * 1_000 / elapsed : undefined;
+    this.options.onEvent?.({
+      type: 'progress', reason: heartbeat ? 'heartbeat' : 'update', phase: measure?.phase ?? this.current,
+      ...(measure ? {completed: measure.completed, unit: measure.unit,
+        ...(measure.total !== undefined ? {total: measure.total} : {}),
+        ...(measure.counters ? {counters: measure.counters} : {}),
+        ...(measure.detail ? {detail: measure.detail} : {}),
+        ...(measure.queued !== undefined ? {queued: measure.queued} : {}),
+        ...(measure.inFlight !== undefined ? {inFlight: measure.inFlight} : {}),
+      } : {}),
+      ...(rate !== undefined ? {rate, ...(measure?.total !== undefined ? {etaMs: Math.max(0, (measure.total - measure.completed) * 1_000 / rate)} : {})} : {}),
+      elapsedMs: at - this.startedAt, lastCompletedAt: this.lastCompletedAt,
+      active: [...this.active].slice(0, this.maxActive).map(([key, label]) => ({...this.activeMetadata.get(key)!, label})),
+    });
     if (!this.emit) return;
     const active = this.activeSummary();
     if (!heartbeat) {

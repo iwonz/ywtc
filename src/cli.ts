@@ -32,6 +32,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     console.log(packageVersion());
     return 0;
   }
+  if (command.command === 'ui') {
+    const {launchUi} = await import(new URL('./ui-launcher.js', import.meta.url).href);
+    return launchUi(command);
+  }
+  if (command.command === 'migrations') {
+    const {runMigrationsCommand} = await import('./jobs/command.js');
+    return runMigrationsCommand(command);
+  }
   if (command.command === 'init') {
     if (command.interactive) {
       const [{assertInteractiveTerminal, runInteractiveInit}, {ClackPrompter}] = await Promise.all([

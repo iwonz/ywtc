@@ -1,12 +1,7 @@
-import {Listr} from 'listr2';
 import type {CliCommand} from './cli-arguments.js';
-import {readWorkspaceConfig, secretValues, validateProfileSecrets} from './config.js';
-import {resolveDestinationLocator, resolveSourceLocator} from './locators.js';
-import {createLogger} from './logger.js';
 import type {TransferResult} from './migrator.js';
 import type {MigrationReportPaths} from './report.js';
 import type {RetryExecution} from './retry-plan.js';
-import {initializeWorkspace, resolveWorkspace, resolveWorkspacePath} from './workspace.js';
 
 export type ParsedMigrationCommand = Extract<CliCommand, {command: 'migrate'}>;
 export type ReadyMigrationCommand = Omit<ParsedMigrationCommand, 'source' | 'destination' | 'interactive'> & {
@@ -35,12 +30,6 @@ function heading(label: string): void {
 
 function summaryField(label: string, value: string): void {
   console.log(`  ${label.padEnd(12)}  ${value}`);
-}
-
-function reportBearingError(error: unknown): error is Error & {reportPaths: MigrationReportPaths; stateFilename: string} {
-  return error instanceof Error
-    && typeof (error as {reportPaths?: unknown}).reportPaths === 'object'
-    && typeof (error as {stateFilename?: unknown}).stateFilename === 'string';
 }
 
 async function printAndMaybeOpenReport(
@@ -106,108 +95,12 @@ export function migrationContinuationCommand(
 }
 
 export async function runMigrationCommand(command: ReadyMigrationCommand, retry?: RetryExecution): Promise<MigrationCommandOutcome> {
-  const workspace = await resolveWorkspace(command.workdir ? {explicit: command.workdir} : {});
-  const initialized = await initializeWorkspace(workspace);
-  const config = readWorkspaceConfig(workspace.configFile);
-  const secrets = secretValues(config);
-  const source = resolveSourceLocator(config, command.source, command.sourceProfile);
-  const destination = resolveDestinationLocator({
-    config,
-    value: command.destination,
-    ...(command.destinationProfile ? {profile: command.destinationProfile} : {}),
-    ...(command.format ? {format: command.format} : {}),
-    cwd: process.cwd(),
-  });
-  validateProfileSecrets(config, [source.profile, ...(destination.type === 'remote' ? [destination.profile] : [])]);
-  const stateFilename = command.stateFilename ? resolveWorkspacePath(workspace, command.stateFilename) : undefined;
-  const logger = createLogger(secrets);
-  const {Migrator: MigratorImplementation} = await import('./migrator.js');
-  const migrator = new MigratorImplementation(config, logger);
-  const controller = new AbortController();
-  let signalCode: number | undefined;
-  const interrupt = () => { signalCode = 130; controller.abort(new Error('Interrupted by SIGINT')); };
-  const terminate = () => { signalCode = 143; controller.abort(new Error('Interrupted by SIGTERM')); };
-  process.once('SIGINT', interrupt);
-  process.once('SIGTERM', terminate);
-  heading(retry ? 'ywtc targeted retry' : 'ywtc transfer');
-  console.log(`  Workdir      ${workspace.root} ${paint(90, `(${workspace.source})`)}`);
-  console.log(`  Source       ${command.source} ${paint(90, `[${source.profile.name}]`)}`);
-  console.log(`  Destination  ${command.destination}${destination.type === 'remote' ? ` ${paint(90, `[${destination.profile.name}]`)}` : ` ${paint(90, `[${destination.format}]`)}`}`);
-  console.log(`  Scope        ${command.scope}`);
-  console.log(`  Source state ${command.sourceStatus}`);
-  console.log(`  Comments     ${command.comments ? 'enabled' : 'disabled'}`);
-  console.log(`  Mode         ${command.dryRun ? paint(33, 'dry-run · read-only') : paint(35, 'live')}`);
-  if (command.rewrite) console.log('  Rewrite      existing destination IDs only · no page creation');
-  if (retry) {
-    console.log(`  Retry root   ${retry.rootRunId}`);
-    console.log(`  Previous run ${retry.parentRunId}`);
-    console.log(`  Attempt      ${retry.attempt}`);
-    console.log(`  Selected     ${retry.plan.retryPageIds.length} pages · ${Object.values(retry.plan.selectedResourceIds).flat().length} files · ${retry.plan.selectedCommentPageIds.length} comment archives`);
-    console.log(`  Context      ${retry.plan.contextPageIds.length} ancestor pages`);
-  }
-  if (initialized.created.length > 0) console.log(`  Initialized  ${initialized.created.join(', ')}`);
+  const {runManagedMigration} = await import('./jobs/command.js');
+  return runManagedMigration(command, retry);
+}
 
-  let result: TransferResult | undefined;
-  const tasks = new Listr([
-    {
-      title: 'Discover, transfer, and verify',
-      task: async (_context, task) => {
-        result = await migrator.run({
-          source,
-          destination,
-          scope: command.scope,
-          sourceStatus: command.sourceStatus,
-          comments: command.comments,
-          dryRun: command.dryRun,
-          archive: command.archive,
-          fresh: command.fresh,
-          ...(command.rewrite ? {rewrite: true} : {}),
-          concurrency: command.concurrency ?? config.concurrency,
-          runtimeDirectory: workspace.statesDirectory,
-          cacheDirectory: workspace.cacheDirectory,
-          reportsDirectory: workspace.reportsDirectory,
-          signal: controller.signal,
-          progressHeartbeatMs: progressHeartbeatInterval(Boolean(process.stdout.isTTY)),
-          ...(stateFilename ? {stateFilename} : {}),
-          ...(retry ? {retry} : {}),
-          onStatus: (message) => { task.output = message; },
-        });
-      },
-    },
-  ], {
-    renderer: process.stdout.isTTY ? 'default' : 'simple',
-    rendererOptions: {collapseErrors: false, collapseSubtasks: false},
-    collectErrors: true,
-  });
-  try {
-    await tasks.run();
-  } catch (error) {
-    if (signalCode) {
-      heading('Transfer interrupted');
-      summaryField('Status', `cancelled by ${signalCode === 130 ? 'SIGINT' : 'SIGTERM'}`);
-      summaryField('Workdir', workspace.root);
-      summaryField('Reports', workspace.reportsDirectory);
-      if (reportBearingError(error)) await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      summaryField('Resume', migrationContinuationCommand(command, workspace.root, reportBearingError(error) ? error.reportPaths.runId : undefined, retry));
-      return {
-        code: signalCode,
-        workspaceRoot: workspace.root,
-        ...(reportBearingError(error) ? {reportPaths: error.reportPaths} : {}),
-      };
-    }
-    if (reportBearingError(error)) {
-      heading('Transfer failed');
-      summaryField('Status', 'failed');
-      summaryField('State', error.stateFilename);
-      await printAndMaybeOpenReport(error.reportPaths, workspace.root, command.openReport);
-      summaryField('Resume', migrationContinuationCommand(command, workspace.root, error.reportPaths.runId, retry));
-    }
-    throw error;
-  } finally {
-    process.removeListener('SIGINT', interrupt);
-    process.removeListener('SIGTERM', terminate);
-  }
-  if (!result) throw new Error('Transfer completed without a result');
+export async function presentMigrationResult(result: TransferResult, command: ReadyMigrationCommand, workspaceRoot: string, retry?: RetryExecution): Promise<MigrationCommandOutcome> {
+  const workspace = {root: workspaceRoot};
   heading(result.status === 'completed' ? 'Transfer complete' : 'Transfer finished');
   summaryField('Status', result.status);
   summaryField('State', result.stateFilename);

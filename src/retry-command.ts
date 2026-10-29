@@ -56,6 +56,7 @@ export async function runRetryCommand(command: RetryCliCommand): Promise<number>
   }
   const ready: ReadyMigrationCommand = {
     command: 'migrate',
+    ...(command.background ? {background: true} : {}),
     source: invocation.source.locator,
     destination: invocation.destination.type === 'directory' ? invocation.destination.path : invocation.destination.locator,
     sourceProfile: invocation.source.profile,

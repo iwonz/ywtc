@@ -2,6 +2,7 @@ import {constants} from 'node:fs';
 import {access, mkdir, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {boundedPath} from './local-paths.js';
 
 export const WORKSPACE_CONFIG = 'ywtc.config.yaml';
 export const WORKSPACE_STATES = '.states';
@@ -149,6 +150,7 @@ export async function ensureWorkspaceDirectories(workspace: Workspace): Promise<
   const existing: string[] = [];
   await mkdir(workspace.root, {recursive: true, mode: 0o700});
   for (const directory of [workspace.statesDirectory, workspace.cacheDirectory, workspace.reportsDirectory]) {
+    await boundedPath(workspace.root, path.relative(workspace.root, directory), true);
     const existed = await exists(directory);
     await mkdir(directory, {recursive: true, mode: 0o700});
     (existed ? existing : created).push(directory);

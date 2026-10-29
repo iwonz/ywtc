@@ -1,4 +1,4 @@
-import {execFile} from 'node:child_process';
+import {execFile, spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {access, mkdir, mkdtemp, readdir, readFile, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
@@ -60,7 +60,11 @@ const forbidden = packResult.files
     || filename.startsWith('reports/')
     || filename.startsWith('cache/'));
 if (forbidden.length > 0) throw new Error(`Packed archive contains runtime data: ${forbidden.join(', ')}`);
-for (const required of ['dist/report-ui/index.html', 'dist/mentions-ui/index.html', 'docs/assets/report-header-transparent.png']) {
+for (const file of packResult.files.filter(file => file.path.startsWith('dist/web/'))) {
+  if (file.path.includes('/node_modules/') || file.path.includes('/.next/cache/')) throw Error(`Unexpected web build intermediate: ${file.path}`);
+  if (/\.(?:js|json|map)$/.test(file.path) && (await readFile(file.path, 'utf8')).includes(process.cwd())) throw Error(`Non-portable web artifact: ${file.path}`);
+}
+for (const required of ['dist/report-ui/index.html', 'dist/mentions-ui/index.html', 'dist/web/server.js', 'dist/ui-service.js', 'dist/jobs/worker.js', 'docs/assets/report-header-transparent.png']) {
   if (!packResult.files.some((file) => file.path === required)) throw new Error(`Packed archive is missing ${required}`);
 }
 
@@ -73,6 +77,10 @@ await execFileAsync('npm', ['install', '--global', '--ignore-scripts', '--prefix
 });
 const executable = path.join(prefix, 'bin', 'ywtc');
 const version = await execFileAsync(executable, ['--version'], {encoding: 'utf8'});
+const uiHelp = await execFileAsync(executable, ['ui', '--help'], {encoding: 'utf8'});
+if (!uiHelp.stdout.includes('--port') || !uiHelp.stdout.includes('--no-open')) throw Error('Packaged UI help is incomplete');
+const jobsHelp = await execFileAsync(executable, ['migrations', '--help'], {encoding: 'utf8'});
+if (!jobsHelp.stdout.includes('logs') || !jobsHelp.stdout.includes('stop')) throw Error('Packaged job controls are missing');
 const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {version: string};
 if (version.stdout.trim() !== packageJson.version) throw new Error('Installed ywtc version does not match package.json');
 await execFileAsync(executable, ['--help'], {encoding: 'utf8'});
@@ -270,9 +278,11 @@ try {
     throw new Error(`Installed ywtc resolved page locators after failed provider preflight: ${providerRequests.join(', ')}`);
   }
   const runtimeEntries = await readdir(path.join(providerFailureWorkspace, '.states'), {recursive: true});
-  if (runtimeEntries.some((entry) => entry.endsWith('.json') || entry.endsWith('index.html'))) {
+  if (runtimeEntries.some((entry) => !entry.startsWith(`jobs${path.sep}`) && (entry.endsWith('.json') || entry.endsWith('index.html')))) {
     throw new Error(`Installed ywtc created state or report data after failed provider preflight: ${runtimeEntries.join(', ')}`);
   }
+  const jobs = await execFileAsync(executable, ['migrations', 'list', '--all', '-w', providerFailureWorkspace], {encoding: 'utf8'});
+  if (!jobs.stdout.includes('finished')) throw new Error('Failed provider preflight did not retain a completed job result');
 } finally {
   unavailableServer.closeAllConnections();
   await new Promise<void>((resolve, reject) => unavailableServer.close((error) => error ? reject(error) : resolve()));
@@ -370,7 +380,7 @@ try {
   const accept = `import {readWorkspaceConfig} from ${JSON.stringify(pathToFileURL(installedConfigModule).toString())};import {loadMentionPolicy} from ${JSON.stringify(pathToFileURL(installedPolicyModule).toString())};const config = readWorkspaceConfig(${JSON.stringify(configPath)});config.mentions = {mode: 'mapping', mappingFile: ${JSON.stringify(path.join(output, 'decisions.json'))}};if (loadMentionPolicy(config, config.profiles.source).document.entries.length !== 1) throw Error('Mapping rejected');`;
   await execFileAsync(process.execPath, ['--input-type=module', '--eval', accept], {encoding: 'utf8'});
   if (mentionsRequests.some(value => !value.startsWith('GET ') || /attachment|grid|comment/.test(value))) throw new Error(`Export used non-source endpoints: ${mentionsRequests.join(', ')}`);
-  if ((await readdir(mentionsWorkspace)).includes('.states')) throw new Error('Mentions export mutated migration state');
+  const runtime = await readdir(path.join(mentionsWorkspace, '.states'), {recursive: true});if (runtime.some(file => !file.startsWith(`jobs${path.sep}`) && file.endsWith('.json'))) throw new Error('Mentions export mutated migration mappings or checkpoints');
   const hashtagOutput = path.join(temporary, 'installed-hashtags');
   const hashtagExport = await execFileAsync(executable, ['hashtags', 'export', '-s', '1', '-S', 'source', '-m', 'page', '-N', '-w', mentionsWorkspace, '-o', hashtagOutput], {encoding: 'utf8'});
   const hashtagDocument = JSON.parse(await readFile(path.join(hashtagOutput, 'decisions.json'), 'utf8'));
@@ -384,7 +394,7 @@ try {
   const personal = JSON.parse(await readFile(path.join(spaceOutput, 'decisions.json'), 'utf8'));
   if (personal.entries.length !== 2 || personal.inventory.selectedPages !== 2 || !personal.inventory.complete) throw new Error('Packaged personal space export omitted an independent branch or counted its container');
   if (mentionsRequests.some(value => !value.startsWith('GET ') || /attachment|grid|comment|content\/space/.test(value))) throw new Error('Packaged personal export crossed its source-only boundary');
-  if ((await readdir(mentionsWorkspace)).includes('.states')) throw new Error('Personal mention export mutated migration state');
+  const personalRuntime = await readdir(path.join(mentionsWorkspace, '.states'), {recursive: true});if (personalRuntime.some(file => !file.startsWith(`jobs${path.sep}`) && file.endsWith('.json'))) throw new Error('Personal mention export mutated migration mappings or checkpoints');
 } finally {await new Promise<void>((resolve, reject) => mentionsServer.close(error => error ? reject(error) : resolve()));}
 process.stdout.write('Verifying packaged autonomous report generation...\n');
 const installedReportDirectory = path.join(temporary, 'installed-report');
@@ -420,4 +430,35 @@ if (!installedHtml.includes('Content-Security-Policy') || !installedHtml.include
 if (!installedHtml.includes('data:font/woff2;base64,') || /https?:[^\s"')]+\.(?:woff2?|ttf|otf)/iu.test(installedHtml)) {
   throw new Error('Installed package did not embed its autonomous report font');
 }
+process.stdout.write('Verifying installed local UI, authentication, and detached analysis...\n');
+const portProbe = createServer();
+await new Promise<void>(resolve => portProbe.listen(0, '127.0.0.1', resolve));
+const uiPort = (portProbe.address() as {port: number}).port;
+await new Promise<void>(resolve => portProbe.close(() => resolve()));
+const uiWorkdir = path.join(temporary, 'installed-ui');await mkdir(uiWorkdir);
+const apiFixture = createServer((_request, response) => {response.setHeader('content-type', 'application/json');response.end(JSON.stringify({id: 1, slug: 'page', title: 'Packaged page', page_type: 'page', content: 'Hello @ivan #topic'}));});
+await new Promise<void>(resolve => apiFixture.listen(0, '127.0.0.1', resolve));
+const apiPort = (apiFixture.address() as {port: number}).port;
+await writeFile(path.join(uiWorkdir, 'ywtc.config.yaml'), JSON.stringify({connections: {wiki: {type: 'yandex-wiki', webUrl: 'https://wiki.example.com', apiUrl: `http://127.0.0.1:${apiPort}`, token: 'package-fixture-token', organization: {id: '1'}}}}));
+const ui = spawn(executable, ['ui', '--no-open', '--port', String(uiPort), '--workdir', uiWorkdir], {cwd: temporary, stdio: ['ignore', 'pipe', 'pipe']});
+let startup = '', uiErrors = '';ui.stdout.on('data', data => {startup += data;});ui.stderr.on('data', data => {uiErrors += data;});
+try {
+  for (let attempt = 0; attempt < 200 && !startup.includes('/#'); attempt++) {if (ui.exitCode !== null) throw Error(`Packaged UI exited: ${uiErrors}`);await new Promise(resolve => setTimeout(resolve, 100));}
+  const url = startup.match(/http:\/\/127\.0\.0\.1:\d+\/#([a-f0-9]+)/)?.[0];if (!url) throw Error(`Packaged UI did not become ready: ${uiErrors}`);
+  const address = new URL(url), origin = address.origin;
+  const session = await fetch(`${origin}/api/session`, {method: 'POST', headers: {origin, 'content-type': 'application/json'}, body: JSON.stringify({secret: address.hash.slice(1)})});
+  if (!session.ok) throw Error(`Packaged UI authentication failed: ${await session.text()}`);
+  const cookie = session.headers.get('set-cookie')!.split(';')[0]!;
+  const settings = await fetch(`${origin}/api/workspaces`, {headers: {cookie}}).then(r => r.json()) as {items: Array<{id: string}>};
+  const workspaceId = settings.items[0]!.id;
+  const html = await fetch(origin).then(r => r.text());if (!html.includes('ywtc')) throw Error('Packaged UI did not render');
+  const submitted = await fetch(`${origin}/api/w/${workspaceId}/jobs`, {method: 'POST', headers: {origin, cookie, 'content-type': 'application/json'}, body: JSON.stringify({request: {kind: 'scan', source: 'page', scope: 'page', sourceStatus: 'all', comments: false, kinds: ['mentions', 'hashtags']}})});
+  const job = await submitted.json() as {id: string};if (!submitted.ok) throw Error(`Packaged submission failed: ${JSON.stringify(job)}`);
+  ui.kill('SIGTERM');
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const result = await execFileAsync(executable, ['migrations', 'show', job.id, '--json', '-w', uiWorkdir], {encoding: 'utf8'}).then(r => JSON.parse(r.stdout));
+    if (result.status === 'finished') {if (result.result?.exitCode !== 0) throw Error(`Packaged detached operation failed: ${result.error}`);break;}
+    if (attempt === 199) throw Error('Packaged background operation did not finish after UI closed');await new Promise(resolve => setTimeout(resolve, 100));
+  }
+} finally {ui.kill('SIGTERM');apiFixture.closeAllConnections();await new Promise<void>(resolve => apiFixture.close(() => resolve()));}
 process.stdout.write(`Package verified: ${packResult.filename}\n`);

@@ -304,12 +304,14 @@ function reportExcludedPages(selection: SourceSelection, data: TransferReportDat
 }
 
 export class TransferReport {
+  private readonly onEvent: ((event: import('./operation-events.js').OperationEvent) => void) | undefined;
   readonly data: TransferReportData;
   private readonly previews = new Map<string, PreviewPair>();
   private readonly issueCollector = new IssueCollector();
   private readonly secrets: string[];
 
-  constructor(input: Omit<TransferReportData, 'startedAt' | 'status' | 'sourceStatus' | 'commentsEnabled' | 'selection' | 'pages' | 'excludedPages' | 'edges' | 'hierarchyRepairs' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'> & {sourceStatus?: SourceStatus; commentsEnabled?: boolean; secrets?: string[]}) {
+  constructor(input: Omit<TransferReportData, 'startedAt' | 'status' | 'sourceStatus' | 'commentsEnabled' | 'selection' | 'pages' | 'excludedPages' | 'edges' | 'hierarchyRepairs' | 'warnings' | 'errors' | 'issues' | 'outputs' | 'summary'> & {sourceStatus?: SourceStatus; commentsEnabled?: boolean; secrets?: string[]}, onEvent?: (event: import('./operation-events.js').OperationEvent) => void) {
+    this.onEvent = onEvent;
     const {secrets = [], ...reportInput} = input;
     this.secrets = [...secrets];
     const sourceStatus = reportInput.sourceStatus ?? 'all';
@@ -427,6 +429,7 @@ export class TransferReport {
   }
 
   updatePage(sourceCanonicalId: string, update: Partial<TransferReportPage>): void {
+    if (update.status) this.onEvent?.({type: 'outcome', objectType: 'page', objectId: sourceCanonicalId, status: update.status});
     if (this.data.container?.sourceCanonicalId === sourceCanonicalId) {
       this.data.container = {...this.data.container, ...update};
       return;
@@ -443,6 +446,13 @@ export class TransferReport {
   }
 
   addPage(page: TransferReportPage, previews?: PreviewPair, collectIssues = true): void {
+    const prior = this.data.pages.find(item => item.sourceCanonicalId === page.sourceCanonicalId)?.comments;
+    if (prior) for (const key of ['destinationId', 'destinationUrl', 'archiveName', 'archiveUrl'] as const) {
+      if (page.comments[key] === undefined && prior[key] !== undefined) page.comments[key] = prior[key];
+    }
+    this.onEvent?.({type: 'outcome', objectType: 'page', objectId: page.sourceCanonicalId, status: page.status});
+    for (const resource of page.resourceItems) this.onEvent?.({type: 'outcome', objectType: 'resource', objectId: resource.sourceId, pageId: page.sourceCanonicalId, status: resource.status});
+    this.onEvent?.({type: 'outcome', objectType: 'comment', objectId: page.sourceCanonicalId, status: page.comments.status});
     const previousHashtags = this.data.pages.find(item => item.sourceCanonicalId === page.sourceCanonicalId)?.hashtags;
     if (!page.hashtags && previousHashtags) page.hashtags = previousHashtags;
     this.verifyHashtagOutcomes(page);
@@ -508,6 +518,7 @@ export class TransferReport {
   }
 
   issue(input: IssueInput): void {
+    this.onEvent?.({type: 'diagnostic', code: input.code, severity: input.severity, message: sanitizedString(input.message, this.secrets), retryable: input.retryable, ...(input.pageId ? {pageId: input.pageId} : {})});
     this.issueCollector.add({...input, message: sanitizedString(input.message, this.secrets)});
   }
 
@@ -747,7 +758,9 @@ export class TransferReport {
       await mkdir(previewsDirectory, {recursive: true, mode: 0o700});
       await Promise.all(deferred.map(({filename, content}) => writeFile(path.join(previewsDirectory, filename), content, {mode: 0o600})));
     }
-    await writeFile(jsonTemporary, `${JSON.stringify(safeData, null, 2)}\n`, {mode: 0o600});
+    const downloadable = structuredClone(safeData);
+    for (const page of [...downloadable.pages, ...(downloadable.container ? [downloadable.container] : [])]) delete page.comments.preview;
+    await writeFile(jsonTemporary, `${JSON.stringify(downloadable, null, 2)}\n`, {mode: 0o600});
     await writeFile(htmlTemporary, injectReportPayload(shell, payload), {mode: 0o600});
     await rename(jsonTemporary, json);
     await rename(htmlTemporary, html);

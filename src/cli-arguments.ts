@@ -2,11 +2,13 @@ import {Command, Option, type CommandUnknownOpts} from '@commander-js/extra-typi
 import type {ExportFormat, SourceStatus, TransferScope} from './domain.js';
 import {packageVersion} from './version.js';
 
-export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'mentions' | 'hashtags' | 'update';
+export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'mentions' | 'hashtags' | 'update' | 'ui' | 'migrations';
 
 export type CliCommand =
-  | {command: 'mentions-export'; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
-  | {command: 'hashtags-export'; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
+  | {command: 'mentions-export'; background?: boolean; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
+  | {command: 'hashtags-export'; background?: boolean; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
+  | {command: 'ui'; workdir?: string; port: number; open: boolean}
+  | {command: 'migrations'; action: 'list' | 'show' | 'logs' | 'stop'; workdir?: string; jobId?: string; all?: boolean; json?: boolean; follow?: boolean}
   | {command: 'help'; topic?: CliHelpTopic}
   | {command: 'version'}
   | {command: 'init'; workdir?: string; interactive: boolean}
@@ -41,10 +43,11 @@ export type CliCommand =
     stateFilename?: string;
     openReport: boolean;
     interactive: boolean;
+    background?: boolean;
   }
   | {command: 'reports-list'; workdir?: string}
   | {command: 'reports-open'; runId?: string; workdir?: string}
-  | {command: 'retry'; runId: string; workdir?: string; dryRun: boolean; openReport: boolean; concurrency?: number; rewrite?: boolean}
+  | {command: 'retry'; background?: boolean; runId: string; workdir?: string; dryRun: boolean; openReport: boolean; concurrency?: number; rewrite?: boolean}
   | {command: 'update'; install: boolean; via?: 'npm' | 'brew'};
 
 const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -69,6 +72,35 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .version(packageVersion(), '-v, --version')
     .showHelpAfterError('(run ywtc --help for usage)')
     .showSuggestionAfterError(true);
+
+  program.command('ui').description('Open the local migration control center (127.0.0.1 only)')
+    .option('-w, --workdir <path>', 'initial workspace')
+    .option('-p, --port <number>', 'localhost TCP port', value => {
+      const number = Number(value);if (!Number.isInteger(number) || number < 1 || number > 65535) throw new Error('--port must be between 1 and 65535');return number;
+    }, 3000)
+    .option('--no-open', 'print the access URL without opening a browser')
+    .action(options => onCommand({command: 'ui', port: options.port, open: options.open, ...(options.workdir ? {workdir: nonEmpty(options.workdir, '--workdir')!} : {})}));
+
+  const migrations = program.command('migrations').description('Inspect and gracefully stop durable workspace jobs')
+    .option('-w, --workdir <path>', 'workspace containing jobs').option('--all', 'include finished and interrupted history', false)
+    .action(options => onCommand({command: 'migrations', action: 'list', all: options.all, ...(options.workdir ? {workdir: options.workdir} : {})}));
+  migrations.command('list').description('List active jobs, or all history')
+    .option('-w, --workdir <path>', 'workspace containing jobs').option('--all', 'include history', false)
+    .action(options => onCommand({command: 'migrations', action: 'list', all: options.all || migrations.opts().all, ...((options.workdir ?? migrations.opts().workdir) ? {workdir: options.workdir ?? migrations.opts().workdir} : {})}));
+  for (const action of ['show', 'logs', 'stop'] as const) {
+    migrations.command(action).description(action === 'stop' ? 'Request graceful cancellation of an owned job' : `Inspect job ${action}`)
+      .argument('<job-id>', 'canonical Job ID, not Run ID')
+      .option('-w, --workdir <path>', 'workspace containing the job')
+      .option('--json', 'return structured evidence', false)
+      .option('-f, --follow', 'follow the event journal', false)
+      .action((jobId, options) => {
+        if (!runIdPattern.test(jobId)) throw new Error('Job ID must be a canonical UUID');
+        if (action !== 'logs' && options.follow) throw new Error('--follow is only valid for migrations logs');
+        if (action !== 'show' && options.json) throw new Error('--json is only valid for migrations show');
+        const workdir = options.workdir ?? migrations.opts().workdir;
+        onCommand({command: 'migrations', action, jobId, ...(action === 'show' ? {json: options.json} : {}), ...(action === 'logs' ? {follow: options.follow} : {}), ...(workdir ? {workdir} : {})});
+      });
+  }
 
   program.command('init')
     .description('Create a workspace or configure it with a guided terminal wizard')
@@ -113,6 +145,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
 
   program.command('migrate')
     .description('Transfer or export a page graph, optionally through a TTY wizard')
+    .option('-b, --background', 'durably queue work and return its Job ID', false)
     .option('-i, --interactive', 'choose migration parameters and dry-run/live actions in a TTY wizard', false)
     .option('-s, --source <locator>', 'source page URL, ID, or slug (required without --interactive)')
     .option('-d, --destination <locator>', 'destination page URL, ID, slug, or directory (required without --interactive)')
@@ -138,6 +171,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       const destinationProfile = nonEmpty(options.destinationProfile, '--destination-profile');
       const workdir = nonEmpty(options.workdir, '--workdir');
       const stateFilename = nonEmpty(options.state, '--state');
+      if (options.background && (options.interactive || options.openReport)) throw new Error('--background cannot be combined with --interactive or --open-report.');
       if (options.rewrite && options.fresh) throw new Error('--rewrite cannot be combined with --fresh.');
       if (options.rewrite && options.format) throw new Error('--rewrite requires a remote destination, not --format.');
       if (!options.interactive && (!source || !destination)) {
@@ -147,6 +181,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       if (!options.interactive && options.format && destination && /^https?:\/\//i.test(destination)) throw new Error('--format cannot be used with a remote HTTP(S) destination.');
       onCommand({
         command: 'migrate',
+        ...(options.background ? {background: true} : {}),
         scope: options.scope as TransferScope,
         sourceStatus: options.sourceStatus as SourceStatus,
         comments: options.comments,
@@ -169,6 +204,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
 
   program.command('retry')
     .description('Retry only actionable incomplete objects from a prior live migration')
+    .option('-b, --background', 'durably queue work and return its Job ID', false)
     .argument('<run-id>', 'canonical Run ID from "ywtc reports list"')
     .option('-w, --workdir <path>', 'workspace containing the report and state')
     .option('-n, --dry-run', 'plan the targeted retry without destination writes', false)
@@ -176,11 +212,12 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('-R, --rewrite', 'rebuild selected mapped remote pages in place; never create replacements', false)
     .option('-j, --concurrency <n>', 'orchestration concurrency from 1 to 64', concurrency)
     .action((runIdValue: string, options) => {
+      if (options.background && options.openReport) throw new Error('--background cannot be combined with --open-report.');
       const runId = nonEmpty(runIdValue, 'run-id')!;
       if (!runIdPattern.test(runId)) throw new Error('retry requires a canonical Run ID shown by "ywtc reports list".');
       const workdir = nonEmpty(options.workdir, '--workdir');
       onCommand({
-        command: 'retry', runId, dryRun: options.dryRun, openReport: options.openReport,
+        command: 'retry', ...(options.background ? {background: true} : {}), runId, dryRun: options.dryRun, openReport: options.openReport,
         ...(options.rewrite ? {rewrite: true} : {}),
         ...(workdir ? {workdir} : {}),
         ...(options.concurrency !== undefined ? {concurrency: options.concurrency} : {}),
@@ -189,6 +226,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
 
   for (const kind of ['mentions', 'hashtags'] as const) program.command(kind).description(`Export source ${kind} for explicit decisions`).command('export')
     .description('Create decisions.json and an offline editor from source pages and comments')
+    .option('-b, --background', 'durably queue work and return its Job ID', false)
     .requiredOption('-s, --source <locator>', 'source page URL, ID, or slug')
     .requiredOption('-o, --output <directory>', 'new or empty directory for decisions.json and index.html')
     .option('-S, --source-profile <name>', 'named source connection')
@@ -198,7 +236,7 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
     .option('-C, --comments', 'scan comments (default)', true)
     .option('-N, --no-comments', 'skip comment API calls')
     .option('-j, --concurrency <n>', 'concurrency from 1 to 64', concurrency)
-    .action(options => onCommand({command: kind === 'mentions' ? 'mentions-export' : 'hashtags-export', source: nonEmpty(options.source, '--source')!, output: nonEmpty(options.output, '--output')!,
+    .action(options => onCommand({command: kind === 'mentions' ? 'mentions-export' : 'hashtags-export', ...(options.background ? {background: true} : {}), source: nonEmpty(options.source, '--source')!, output: nonEmpty(options.output, '--output')!,
       scope: options.scope as TransferScope, sourceStatus: options.sourceStatus as SourceStatus, comments: options.comments,
       ...(options.sourceProfile ? {sourceProfile: nonEmpty(options.sourceProfile, '--source-profile')!} : {}),
       ...(options.workdir ? {workdir: nonEmpty(options.workdir, '--workdir')!} : {}),
@@ -241,7 +279,7 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const helpIndex = argv.findIndex((value) => ['--help', '-h'].includes(value));
   if (helpIndex >= 0) {
     const topic = argv[0];
-    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'mentions', 'hashtags', 'update'].includes(topic ?? '')
+    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'mentions', 'hashtags', 'update', 'ui', 'migrations'].includes(topic ?? '')
       ? {command: 'help', topic: topic as CliHelpTopic}
       : {command: 'help'};
   }

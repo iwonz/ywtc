@@ -21,6 +21,34 @@ const selection = {requestedStatus: 'all' as const, effectiveStatus: 'all' as co
 const graph: PageGraph = {rootId: root.canonicalId, pages: [root, child], edges: [{from: root.canonicalId, to: child.canonicalId, raw: '/child', status: 'resolved'}], warnings: [], selection};
 
 describe('transactional filesystem export', () => {
+  it('preserves managed paths and untouched page bytes during a selected rename', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-selected-')), output = path.join(temporary, 'site');
+    const resources = new Map<string, SourceResource[]>([[root.canonicalId, []], [child.canonicalId, []]]), exporter = new FilesystemExporter({} as SourceAdapter, 1);
+    const neutralGraph = {...graph, pages: [{...root, rawContent: '[Child](/child)', references: [root.references[0]!]}, child]};
+    const base = {graph: neutralGraph, directory: output, format: 'markdown' as const, identity: 'selected', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources};
+    const original = await exporter.export(base), childPath = original.manifest.pages.find(p => p.sourceCanonicalId === child.canonicalId)!.path;
+    const before = await readFile(path.join(output, 'index.md'), 'utf8');
+    const result = await exporter.export({...base, graph: {...graph, pages: [{...root, rawContent: 'Unselected changed source'}, {...child, title: 'Renamed child', rawContent: 'Selected content'}]}, retryPageIds: new Set([child.canonicalId]), preserveIdentity: true});
+    expect(result.mode).toBe('patched');expect(await readFile(path.join(output, 'index.md'), 'utf8')).toBe(before);
+    expect(result.manifest.pages.find(p => p.sourceCanonicalId === child.canonicalId)?.path).toBe(childPath);
+    expect(await readFile(path.join(output, childPath), 'utf8')).toContain('Selected content');
+  });
+  it.each(['markdown', 'html'] as const)('patches only comments in a managed %s export and previews without writing', async format => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-comments-')), output = path.join(temporary, 'site');
+    const page = {...root, rawContent: 'Original @ivan', references: []}, single = {...graph, pages: [page]};
+    const resources = new Map<string, SourceResource[]>([[page.canonicalId, []]]), exporter = new FilesystemExporter({} as SourceAdapter, 1);
+    const base = {graph: single, directory: output, format, identity: 'comments-only', archive: false, dryRun: false, cacheDirectory: temporary, resourcesByPage: resources};
+    const first = normalizeCommentForest([{id: '1', author: {providerId: 'u'}, body: 'Old discussion'}], 'yfm');
+    await exporter.export({...base, commentsByPage: new Map([[page.canonicalId, first]])});
+    const filename = path.join(output, format === 'html' ? 'index.html' : 'index.md');
+    await writeFile(filename, (await readFile(filename, 'utf8')).replace('Original @ivan', 'Destination manual @ivan'));
+    const before = await readFile(filename, 'utf8'), next = normalizeCommentForest([{id: '1', author: {providerId: 'u'}, body: 'New discussion'}], 'yfm');
+    const preview: string[] = [];
+    const options = {...base, graph: {...single, pages: [{...page, rawContent: 'Changed source body'}]}, commentsByPage: new Map([[page.canonicalId, next]]), retryPageIds: new Set([page.canonicalId]), preserveBodyPageIds: new Set([page.canonicalId]), onPreparedPage: (_page: SourcePage, _current: string, proposed: string) => {preview.push(proposed);}};
+    await exporter.export({...options, dryRun: true});expect(await readFile(filename, 'utf8')).toBe(before);expect(preview[0]).toContain('Destination manual @ivan');
+    await exporter.export(options);const after = await readFile(filename, 'utf8');
+    expect(after).toContain('Destination manual @ivan');expect(after).toContain('New discussion');expect(after).not.toContain('Old discussion');expect(after).not.toContain('Changed source body');
+  });
   it('writes a portable HTML site, local attachments, manifest, backup, and ZIP', async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'ywtc-export-'));
     const output = path.join(temporary, 'site');

@@ -13,6 +13,7 @@ const statusTables = [
   {heading: 'Статусы инвентаризации', source: 'src/report-contract.ts', type: 'ReportInventoryStatus'},
   {heading: 'Статусы представления hashtags', values: ['preserved', 'text', 'linked']},
   {heading: 'Статусы проверки hashtags', values: ['pending', 'verified', 'unverified']},
+  {heading: 'Статусы задач', values: ['queued', 'running', 'stopping', 'finished', 'interrupted']},
 ];
 
 function statusTable(heading: string, rows = '| `complete` | 1. Проверено.<br>2. Подтверждено. | Ничего. |'): string {

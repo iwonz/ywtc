@@ -6,6 +6,7 @@ import {pipeline} from 'node:stream/promises';
 import {ZipArchive} from '@archiver/archiver';
 import PQueue from 'p-queue';
 import {z} from 'zod';
+import {load} from 'cheerio';
 import {appendGridSnapshots, normalizePageContent, renderMarkdown, renderStaticHtml, setSourceResourceBinding, sourceResourceBindings} from './content-model.js';
 import {commentAttachmentUses, createCommentArchiveZip, renderCommentArchive} from './comments.js';
 import {hashtagSummarySchema, summarizeHashtags, type HashtagProcessingPolicy, type HashtagSummary} from './hashtag-decisions.js';
@@ -233,6 +234,21 @@ async function verifyGeneratedTree(directory: string, manifest: ExportManifest):
   }
 }
 
+function patchCommentSection(current: string, archive: string, format: ExportFormat): string {
+  if (format === 'markdown') {
+    const marker = '\n\n## Комментарии\n\nАрхив комментариев из ';
+    const offset = current.lastIndexOf(marker);
+    return `${offset < 0 ? current : current.slice(0, offset)}${archive ? `\n\n## Комментарии\n\n${archive}` : ''}`;
+  }
+  const $ = load(current, {sourceCodeLocationInfo: true});
+  const sections = $('section.ywtc-comments');
+  if (sections.length > 1) throw new Error('Ambiguous existing comment archive section; body was preserved');
+  const location = sections[0]?.sourceCodeLocation;
+  if (location) return current.slice(0, location.startOffset) + archive + current.slice(location.endOffset);
+  const index = current.lastIndexOf('</main>');
+  if (index < 0) throw new Error('Managed HTML main section is missing; body was preserved');
+  return current.slice(0, index) + archive + current.slice(index);
+}
 export class FilesystemExporter {
   constructor(private readonly source: SourceAdapter, private readonly concurrency: number) {}
 
@@ -255,6 +271,10 @@ export class FilesystemExporter {
     commentsEnabled?: boolean;
     retryPageIds?: ReadonlySet<string>;
     retryResourceIds?: ReadonlyMap<string, ReadonlySet<string>>;
+    preserveIdentity?: boolean;
+    preserveBodyPageIds?: ReadonlySet<string>;
+    onPreparedPage?: (page: SourcePage, current: string, proposed: string) => void | Promise<void>;
+    beforeCommit?: () => Promise<void>;
     loadPage?: (page: SourcePage) => Promise<SourcePage>;
     loadDocument?: (page: SourcePage) => Promise<ReturnType<typeof normalizePageContent>>;
   }): Promise<FilesystemExportResult> {
@@ -270,6 +290,24 @@ export class FilesystemExporter {
       pages: [],
     };
     if (input.dryRun) {
+      if (input.onPreparedPage) {
+        const previous = await exists(path.join(input.directory, '.ywtc-export.json')) ? await readManagedManifest(input.directory, input.identity) : undefined;
+        for (const page of previous?.pages ?? []) if (pagePaths.has(page.sourceCanonicalId)) pagePaths.set(page.sourceCanonicalId, page.path);
+        const sourcePages = new Map(input.graph.pages.map(page => [page.canonicalId, page]));
+        for (const page of input.graph.pages.filter(page => !input.retryPageIds || input.retryPageIds.has(page.canonicalId))) {
+          const full = input.loadPage ? await input.loadPage(page) : page, resources = input.resourcesByPage?.get(page.canonicalId) ?? [];
+          const document = input.loadDocument ? await input.loadDocument(page) : appendGridSnapshots(normalizePageContent(full), resources);
+          const relative = pagePaths.get(page.canonicalId)!, bindings = sourceResourceBindings(full, resources);
+          for (const resource of resources) {const prior = previous?.pages.find(p => p.sourceCanonicalId === page.canonicalId)?.resources.find(r => r.sourceId === resource.id);if (prior) setSourceResourceBinding(bindings, full, resources, resource, {kind: 'file', path: prior.path, name: prior.name});}
+          const context: RenderContext = {pages: new Map([...pagePaths].map(([id, file]) => [id, {path: file, title: sourcePages.get(id)?.title ?? id}])), resources: bindings, sourcePages, currentPageId: page.canonicalId, currentPath: relative, hashtagPolicy: input.hashtagPolicy ?? {mode: 'off'}, mentions: input.mentionPresentationsByPage?.get(page.canonicalId) ?? new Map()};
+          const rendered = input.format === 'html' ? await renderStaticHtml(document, context) : await renderMarkdown(document, context);
+          let current = '';try {current = await readFile(containedPath(input.directory, relative)!, 'utf8');} catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;}
+          const inventory = input.commentsByPage?.get(page.canonicalId);
+          const archive = inventory?.status === 'complete' ? renderCommentArchive(inventory, input.format, {sourceUrl: page.url, mentionPolicy: input.mentionPolicy ?? {mode: 'off'}, hashtagPolicy: input.hashtagPolicy ?? {mode: 'off'}}) : '';
+          const proposed = input.preserveBodyPageIds?.has(page.canonicalId) && current ? patchCommentSection(current, archive, input.format) : `${rendered.body}${archive}`;
+          await input.onPreparedPage(page, current, proposed);
+        }
+      }
       manifest.pages = input.graph.pages.map((page) => ({
         sourceCanonicalId: page.canonicalId,
         sourceUrl: page.url,
@@ -303,9 +341,12 @@ export class FilesystemExporter {
     const previousManifest = input.retryPageIds && await exists(input.directory)
       ? await readManagedManifest(input.directory, input.identity)
       : undefined;
+    if (input.preserveIdentity && !previousManifest) throw new Error('Selective application requires a compatible managed export; rebuild it explicitly first');
+    if (input.preserveIdentity && previousManifest) for (const previous of manifestPages(previousManifest)) pagePaths.set(previous.sourceCanonicalId, previous.path);
     const patchExisting = previousManifest?.format === input.format
       && previousManifest.rootId === input.graph.rootId
-      && manifestMatchesGraph(previousManifest, input.graph, pagePaths);
+      && (input.preserveIdentity ? manifestPages(previousManifest).length === input.graph.pages.length && input.graph.pages.every(page => manifestPages(previousManifest).some(p => p.sourceCanonicalId === page.canonicalId)) : manifestMatchesGraph(previousManifest, input.graph, pagePaths));
+    if (input.preserveIdentity && !patchExisting) throw new Error('Managed export membership changed; prepare explicit recovery instead of rebuilding unselected pages');
     if (patchExisting) {
       await cp(input.directory, staging, {recursive: true, errorOnExist: true});
       manifest.pages = structuredClone(manifestPages(previousManifest));
@@ -472,6 +513,14 @@ export class FilesystemExporter {
         await input.onActivity?.(`Rendering export page · ${page.title}`);
         const fullPage = input.loadPage ? await input.loadPage(page) : page;
         const relative = pagePaths.get(page.canonicalId)!;
+        if (patchExisting && input.preserveBodyPageIds?.has(page.canonicalId)) {
+          const filename = containedPath(staging, relative)!, current = await readFile(filename, 'utf8');
+          const next = patchCommentSection(current, commentBodies.get(page.canonicalId) ?? '', input.format);
+          const manifestPage = manifest.pages.find(item => item.sourceCanonicalId === page.canonicalId)!, prior = manifestPages(previousManifest!).find(item => item.sourceCanonicalId === page.canonicalId)!;
+          const comments = manifestPage.comments;Object.assign(manifestPage, structuredClone(prior), {comments});
+          await input.onPreparedPage?.(page, current, next);
+          await writeFile(filename, next, {mode: 0o600});input.onItem?.(`comment archive ${page.title}`);continue;
+        }
         const resources = resourcesByPage.get(page.canonicalId) ?? [];
         const document = input.loadDocument
           ? await input.loadDocument(page)
@@ -520,6 +569,7 @@ export class FilesystemExporter {
       await writeFile(path.join(staging, '.ywtc-export.json'), `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o600});
       await input.onActivity?.('Verifying generated export tree');
       await verifyGeneratedTree(staging, manifest);
+      await input.beforeCommit?.();
 
       if (await exists(input.directory)) {
         const selected = await stat(input.directory);

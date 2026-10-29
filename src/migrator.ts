@@ -63,6 +63,7 @@ import {mentionIdentityKey, mentionPolicyFingerprint, renderSafeCommentMentions,
 import type {DirectoryLocator, RemoteLocator, ResolvedLocator} from './locators.js';
 import {profileBaseUrl, sameRemoteInstance} from './locators.js';
 import {ContinuousProgress} from './progress.js';
+import {isCommentIssue} from './retry-plan.js';
 import {
   TransferReport,
   type MigrationReportPaths,
@@ -96,6 +97,13 @@ import {
 import {realSourcePages, resolveSourceRoot} from './source-roots.js';
 
 export interface TransferOptions {
+  preserveExportIdentity?: boolean;
+  freshInventory?: boolean;
+  beforeDestinationMutation?: () => Promise<void>;
+  onPreparedPage?: (input: {page: SourcePage; destination: DestinationPage; body: string}) => void | Promise<void>;
+  mentionPolicy?: import('./domain.js').MentionProcessingPolicy;
+  hashtagPolicy?: import('./hashtag-decisions.js').HashtagProcessingPolicy;
+  onEvent?: (event: import('./operation-events.js').OperationEvent) => void;
   source: RemoteLocator;
   destination: ResolvedLocator;
   scope: TransferScope;
@@ -264,10 +272,11 @@ async function targetedRetryGraph(
   retry: RetryExecution,
   concurrency: number,
   signal?: AbortSignal,
+  cachedContextDirectory?: string,
 ): Promise<PageGraph> {
   const executionIds = new Set([...retry.plan.retryPageIds, ...retry.plan.contextPageIds]);
   const baselinePages = retry.baseline.pages
-    .filter((page) => executionIds.has(page.sourceCanonicalId))
+    .filter((page) => cachedContextDirectory || executionIds.has(page.sourceCanonicalId))
     .sort((left, right) => left.depth - right.depth || left.sourceCanonicalId.localeCompare(right.sourceCanonicalId));
   const hydrated = new Map<string, PageGraph['pages'][number]>();
   const failures: Array<{
@@ -281,7 +290,9 @@ async function targetedRetryGraph(
     if (signal?.aborted) throw signal.reason ?? new Error('Targeted retry discovery cancelled');
     const stub = reportSourcePage(retry.baseline, baseline);
     try {
-      const current = baseline.sourceId === root.id ? root : await source.getPage(baseline.sourceId);
+      const current = cachedContextDirectory && !executionIds.has(baseline.sourceCanonicalId)
+        ? await loadCachedPage(cachedContextDirectory, baseline.sourceCanonicalId)
+        : baseline.sourceId === root.id ? root : await source.getPage(baseline.sourceId);
       if (current.canonicalId !== baseline.sourceCanonicalId) {
         throw new Error(`Source immutable ID mismatch for ${baseline.sourceTitle}: expected ${baseline.sourceCanonicalId}, received ${current.canonicalId}`);
       }
@@ -1057,6 +1068,7 @@ export class Migrator {
   async run(options: TransferOptions): Promise<TransferResult> {
     const secrets = secretValues(this.config);
     const progress = new ContinuousProgress(options.onStatus, {
+      ...(options.onEvent ? {onEvent: options.onEvent} : {}),
       ...(options.progressHeartbeatMs !== undefined ? {heartbeatMs: options.progressHeartbeatMs} : {}),
       redact: (message) => redact(message, secrets),
     });
@@ -1075,8 +1087,8 @@ export class Migrator {
     if (options.rewrite && options.destination.type !== 'remote') throw new Error('--rewrite requires a remote destination.');
     const sourceStatus = options.sourceStatus ?? 'all';
     const commentsEnabled = options.comments ?? true;
-    const mentionPolicy = loadMentionPolicy(this.config, options.source.profile);
-    const hashtagPolicy = loadHashtagPolicy(this.config, options.source.profile);
+    const mentionPolicy = options.mentionPolicy ?? loadMentionPolicy(this.config, options.source.profile);
+    const hashtagPolicy = options.hashtagPolicy ?? loadHashtagPolicy(this.config, options.source.profile);
     const mentionPolicyHash = mentionPolicyFingerprint({mode: 'off'}); // Source inventory is independent of presentation decisions.
     const source = this.adapterFactory(options.source.profile, this.config);
     const destination = options.destination.type === 'remote'
@@ -1132,6 +1144,7 @@ export class Migrator {
       retrySelectedComments: options.retry.plan.selectedCommentPageIds.length,
       retryContextPages: options.retry.plan.contextPageIds.length,
     } : undefined);
+    options.onEvent?.({type: 'run', runId: run.id, stateId: stateLocation.id});
     const report = new TransferReport({
       runId: run.id,
       secrets: secretValues(this.config),
@@ -1178,7 +1191,7 @@ export class Migrator {
         remainingTerminal: options.retry.plan.remainingTerminal,
         preview: options.dryRun,
       }} : {}),
-    });
+    }, options.onEvent);
     if (options.retry) report.seedRetryBaseline(options.retry.baseline, new Set([...options.retry.plan.retryPageIds, ...(root.sourceSpace ? [root.canonicalId] : [])]));
     const sourceInventoryStore = await SourceInventoryStore.open({
       cacheDirectory: options.cacheDirectory,
@@ -1203,8 +1216,8 @@ export class Migrator {
       progress.phase(`Discovery · ${options.scope} scope from ${root.title}`);
       for (let attempt = 0; ; attempt += 1) {
         try {
-          graph = options.retry && !options.retry.plan.discoveryIncomplete && options.destination.type === 'remote'
-            ? await targetedRetryGraph(source, root, options.retry, options.concurrency, options.signal)
+          graph = options.retry && !options.retry.plan.discoveryIncomplete && (options.destination.type === 'remote' || options.preserveExportIdentity)
+            ? await targetedRetryGraph(source, root, options.retry, options.concurrency, options.signal, options.preserveExportIdentity ? options.cacheDirectory : undefined)
             : await discoverPageGraph({
               adapter: source,
               root,
@@ -1384,6 +1397,9 @@ export class Migrator {
     let freshInventoryCount = 0;
     const inventory = {resources: 0, bytes: 0, unknownSizes: 0, grids: 0, diagrams: 0, links: 0, images: 0, tables: 0, codeBlocks: 0, pageMentions: 0, commentMentions: 0, mentionIdentities: 0, commentThreads: 0, comments: 0, commentParticipants: 0, commentAttachments: 0, commentBytes: 0};
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
+    if (options.preserveExportIdentity && options.retry) for (const page of graph.pages) {
+      if (!options.retry.plan.retryPageIds.includes(page.canonicalId)) retryContextIds.add(page.canonicalId);
+    }
     if (options.retry && root.sourceSpace) retryContextIds.add(root.canonicalId);
     const retryFullPageIds = new Set(options.retry?.plan.retryPageIds.filter((pageId) => {
       const plan = options.retry?.plan.pages[pageId];
@@ -1440,7 +1456,15 @@ export class Migrator {
           inventoryResults.set(page.canonicalId, {page, sourcePage, resources: [], document, reused: false});
           return;
         }
-        const checkpoint = options.rewrite || retryFullPageIds.has(page.canonicalId)
+        if (options.preserveExportIdentity && retryContextIds.has(page.canonicalId)) {
+          const baseline = options.retry!.baseline.pages.find(item => item.sourceCanonicalId === page.canonicalId);
+          if (!baseline) throw new Error(`Missing baseline for read-only export context ${page.title}`);
+          const document = await loadCachedDocument(options.cacheDirectory, page.canonicalId);
+          const resources: SourceResource[] = baseline.resourceItems.filter(item => item.kind !== 'comment-attachment').map(item => ({provider: page.provider, id: item.sourceId, pageId: page.id, name: item.sourceName, kind: item.kind as SourceResource['kind'], ...(item.sourceBytes !== undefined ? {size: item.sourceBytes} : {})}));
+          inventoryResults.set(page.canonicalId, {page, sourcePage, resources, document, reused: true});
+          reusedInventoryCount += 1;return;
+        }
+        const checkpoint = (options.freshInventory && !retryContextIds.has(page.canonicalId)) || options.rewrite || retryFullPageIds.has(page.canonicalId)
           ? undefined
           : await sourceInventoryStore.loadComplete(sourcePage);
         let result: PageInventoryResult;
@@ -1473,7 +1497,7 @@ export class Migrator {
           result = {page, sourcePage, resources, document, reused: false};
         }
 
-        if (commentsEnabled && !retryContextIds.has(page.canonicalId) && (!result.comments || result.comments.status === 'failed')) {
+        if (commentsEnabled && !retryContextIds.has(page.canonicalId) && (!result.comments || result.comments.status === 'failed' || options.retry?.plan.pages[page.canonicalId]?.retryComments)) {
           result.comments = await readComments(result);
         }
         try {
@@ -1852,6 +1876,7 @@ export class Migrator {
       ? ` · ${mentionOutcomes.total} mentions / ${inventory.mentionIdentities} identities (${mentionOutcomeText(mentionOutcomes)})`
       : '';
     const coverage = root.sourceSpace ? `space · ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} pages` : `root + ${graph.selection.selectedDescendants}/${graph.selection.returnedDescendants} descendants`;
+    options.onEvent?.({type: 'inventory', complete: report.data.summary.inventoryComplete, counts: {pages: realSourcePages(graph.pages).length, files: inventory.resources, grids: inventory.grids, comments: inventory.comments, commentThreads: inventory.commentThreads, mentions: report.data.summary.mentionOutcomes?.total ?? 0, hashtags: hashtagRecords.length}});
     const planSummary = `Plan ready: ${coverage} (${graph.selection.excluded.length} excluded, depth ${graph.selection.maximumDepth}) · ${realSourcePages(graph.pages).length} pages · ${inventory.resources} files (${inventory.bytes} known bytes${inventory.unknownSizes > 0 ? ` · ${inventory.unknownSizes} sizes unknown` : ''}) · ${inventory.links} links · ${inventory.images} images · ${inventory.tables} tables (${inventory.grids} grids)${inventory.diagrams > 0 ? ` · ${inventory.diagrams} diagrams` : ''} · ${inventory.codeBlocks} code blocks${mentionSummary}${hashtagSummary} · ${commentsEnabled ? `${inventory.commentThreads} comment threads / ${inventory.comments} entries / ${inventory.commentAttachments} files (${inventory.commentBytes} known bytes)` : 'comments skipped'}`;
     status(planSummary);
     this.logger.info(planSummary);
@@ -1865,6 +1890,7 @@ export class Migrator {
           throw new Error(`--rewrite requires existing destination mappings for every selected page; ${unmapped.length} mapping(s) are missing. Run an ordinary migration to establish mappings first.`);
         }
       }
+      if (!options.dryRun) await options.beforeDestinationMutation?.();
       if (options.destination.type === 'directory') {
         progress.phase(`Filesystem export · preparing ${graph.pages.length} pages`);
         const result = await this.exportFilesystem(source, graph, options.destination, options, stateLocation.id, store, report, sourceFingerprints, resourcesByPage, commentsByPage, mentionPresentationsByPage, mentionReportItemsByPage, mentionPolicy, hashtagPolicy, progress, scheduler);
@@ -2025,6 +2051,10 @@ export class Migrator {
       commentsEnabled: options.comments ?? true,
       ...(options.retry ? {retryPageIds: new Set(options.retry.plan.retryPageIds)} : {}),
       ...(options.retry ? {retryResourceIds} : {}),
+      ...(options.preserveExportIdentity ? {preserveIdentity: true} : {}),
+      ...(options.retry ? {preserveBodyPageIds: new Set(options.retry.plan.retryPageIds.filter(id => !options.retry!.plan.pages[id]?.retryPage && !options.retry!.plan.pages[id]?.resourceIds.length && options.retry!.plan.pages[id]?.retryComments))} : {}),
+      ...(options.beforeDestinationMutation ? {beforeCommit: options.beforeDestinationMutation} : {}),
+      ...(options.onPreparedPage ? {onPreparedPage: (page: SourcePage, current: string, proposed: string) => options.onPreparedPage!({page, destination: {id: page.canonicalId, provider: page.provider, profile: page.profile, content: current} as DestinationPage, body: proposed})} : {}),
       loadPage: (page) => loadCachedPage(options.cacheDirectory, page.canonicalId),
       loadDocument: (page) => loadCachedDocument(options.cacheDirectory, page.canonicalId),
     });
@@ -2063,7 +2093,7 @@ export class Migrator {
         ...(manifestPage?.path || previous?.destinationCanonicalId ? {destinationCanonicalId: manifestPage?.path ? `filesystem:${manifestPage.path}` : previous!.destinationCanonicalId!} : {}),
         ...(manifestPage || previous?.destinationLocator ? {destinationLocator: manifestPage ? path.join(destination.path, manifestPage.path) : previous!.destinationLocator!} : {}),
         destinationTitle: page.title,
-        sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
+        sourceFingerprint: options.retry && !options.retry.plan.pages[page.canonicalId]?.retryPage && !options.retry.plan.pages[page.canonicalId]?.resourceIds.length && previous?.sourceFingerprint ? previous.sourceFingerprint : sourceFingerprints.get(page.canonicalId)!,
         ...(manifestPage || previous?.destinationFingerprint ? {destinationFingerprint: manifestPage ? sha256(JSON.stringify(manifestPage)) : previous!.destinationFingerprint!} : {}),
         status: pageStatus,
         resources,
@@ -2184,7 +2214,7 @@ export class Migrator {
     }
     const fingerprint = inventory.fingerprint;
     if (!fingerprint) return {status: 'failed', ...counts, lastError: 'Comment inventory fingerprint is missing', updatedAt: now()};
-    if (input.dryRun) return {status: 'planned', fingerprint, ...counts, updatedAt: now()};
+    if (input.dryRun) return {status: 'planned', fingerprint, ...counts, preview: renderCommentArchive(inventory, destination.kind, {sourceUrl: page.url, mentionPolicy, hashtagPolicy}), updatedAt: now()};
     if (!destination.createArchiveComment || !destination.readArchiveComment) {
       return {status: 'failed', fingerprint, ...counts, lastError: `${destination.profile.name} does not implement comment archive writes`, updatedAt: now()};
     }
@@ -2538,6 +2568,10 @@ export class Migrator {
     scheduler: CooperativeScheduler;
   }): Promise<void> {
     const {source, destination, container, graph, options, store, report, sourceFingerprints, resourcesByPage, commentsByPage, mentionPresentationsByPage, mentionReportItemsByPage, mentionPolicy, hashtagPolicy, progress: liveProgress, scheduler} = input;
+    const priorPageStates = new Map(Object.entries(store.value.pages).map(([id, state]) => [id, structuredClone(state)]));
+    const commentsOnly = (id: string): boolean => {
+      const plan = options.retry?.plan.pages[id];return Boolean(plan && !plan.retryPage && !plan.resourceIds.length && plan.retryComments);
+    };
     const destinationPages = new Map<string, DestinationPage>();
     const retryContextIds = new Set(options.retry?.plan.contextPageIds ?? []);
     if (options.retry && graph.pages[0]?.sourceSpace) retryContextIds.add(graph.pages[0].canonicalId);
@@ -2779,6 +2813,7 @@ export class Migrator {
           }
           if (
             !mappingRecovered
+            && !commentsOnly(page.canonicalId)
             && saved.destinationFingerprint
             && created.fingerprint
             && created.fingerprint !== saved.destinationFingerprint
@@ -2906,7 +2941,7 @@ export class Migrator {
           destinationLocator: created.url,
           destinationTitle: saved?.destinationId && !mappingRecovered ? title : created.title,
           ...(previousDestinationIds.length > 0 ? {previousDestinationIds} : {}),
-          sourceFingerprint: sourceFingerprints.get(page.canonicalId)!,
+          sourceFingerprint: (commentsOnly(page.canonicalId) && saved ? saved.sourceFingerprint : undefined) ?? sourceFingerprints.get(page.canonicalId)!,
           ...(created.fingerprint ? {destinationFingerprint: created.fingerprint} : {}),
           ...(created.version ? {destinationVersion: created.version} : {}),
           status: options.dryRun ? 'planned' : 'skeleton-created',
@@ -2998,6 +3033,7 @@ export class Migrator {
         completed,
         total: contentTotalUnits,
         unit: 'operations',
+        counters: {pages: {completed: progress.pages, total: realContentPages}, files: {completed: progress.resources, total: totalResources}, comments: {completed: progress.comments, total: totalCommentArchives}},
         detail: `pages ${progress.pages}/${realContentPages}${contentPages.length > realContentPages ? ` · section ${progress.sections}/${contentPages.length - realContentPages}` : ''} · files ${progress.resources}/${totalResources} · comments ${progress.comments}/${totalCommentArchives} · ${active}`,
         inFlight: contentInFlight,
         queued: Math.max(0, contentPages.length - progress.pages - progress.sections - contentInFlight),
@@ -3125,6 +3161,32 @@ export class Migrator {
         await store.setPage({...state, status: 'partial', lastError: detail, updatedAt: new Date().toISOString()});
       };
       try {
+        if (commentsOnly(page.canonicalId)) {
+          const baseline = options.retry!.baseline.pages.find(item => item.sourceCanonicalId === page.canonicalId)!;
+          const current = options.dryRun ? destinationPage : await verifyConfirmedDestinationPage(destination, destinationPage, this.consistencyOptions);
+          await options.onPreparedPage?.({page: cachedPage, destination: current, body: current.content ?? ''});
+          const inventory = commentsByPage.get(page.canonicalId);
+          const commentState = await this.transferRemoteComments({source, destination, page: cachedPage, destinationPage: current, inventory, mentionPolicy, hashtagPolicy, resources,
+            pageState: state, cacheDirectory: options.cacheDirectory, dryRun: options.dryRun, destinationPages, sourcePages, report, store, ...(options.signal ? {signal: options.signal} : {}),
+          });
+          const bodyIssues = options.retry!.baseline.issues.filter(issue => issue.pageId === page.canonicalId && !isCommentIssue(issue) && issue.lifecycle !== 'resolved');
+          const bodyPartial = baseline.degraded || baseline.resourceItems.some(item => item.status !== 'complete') || bodyIssues.some(issue => issue.severity === 'error' || issue.severity === 'degradation');
+          const status = options.dryRun ? 'planned' : !['complete', 'partial'].includes(baseline.status) ? baseline.status : bodyPartial || !['complete', 'skipped'].includes(commentState.status) ? 'partial' : 'complete';
+          for (const issue of bodyIssues) report.issue(issue);
+          if (!['complete', 'skipped', 'planned'].includes(commentState.status)) report.issue({code: `comment-${commentState.status}`, severity: commentState.status === 'failed' ? 'error' : 'degradation', phase: 'comment', pageId: page.canonicalId, retryable: commentState.status === 'failed', message: commentState.lastError ?? `Comment archive is ${commentState.status}`});
+          const prior = priorPageStates.get(page.canonicalId)!;
+          const mentions = [...(baseline.mentions ?? []).filter(item => item.location === 'page'), ...(mentionReportItemsByPage.get(page.canonicalId) ?? []).filter(item => item.location === 'comment')];
+          const hashtags = [...(baseline.hashtags ?? []).filter(item => item.location === 'page'), ...(report.data.pages.find(item => item.sourceCanonicalId === page.canonicalId)?.hashtags ?? []).filter(item => item.location === 'comment')];
+          const next = {...prior, ...state, sourceFingerprint: prior.sourceFingerprint ?? state.sourceFingerprint!, status, comments: commentState, hashtags, mentions: {policyFingerprint: mentionReportFingerprint(mentions), outcomes: countMentionReportItems(mentions), updatedAt: new Date().toISOString()}, updatedAt: new Date().toISOString()};
+          if (status === 'complete') delete next.lastError;
+          await store.setPage(next);
+          const commentReport = reportPage({page, destination: current, status, resources, document, resourceStates: next.resources, commentsEnabled: true, ...(inventory ? {commentInventory: inventory} : {}), commentState});
+          report.addPage({...baseline, status, hashtags, mentions, attemptedInRun: true, outcomeRunId: report.data.runId, bodyAttemptedInRun: false, bodyOutcomeRunId: baseline.bodyOutcomeRunId ?? baseline.outcomeRunId ?? options.retry!.parentRunId,
+            resourceItems: baseline.resourceItems.map(resource => ({...resource, attemptedInRun: false, outcomeRunId: resource.outcomeRunId ?? options.retry!.parentRunId})),
+            comments: {...commentReport.comments, attemptedInRun: true, outcomeRunId: report.data.runId},
+          }, undefined, false);
+          progress.comments += 1;progress.resources += transferableResources.length;return;
+        }
         let remoteResources = options.dryRun || transferableResources.length === 0
           ? []
           : await destination.listUploadedResources(destinationPage);
@@ -3361,6 +3423,7 @@ export class Migrator {
         liveProgress.update(contentOperation, `Rendering final content → ${page.title}`);
         await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
         const rendered = await renderRemoteDocument({destination, container, document, page: cachedPage, context});
+        await options.onPreparedPage?.({page: cachedPage, destination: destinationPage, body: rendered.body});
         await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
         if (rendered.degraded && !options.dryRun) {
           if (transferableResources.length === 0) {

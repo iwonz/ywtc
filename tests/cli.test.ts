@@ -38,6 +38,22 @@ async function config(source = yaml) {
 }
 
 describe('CLI and named profiles', () => {
+  it('parses local UI, durable background operations and task controls', () => {
+    expect(parseCliArguments(['ui'])).toEqual({command: 'ui', port: 3000, open: true});
+    expect(parseCliArguments(['ui', '-w', './work', '-p', '3456', '--no-open'])).toEqual({command: 'ui', port: 3456, open: false, workdir: './work'});
+    for (const flag of ['--background', '-b']) {
+      expect(parseCliArguments(['migrate', '-s', 'a', '-d', 'b', flag])).toMatchObject({background: true});
+      expect(parseCliArguments(['retry', '11111111-1111-4111-8111-111111111111', flag])).toMatchObject({background: true});
+      for (const kind of ['mentions', 'hashtags']) expect(parseCliArguments([kind, 'export', '-s', 'a', '-o', './decisions', flag])).toMatchObject({background: true});
+    }
+    expect(parseCliArguments(['migrations'])).toMatchObject({command: 'migrations', action: 'list', all: false});
+    expect(parseCliArguments(['migrations', 'show', '11111111-1111-4111-8111-111111111111', '--json'])).toMatchObject({command: 'migrations', action: 'show', json: true});
+    expect(parseCliArguments(['migrations', 'logs', '11111111-1111-4111-8111-111111111111', '-f'])).toMatchObject({action: 'logs', follow: true});
+    expect(() => parseCliArguments(['migrate', '-i', '-b'])).toThrow(/background/);
+    expect(() => parseCliArguments(['migrate', '-s', 'a', '-d', 'b', '-b', '-o'])).toThrow(/background/);
+    expect(() => parseCliArguments(['ui', '-p', '0'])).toThrow(/port/);
+    expect(() => parseCliArguments(['migrations', 'stop', '../config'])).toThrow(/Job ID/);
+  });
   it('parses identity-preserving rewrite and rejects fresh or filesystem combinations', () => {
     for (const flag of ['--rewrite', '-R']) {
       expect(parseCliArguments(['migrate', '-s', 'root', '-d', '100', flag])).toMatchObject({rewrite: true, fresh: false});

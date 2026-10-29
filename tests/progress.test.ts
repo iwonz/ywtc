@@ -6,6 +6,19 @@ afterEach(() => {
 });
 
 describe('continuous transfer progress', () => {
+  it('emits typed replayable snapshots without a terminal callback', () => {
+    vi.useFakeTimers();
+    const events: import('../src/operation-events.js').OperationEvent[] = [];
+    const progress = new ContinuousProgress(undefined, {heartbeatMs: 100, onEvent: event => events.push(event), redact: value => value.replaceAll('private-token', '[REDACTED]')});
+    progress.measure({phase: 'Transfer', completed: 2, total: 10, unit: 'pages', counters: {pages: {completed: 2, total: 10}, files: {completed: 1}}});
+    const active = progress.begin('upload private-token');
+    vi.advanceTimersByTime(100);
+    expect(events.at(-1)).toMatchObject({type: 'progress', reason: 'heartbeat', phase: 'Transfer', completed: 2, total: 10, counters: {files: {completed: 1}}});
+    expect(JSON.stringify(events)).not.toContain('private-token');
+    expect(events.at(-1)).toMatchObject({active: [{label: 'upload [REDACTED]'}]});
+    progress.end(active);progress.stop();
+    const length = events.length;vi.advanceTimersByTime(200);expect(events).toHaveLength(length);
+  });
   it('keeps in-flight work distinct from confirmed completion', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));

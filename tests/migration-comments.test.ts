@@ -170,6 +170,7 @@ function fixture(options: {rejectNativeArchive?: boolean; rejectNativeSize?: boo
 async function setup() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ywtc-migration-comments-'));
   const config: AppConfig = {profiles: {source: sourceProfile, destination: destinationProfile}, timeoutMs: 5_000, concurrency: 2, configFile: path.join(directory, 'ywtc.config.yaml')};
+  await writeFile(config.configFile, JSON.stringify({connections: Object.fromEntries(Object.entries(config.profiles).map(([key, profile]) => {const {name: _name, ...settings} = profile;return [key, settings];}))}));
   const source: RemoteLocator = {type: 'remote', profile: sourceProfile, value: 'root'};
   const destination: RemoteLocator = {type: 'remote', profile: destinationProfile, value: '100'};
   return {
@@ -183,6 +184,93 @@ async function setup() {
 }
 
 describe('comment migration pipeline', () => {
+  it('previews and applies published decisions in place, refusing destination drift', async () => {
+    const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    const sourcePage = await adapters.source.resolvePage('root');
+    adapters.source.resolvePage = async () => ({...sourcePage, rawContent: 'Page #old'});adapters.source.getPage = adapters.source.resolvePage;
+    adapters.changeComment('Comment #old');
+    const factory = (profile: ConnectionProfile) => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter;
+    const first = await new Migrator(config, createLogger([]), factory).run(options);
+    const {DecisionWorkspace} = await import('../src/decision-workspace.js');
+    const decisions = new DecisionWorkspace(directory), draft = await decisions.save('hashtags', {source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{tag: '#old', decision: 'text', text: 'Replacement'}]});
+    const published = await decisions.publish(draft.id, draft.revision);
+    const {resolveWorkspace} = await import('../src/workspace.js'), workspace = await resolveWorkspace({explicit: directory});
+    const {prepareOperation, executeOperation} = await import('../src/operations.js');
+    const request = {kind: 'targeted', action: 'decisions', runId: first.reportPaths.runId, dryRun: true, selection: {pageIds: [sourcePage.canonicalId], commentPageIds: [sourcePage.canonicalId]}, revisions: {hashtags: published.id}};
+    const id = adapters.page()!.id, before = adapters.page()!.content;
+    const preview = await executeOperation(await prepareOperation(request, workspace), workspace, {}, factory);
+    expect(preview, JSON.stringify(preview)).toMatchObject({previewId: expect.any(String), exitCode: 0});expect(adapters.page()!.content).toBe(before);
+    const apply = await executeOperation(await prepareOperation({...request, dryRun: false, previewId: preview.previewId}, workspace), workspace, {}, factory);
+    expect(apply, JSON.stringify(apply)).toMatchObject({exitCode: 0});expect(adapters.page()!.id).toBe(id);
+    expect(adapters.page()!.content).toContain('Replacement');expect(adapters.commentBody()).toContain('Replacement');
+    const next = await executeOperation(await prepareOperation({...request, runId: apply.runId, dryRun: true}, workspace), workspace, {}, factory);
+    adapters.manuallyEditComment();const commentChanged = adapters.commentBody();
+    const staleComment = await executeOperation(await prepareOperation({...request, runId: apply.runId, dryRun: false, previewId: next.previewId}, workspace), workspace, {}, factory);
+    expect(staleComment.exitCode).not.toBe(0);expect(staleComment.error).toMatch(/preview/i);expect(adapters.commentBody()).toBe(commentChanged);
+    const refreshed = await executeOperation(await prepareOperation({...request, runId: apply.runId, dryRun: true}, workspace), workspace, {}, factory);
+    expect(refreshed.previewId).toBeDefined();
+    adapters.page()!.content = '<p>Concurrent edit</p>';const changed = adapters.page()!.content;
+    const stale = await executeOperation(await prepareOperation({...request, runId: apply.runId, dryRun: false, previewId: refreshed.previewId}, workspace), workspace, {}, factory);
+    expect(stale.exitCode).not.toBe(0);expect(stale.error).toMatch(/preview/i);expect(adapters.page()!.content).toBe(changed);
+  });
+  it('refreshes a selected comment archive without overwriting the page body', async () => {
+    const {config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    const migrator = new Migrator(config, createLogger([]), profile => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter);
+    const first = await migrator.run(options), baseline = JSON.parse(await readFile(first.reportPaths.json, 'utf8')) as TransferReportData;
+    const before = JSON.parse(await readFile(first.stateFilename, 'utf8'));
+    const current = adapters.page()!;current.content = '<p>Manual destination body</p>';
+    const body = current.content, version = current.version;
+    adapters.changeComment('New comment text');
+    const originalPage = await adapters.source.resolvePage('root');
+    adapters.source.getPage = async () => ({...originalPage, rawContent: 'A newer source body'});
+    adapters.source.resolvePage = async () => ({...originalPage, rawContent: 'A newer source body'});
+    const {buildOperatorPlan} = await import('../src/targeted-operations.js');
+    const {targetSelectionSchema} = await import('../src/jobs/contracts.js');
+    const plan = buildOperatorPlan(baseline, targetSelectionSchema.parse({commentPageIds: [originalPage.canonicalId]}), 'decisions');
+    const result = await migrator.run({...options, retry: {rootRunId: first.reportPaths.runId, parentRunId: first.reportPaths.runId, attempt: 1, baseline, plan}});
+    expect(adapters.commentBody()).toContain('New comment text');
+    expect(adapters.page()?.content).toBe(body);expect(adapters.page()?.version).toBe(version);
+    const state = JSON.parse(await readFile(result.stateFilename, 'utf8'));
+    expect(state.pages[originalPage.canonicalId].sourceFingerprint).toBe(before.pages[originalPage.canonicalId].sourceFingerprint);
+  });
+  it.each(['markdown', 'html'] as const)('applies selected decisions to managed %s without rediscovery or touching successful siblings', async format => {
+    const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    const root = {...await adapters.source.resolvePage('root'), rawContent: 'Root #old'};
+    const child = {...root, id: '2', canonicalId: 'source:yandex-wiki:2', title: 'Child', locator: 'root/child', url: `${root.url}/child`, parentId: root.id, ancestorIds: [root.id], rawContent: 'Untouched child #old'};
+    adapters.source.resolvePage = async () => ({...root});adapters.source.getPage = async id => ({...(id === root.id ? root : child)});
+    adapters.source.getDescendants = async () => ({pages: [{...child}], returned: 1, excluded: [], effectiveStatus: 'all', notes: []});
+    const factory = (profile: ConnectionProfile) => {if (profile.name !== 'source') throw Error('No destination API');return adapters.source as SourceAdapter & DestinationAdapter;};
+    const output = path.join(directory, 'site');
+    const first = await new Migrator(config, createLogger([]), factory).run({...options, scope: 'subtree', comments: false, destination: {type: 'directory', path: output, format}});
+    const manifest = JSON.parse(await readFile(path.join(output, '.ywtc-export.json'), 'utf8')), childPath = manifest.pages.find((p: any) => p.sourceCanonicalId === child.canonicalId).path;
+    const before = await readFile(path.join(output, childPath), 'utf8');
+    child.rawContent = 'A newer unselected source body';
+    adapters.source.getDescendants = async () => {throw Error('Selective export must keep fixed membership');};
+    const {DecisionWorkspace} = await import('../src/decision-workspace.js'), decisions = new DecisionWorkspace(directory);
+    const draft = await decisions.save('hashtags', {source: {provider: 'yandex-wiki', instance: sourceProfile.webUrl}, entries: [{tag: '#old', decision: 'text', text: 'Selected replacement'}]});
+    const published = await decisions.publish(draft.id, draft.revision), workspace = await (await import('../src/workspace.js')).resolveWorkspace({explicit: directory});
+    const {prepareOperation, executeOperation} = await import('../src/operations.js');
+    const request = {kind: 'targeted', action: 'decisions', runId: first.reportPaths.runId, dryRun: true, selection: {pageIds: [root.canonicalId]}, revisions: {hashtags: published.id}};
+    const preview = await executeOperation(await prepareOperation(request, workspace), workspace, {}, factory);
+    expect(preview, JSON.stringify(preview)).toMatchObject({exitCode: 0, previewId: expect.any(String)});
+    const result = await executeOperation(await prepareOperation({...request, dryRun: false, previewId: preview.previewId}, workspace), workspace, {}, factory);
+    expect(result, JSON.stringify(result)).toMatchObject({exitCode: 0});
+    expect(await readFile(path.join(output, childPath), 'utf8')).toBe(before);
+    expect(await readFile(path.join(output, format === 'html' ? 'index.html' : 'index.md'), 'utf8')).toContain('Selected replacement');
+  });
+  it('exposes prepared representations to local preview consumers without destination writes', async () => {
+    const {config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    const prepared: Array<{body: string}> = [];
+    await new Migrator(config, createLogger([]), profile => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter).run({...options, dryRun: true, onPreparedPage: value => {prepared.push(value);}});
+    expect(prepared[0]?.body).toContain('Page body');expect(adapters.page()).toBeUndefined();
+  });
+  it('correlates typed progress and confirmed outcomes with the actual run', async () => {
+    const {config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
+    const events: import('../src/operation-events.js').OperationEvent[] = [];
+    const result = await new Migrator(config, createLogger([]), profile => (profile.name === 'source' ? adapters.source : adapters.destination) as SourceAdapter & DestinationAdapter).run({...options, onEvent: event => events.push(event)});
+    expect(events).toContainEqual({type: 'run', runId: result.reportPaths.runId, stateId: result.stateId});
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({type: 'progress', counters: expect.objectContaining({pages: expect.any(Object)})}), expect.objectContaining({type: 'outcome', objectType: 'page', status: 'complete'})]));
+  });
   it('updates page and comment hashtag decisions in place and ignores unrelated catalog changes', async () => {
     const {directory, config, options} = await setup(), adapters = fixture({commentsWithoutAttachments: true});
     adapters.changeComment('Comment #old');
@@ -385,7 +473,7 @@ describe('comment migration pipeline', () => {
       baseline,
       plan,
     }});
-    expect(retried).toMatchObject({status: 'completed', summary: {complete: 1, comments: 2, commentStatuses: {complete: 1}}});
+    expect(retried, JSON.stringify({degraded: baseline.pages[0]?.degraded, resources: baseline.pages[0]?.resourceItems, issues: baseline.issues})).toMatchObject({status: 'completed', summary: {complete: 1, comments: 2, commentStatuses: {complete: 1}}});
     expect(adapters.counts()).toMatchObject({commentReads: 5, commentCreates: 1});
     const report = JSON.parse(await readFile(retried.reportPaths.json, 'utf8')) as TransferReportData;
     expect(report.pages[0]).toMatchObject({

@@ -2,7 +2,15 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     "tests/**/*.test.ts",
-    "tests/**/*.spec.ts"
+    "tests/**/*.spec.ts",
+    "src/jobs/coordinator.ts",
+    "src/jobs/worker.ts",
+    "src/ui-service.ts",
+    "web/app/**/page.tsx",
+    "web/app/**/layout.tsx",
+    "web/app/**/route.ts",
+    "web/proxy.ts",
+    "web/next.config.mjs"
   ],
   "project": [
     "src/**/*.ts",
@@ -12,6 +20,9 @@
     "mentions-ui/src/**/*.ts",
     "mentions-ui/src/**/*.tsx",
     "mentions-ui/src/**/*.css",
+    "web/**/*.ts",
+    "web/**/*.tsx",
+    "web/**/*.mjs",
     "tests/**/*.ts",
     "scripts/**/*.mjs",
     "scripts/**/*.ts"

@@ -79,10 +79,23 @@ jobs:
       - name: Run project checks
         run: npm run check
 
+  macos-package:
+    name: macOS installed CLI and UI smoke
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run package:verify
+
   release-please:
     name: Propose or create release
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    needs: [commitlint, checks]
+    needs: [commitlint, checks, macos-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -48,9 +48,10 @@ function issuesForPage(report: TransferReportData, pageId: string): TransferRepo
   return report.issues.filter((issue) => issue.pageId === pageId);
 }
 
-function isCommentIssue(issue: TransferReportIssue): boolean {
+export function isCommentIssue(issue: TransferReportIssue): boolean {
   return issue.phase === 'comment'
     || issue.objectType === 'comment'
+    || issue.code.startsWith('comment-inventory-warning:')
     || issue.code.endsWith('inventory-comments-read');
 }
 
