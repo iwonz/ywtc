@@ -122,6 +122,13 @@ function destinationComment(pageId: string, comment: ConfluenceComment): Destina
 }
 
 export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
+  async resolveNativePageReference(reference:{id?:string;title:string;space?:string},context:DestinationPage):Promise<{id:string;title:string;space:string}|undefined> {
+    const space=reference.space??context.space;if(!space)return undefined;
+    const byTitle=await this.client.findPageByTitle(space,reference.title);if(!byTitle)return undefined;
+    const target=reference.id?await this.client.getPage(reference.id):byTitle;
+    if(target.id!==byTitle.id||target.title!==reference.title)return undefined;
+    return {id:target.id,title:target.title,space:String(target.space.id??target.space.key)};
+  }
   readonly kind = 'confluence' as const;
   readonly capabilities = capabilities;
 
@@ -467,6 +474,19 @@ export class ConfluenceAdapter implements SourceAdapter, DestinationAdapter {
 
   async verifyPage(page: DestinationPage): Promise<DestinationPage> {
     return destinationPage(this.profile, this.client, await this.client.getPage(page.id));
+  }
+
+  async trashEvidence(page:DestinationPage) {
+    if(!this.client.trashEvidence)return {id:page.id,status:'unknown',version:'',leaf:false,allowed:false,reason:'This provider API cannot prove reversible leaf trash'};
+    return this.client.trashEvidence(page.id);
+  }
+  async trashPage(page:DestinationPage):Promise<void> {
+    if(!this.client.trashPublishedLeaf||!page.version)throw new Error('Reversible leaf trash is unavailable');
+    await this.client.trashPublishedLeaf(page.id,page.version);
+  }
+  async verifyTrashedPage(page:DestinationPage):Promise<boolean> {
+    if(!this.client.trashEvidence)return false;
+    const evidence=await this.client.trashEvidence(page.id,'trashed');return evidence.id===page.id&&evidence.status==='trashed';
   }
 
   renderPageReference(page: DestinationPage, label: string, anchor?: string): string {

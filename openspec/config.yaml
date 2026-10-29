@@ -5,7 +5,7 @@ context: |
   Product: resumable, provider-neutral transfers between Yandex Wiki and Confluence plus Markdown/HTML exports.
   Authentication: Yandex OAuth or IAM; Confluence Data Center PAT or Cloud email/API token.
   Configuration: named connections, defaults, policies, and direct secrets live only in ignored ywtc.config.yaml; automatic runtime data lives in the workdir's ignored .states/ and explicit state paths remain inside the workdir.
-  Safety: no automatic source or destination deletion, no destination mutations during dry-run, atomic state, explicit information loss, and redacted secrets.
+  Safety: no automatic deletion or purge; only separately confirmed mapped Confluence published-leaf trash with authoritative evidence and persistent exclusions. No destination mutations during dry-run, atomic state, explicit information loss, and redacted secrets.
   Testing: Vitest unit/contract/integration tests plus Playwright browser checks.
   References: README.md owns operator guidance, openspec/specs/ the current contracts, and AGENTS.md the contributor workflow; archived changes and changelog history remain unchanged.
 

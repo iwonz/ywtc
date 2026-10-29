@@ -2,6 +2,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
+import {syncEvidenceSchema,syncKeepSchema,syncExclusionSchema,type SyncExclusion} from './sync-contract.js';
 import {verifiedHashtagRecords, hashtagRecordSchema, hashtagSummarySchema, type HashtagRecord, type HashtagSummary} from './hashtag-decisions.js';
 import {acquireExclusiveLease, type ExclusiveLease} from './exclusive-lease.js';
 import type {ExportFormat, GraphEdgeStatus, MentionMode, RecordedMentionMode, MentionOutcomeCounts, ProviderKind, SourceSelection, SourceStatus} from './domain.js';
@@ -91,6 +92,10 @@ export interface MentionTransferState {
 }
 
 export interface PageTransferState extends BlockingCause {
+  syncEvidence?: import('./sync-contract.js').SyncEvidence;
+  syncOutputHash?:string;
+  syncKeep?: import('./sync-contract.js').SyncKeep;
+  exclusion?: SyncExclusion;
   sourceId: string;
   sourceCanonicalId: string;
   sourceLocator: string;
@@ -157,7 +162,8 @@ export interface StateRun {
   mentionIdentities?: number;
   mentionOutcomes?: MentionOutcomeCounts;
   hashtags?: HashtagSummary;
-  operation?: 'migrate' | 'retry';
+  operation?: 'migrate' | 'retry' | 'sync';
+  syncPlanId?: string;
   retryRootRunId?: string;
   retryParentRunId?: string;
   retryAttempt?: number;
@@ -330,6 +336,10 @@ const mentionStateSchema = z.object({
 }).strict();
 
 const pageStateSchema = z.object({
+  syncEvidence: syncEvidenceSchema.optional(),
+  syncOutputHash:z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  syncKeep: syncKeepSchema.optional(),
+  exclusion: syncExclusionSchema.optional(),
   sourceId: z.string(),
   sourceCanonicalId: z.string(),
   sourceLocator: z.string(),
@@ -402,7 +412,8 @@ const runSchema = z.object({
   mentionIdentities: z.number().int().nonnegative().optional(),
   mentionOutcomes: mentionOutcomeCountsSchema.optional(),
   hashtags: hashtagSummarySchema.optional(),
-  operation: z.enum(['migrate', 'retry']).optional(),
+  operation: z.enum(['migrate', 'retry', 'sync']).optional(),
+  syncPlanId: z.string().uuid().optional(),
   retryRootRunId: z.string().optional(),
   retryParentRunId: z.string().optional(),
   retryAttempt: z.number().int().positive().optional(),
@@ -525,6 +536,7 @@ export class StateStore {
     sourceStatus: SourceStatus = 'all',
     commentsEnabled = true,
     retry?: Pick<StateRun, 'retryRootRunId' | 'retryParentRunId' | 'retryAttempt' | 'retrySelectedPages' | 'retrySelectedResources' | 'retrySelectedComments' | 'retryContextPages'>,
+    metadata?: Pick<StateRun,'operation'|'syncPlanId'>,
   ): Promise<StateRun> {
     const run: StateRun = {
       id: randomUUID(),
@@ -544,7 +556,8 @@ export class StateStore {
       commentThreads: 0,
       comments: 0,
       commentAttachments: 0,
-      operation: retry ? 'retry' : 'migrate',
+      operation: metadata?.operation??(retry ? 'retry' : 'migrate'),
+      ...(metadata?.syncPlanId?{syncPlanId:metadata.syncPlanId}:{}),
       ...retry,
     };
     this.value.runs.push(run);

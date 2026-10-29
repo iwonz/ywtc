@@ -32,6 +32,8 @@ export const targetSelectionSchema = z
 	.strict();
 export type TargetSelection = z.infer<typeof targetSelectionSchema>;
 export const jobRequestSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('sync-plan'),runId:uuid,source:locator.optional()}).strict(),
+  z.object({kind:z.literal('sync-apply'),planId:uuid,revision:z.string().regex(/^[a-f0-9]{64}$/).optional(),confirmTrash:z.boolean().default(false)}).strict(),
 	z
 		.object({
 			kind: z.literal('migrate'),
@@ -108,6 +110,7 @@ const jobResultSchema = z
 		output: z.string().optional(),
 		catalogId: uuid.optional(),
 		previewId: uuid.optional(),
+		planId: uuid.optional(),
 	})
 	.strict();
 export type JobResult = z.infer<typeof jobResultSchema>;

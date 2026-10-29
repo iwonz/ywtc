@@ -8,7 +8,6 @@ import {CooperativeScheduler} from './cooperative.js';
 import {secretValues, type AppConfig} from './config.js';
 import {
   appendGridSnapshots,
-  assertDestinationContent,
   DestinationContentVerificationError,
   normalizePageContent,
   normalizedPreviewHtml,
@@ -18,7 +17,7 @@ import {
   renderYfm,
   setSourceResourceBinding,
   sourceResourceBindings,
-  verifyDestinationContent,
+  type ContentVerificationResult,
 } from './content-model.js';
 import {
   commentAttachmentUses,
@@ -95,8 +94,18 @@ import {
 } from './state.js';
 
 import {realSourcePages, resolveSourceRoot} from './source-roots.js';
+import {verifyProviderContent,assertProviderContent} from './provider-verification.js';
+import {createSyncEvidence,stableHash,type SyncRunMetadata} from './sync-contract.js';
+import {boundedPath} from './local-paths.js';
 
 export interface TransferOptions {
+  /** Fully inventoried, identity-checked graph supplied by synchronization. */
+  preparedGraph?: PageGraph;
+  beforeRun?: (input:{state:import('./state.js').TransferState;source:SourcePage;container:DestinationContainer|undefined})=>Promise<void>;
+  afterTransfer?: (input:{store:StateStore;report:TransferReport;source:SourceAdapter;destination:DestinationAdapter|undefined;container:DestinationContainer|undefined;graph:PageGraph;progress:ContinuousProgress})=>Promise<void>;
+  preserveMappedIds?: boolean;
+  keptPageIds?: ReadonlySet<string>;
+  sync?: SyncRunMetadata;
   preserveExportIdentity?: boolean;
   freshInventory?: boolean;
   beforeDestinationMutation?: () => Promise<void>;
@@ -227,6 +236,14 @@ function sourceResourceFingerprint(resource: SourceResource): string {
     embedded: resource.embedded,
     metadata: resource.metadata,
   }));
+}
+
+async function checkpointSyncEvidence(runtimeDirectory:string,page:SourcePage,resources:SourceResource[],comments:CommentInventory|undefined,mentions:import('./domain.js').MentionProcessingPolicy,hashtags:import('./hashtag-decisions.js').HashtagProcessingPolicy,resourceBytes:Record<string,ResourceTransferState>={}):Promise<import('./sync-contract.js').SyncEvidence>{
+  const evidence=createSyncEvidence(page,resources,comments,{mentions,hashtags},resourceBytes);
+  const snapshot=path.join('sync','snapshots',sha256(page.canonicalId),`${evidence.sourceHash}.json`),filename=await boundedPath(runtimeDirectory,snapshot,true);
+  await mkdir(path.dirname(filename),{recursive:true,mode:0o700});
+  try{await writeFile(filename,JSON.stringify({page,resources,...(comments?{comments}:{}),evidence}),{flag:'wx',mode:0o600});}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
+  return {...evidence,snapshot};
 }
 
 function sourceResourceState(resource: SourceResource): Pick<ResourceTransferState, 'sourceId' | 'sourceName' | 'sourceFingerprint'> {
@@ -420,9 +437,9 @@ function resetResourceDestinations(resources: PageTransferState['resources']): P
   }]));
 }
 
-function sourceDerivedTextMatches(expectedBody: string, actualBody: string | undefined, provider: SourcePage['provider'], page: SourcePage): boolean {
+async function sourceDerivedTextMatches(expectedBody: string, actualBody: string | undefined, destination:DestinationAdapter, page: SourcePage,context:DestinationPage): Promise<boolean> {
   if (actualBody === undefined) return false;
-  return verifyDestinationContent(expectedBody, actualBody, provider, page).status === 'complete';
+  return (await verifyProviderContent(expectedBody,actualBody,destination,page,context)).status==='complete';
 }
 
 const REVISION_RETRY_DELAYS_MS = [500, 1_000, 2_000] as const;
@@ -448,13 +465,13 @@ async function updateMappedPage(input: {
   consistencyOptions: ConsistencyRetryOptions;
   report: TransferReport;
   force?: boolean;
-}): Promise<{page: DestinationPage; updated: boolean; normalized: boolean; verification: ReturnType<typeof verifyDestinationContent>}> {
+}): Promise<{page: DestinationPage; updated: boolean; normalized: boolean; verification: ContentVerificationResult}> {
   let current = input.current;
   let title = input.title;
   let retainedMappedTitle = false;
   let forbiddenRetried = false;
   for (let attempt = 0; ; attempt += 1) {
-    const verification = verifyDestinationContent(input.body, current.content, input.destination.kind, input.sourcePage);
+    const verification = await verifyProviderContent(input.body,current.content,input.destination,input.sourcePage,current);
     if (!input.force && verification.status === 'complete' && current.title === title) {
       return {page: current, updated: false, normalized: current.content !== input.body, verification};
     }
@@ -469,7 +486,7 @@ async function updateMappedPage(input: {
         page: confirmed,
         updated: true,
         normalized: confirmed.content !== input.body,
-        verification: verifyDestinationContent(input.body, confirmed.content, input.destination.kind, input.sourcePage),
+        verification: await verifyProviderContent(input.body,confirmed.content,input.destination,input.sourcePage,confirmed),
       };
     } catch (error) {
       if (error instanceof DestinationTitleConflictError && !retainedMappedTitle && current.title !== title) {
@@ -582,7 +599,7 @@ async function createPageWithAllocatedTitle(input: {
         message: `${input.sourcePage.title}: parent-scoped recovery lookup failed for "${title}"; authoritative creation will be attempted: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
-    if (child && sourceDerivedTextMatches(input.bootstrap.body, child.content, input.destination.kind, input.sourcePage)) {
+    if (child && await sourceDerivedTextMatches(input.bootstrap.body, child.content, input.destination, input.sourcePage,child)) {
       return {page: child, reused: true};
     }
     const occupied = child ?? (input.destination.findTitleConflict
@@ -620,7 +637,7 @@ async function createPageWithAllocatedTitle(input: {
           const recovered = input.destination.findRecoverablePage
             ? await input.destination.findRecoverablePage(input.parent, title)
             : await input.destination.findChild(input.parent, title);
-          if (recovered && sourceDerivedTextMatches(input.bootstrap.body, recovered.content, input.destination.kind, input.sourcePage)) {
+          if (recovered && await sourceDerivedTextMatches(input.bootstrap.body, recovered.content, input.destination, input.sourcePage,recovered)) {
             input.report.resolveIssues({
               pageId: input.sourcePage.canonicalId,
               codes: ['destination-recovery-lookup-failed', 'destination-create-consistency-retry'],
@@ -1130,10 +1147,11 @@ export class Migrator {
         .sort((left, right) => Date.parse(right.finishedAt ?? right.startedAt) - Date.parse(left.finishedAt ?? left.startedAt));
       const latest = lineage[0];
       if (!latest) throw new Error(`Retry lineage ${options.retry.rootRunId} is not present in state ${stateLocation.filename}.`);
-      if (latest.id !== options.retry.parentRunId) {
+      if (latest.id !== options.retry.parentRunId && !(options.sync&&latest.syncPlanId===options.sync.planId)) {
         throw new Error(`Retry lineage advanced to ${latest.id} after the plan was built. Run "ywtc retry ${options.retry.rootRunId}" again.`);
       }
     }
+    await options.beforeRun?.({state:store.value,source:root,container});
     if (!options.dryRun) await store.save();
     const run = await store.beginRun(options.scope, options.dryRun, sourceStatus, commentsEnabled, options.retry ? {
       retryRootRunId: options.retry.rootRunId,
@@ -1143,9 +1161,11 @@ export class Migrator {
       retrySelectedResources: Object.values(options.retry.plan.selectedResourceIds).flat().length,
       retrySelectedComments: options.retry.plan.selectedCommentPageIds.length,
       retryContextPages: options.retry.plan.contextPageIds.length,
-    } : undefined);
+    } : undefined,options.sync?{operation:'sync',syncPlanId:options.sync.planId}:undefined);
     options.onEvent?.({type: 'run', runId: run.id, stateId: stateLocation.id});
     const report = new TransferReport({
+      operation:options.sync?'sync':options.retry?'retry':'migrate',
+      ...(options.sync?{sync:options.sync}:{}),
       runId: run.id,
       secrets: secretValues(this.config),
       dryRun: options.dryRun,
@@ -1216,7 +1236,7 @@ export class Migrator {
       progress.phase(`Discovery · ${options.scope} scope from ${root.title}`);
       for (let attempt = 0; ; attempt += 1) {
         try {
-          graph = options.retry && !options.retry.plan.discoveryIncomplete && (options.destination.type === 'remote' || options.preserveExportIdentity)
+          graph = options.preparedGraph ? structuredClone(options.preparedGraph) : options.retry && !options.retry.plan.discoveryIncomplete && (options.destination.type === 'remote' || options.preserveExportIdentity)
             ? await targetedRetryGraph(source, root, options.retry, options.concurrency, options.signal, options.preserveExportIdentity ? options.cacheDirectory : undefined)
             : await discoverPageGraph({
               adapter: source,
@@ -1241,6 +1261,18 @@ export class Migrator {
           progress.phase(`Discovery recovery ${attempt + 1}/${inventoryRecoveryDelays.length} · retrying failed page details after ${delay} ms; completed details remain checkpointed`);
           await inventoryRecoveryDelay(delay, options.signal, this.inventoryRecoveryOptions.sleep);
         }
+      }
+      const excludedIds=new Set(Object.values(store.value.pages).filter(page=>page.exclusion).map(page=>page.sourceCanonicalId));
+      if(excludedIds.size){
+        const excludedSourceIds=new Set(Object.values(store.value.pages).filter(page=>page.exclusion).map(page=>page.sourceId));
+        const allStructural=new Map([...graph.pages.map(page=>[page.id,page.canonicalId] as const),...Object.values(store.value.pages).filter(page=>page.exclusion).map(page=>[page.sourceId,page.sourceCanonicalId] as const)]);
+        for(const page of graph.pages){if(excludedIds.has(page.canonicalId))continue;const nearest=[...(page.ancestorIds??[]),...(page.parentId?[page.parentId]:[])].reverse().find(id=>allStructural.has(id));if(nearest&&excludedSourceIds.has(nearest))page.projectedParentId=allStructural.get(nearest)!;}
+        const blockingExclusions=new Set(graph.pages.filter(page=>page.projectedParentId&&excludedIds.has(page.projectedParentId)).map(page=>page.projectedParentId!));
+        for(const id of blockingExclusions)report.issue({code:'operator-excluded-parent',severity:'error',phase:'page',pageId:id,retryable:false,message:`An explicitly excluded parent ${id} prevents its descendants from being created. Review/restore the mapping; no replacement will be created.`});
+        for(const page of graph.pages.filter(page=>excludedIds.has(page.canonicalId)))graph.selection.excluded.push({id:page.id,canonicalId:page.canonicalId,locator:page.locator,title:page.title,url:page.url,...(page.parentId?{parentId:page.parentId}:{}),...(page.ancestorIds?{ancestorIds:page.ancestorIds}:{}),depth:page.depth,metadataComplete:true,reason:'operator-trash'});
+        graph.pages=graph.pages.filter(page=>!excludedIds.has(page.canonicalId));
+        graph.selection.selectedDescendants=Math.max(0,graph.selection.selectedDescendants-graph.selection.excluded.filter(page=>page.reason==='operator-trash').length);
+        report.data.pages=report.data.pages.filter(page=>!excludedIds.has(page.sourceCanonicalId));
       }
       report.registerPages(graph.pages);
       report.setEdges(graph.edges);
@@ -1713,7 +1745,7 @@ export class Migrator {
       const finalStatus: RunStatus = options.signal?.aborted ? 'cancelled' : 'failed';
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, realSourcePages(graph.pages).length));
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, options.sync?report.data.summary.pages:realSourcePages(graph.pages).length));
       const first = graph.pages.map((page) => ({page, error: inventoryFailures.get(page.canonicalId)})).find((item) => item.error);
       const retained = inventoryResults.size;
       const message = `Source inventory incomplete: ${retained}/${graph.pages.length} pages checkpointed; ${inventoryFailures.size} required failure(s) remain after ${inventoryRecoveryAttempts} recovery attempt(s); destination mutations: 0.${first?.error ? ` First failure: ${inventoryFailureMessage(first.page, first.error)}.` : ''} Retry this run to resume the retained checkpoints.`;
@@ -1923,15 +1955,16 @@ export class Migrator {
         output = container!.url;
         report.output('destination', container!.url);
       }
+      await options.afterTransfer?.({store,report,source,destination,container,graph,progress});
       progress.phase('Finalizing transfer · calculating outcomes and writing report');
       await scheduler.checkpoint({force: true, ...(options.signal ? {signal: options.signal} : {})});
       report.finish('completed');
       const finalStatus = runStatus(report.data.summary.errors, report.data.summary.warnings, report.data.summary.degradations);
-      await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
+      await store.finalizeOutcomes(options.retry?options.retry.plan.retryPageIds:graph.pages.map((page)=>page.canonicalId),finalStatus,options.dryRun);
       report.finish(finalStatus);
       await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, realSourcePages(graph.pages).length));
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, options.sync?report.data.summary.pages:realSourcePages(graph.pages).length));
       if (!options.dryRun && (finalStatus === 'completed' || finalStatus === 'completed-with-warnings')) {
         await sourceInventoryStore.retire();
       }
@@ -1959,10 +1992,10 @@ export class Migrator {
       progress.phase('Finalizing failed transfer · saving state and report');
       await scheduler.checkpoint({force: true});
       report.error(message);
-      await store.finalizeOutcomes(graph.pages.map((page) => page.canonicalId), finalStatus, options.dryRun);
+      await store.finalizeOutcomes(options.retry?options.retry.plan.retryPageIds:graph.pages.map((page)=>page.canonicalId),finalStatus,options.dryRun);
       report.finish(finalStatus);
       const reportPaths = await report.write(options.reportsDirectory);
-      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, realSourcePages(graph.pages).length));
+      if (!options.dryRun) await store.finishRun(run.id, finalStatus, runOutcomeCounts(report.data.summary, options.sync?report.data.summary.pages:realSourcePages(graph.pages).length));
       this.logger.error(`${message}. Report: ${reportPaths.html}`);
       throw new MigrationRunError(message, reportPaths, stateLocation.filename, {cause: error});
     }
@@ -2052,6 +2085,7 @@ export class Migrator {
       ...(options.retry ? {retryPageIds: new Set(options.retry.plan.retryPageIds)} : {}),
       ...(options.retry ? {retryResourceIds} : {}),
       ...(options.preserveExportIdentity ? {preserveIdentity: true} : {}),
+      ...(options.sync ? {allowExpansion:true} : {}),
       ...(options.retry ? {preserveBodyPageIds: new Set(options.retry.plan.retryPageIds.filter(id => !options.retry!.plan.pages[id]?.retryPage && !options.retry!.plan.pages[id]?.resourceIds.length && options.retry!.plan.pages[id]?.retryComments))} : {}),
       ...(options.beforeDestinationMutation ? {beforeCommit: options.beforeDestinationMutation} : {}),
       ...(options.onPreparedPage ? {onPreparedPage: (page: SourcePage, current: string, proposed: string) => options.onPreparedPage!({page, destination: {id: page.canonicalId, provider: page.provider, profile: page.profile, content: current} as DestinationPage, body: proposed})} : {}),
@@ -2084,6 +2118,8 @@ export class Migrator {
       const commentIncomplete = manifestPage?.comments && !['complete', 'skipped'].includes(manifestPage.comments.status);
       const pageStatus: PageTransferStatus = options.dryRun ? 'planned' : manifestPage?.degraded || commentIncomplete ? 'partial' : 'complete';
       await store.setPage({
+        ...(!options.dryRun&&pageStatus==='complete'?{syncEvidence:await checkpointSyncEvidence(options.runtimeDirectory,await loadCachedPage(options.cacheDirectory,page.canonicalId),sourceResources,commentsByPage.get(page.canonicalId),mentionPolicy,hashtagPolicy,resources)}:previous?.syncEvidence?{syncEvidence:previous.syncEvidence}:{}),
+        ...(!options.dryRun&&manifestPage?{syncOutputHash:stableHash(await readFile(path.join(destination.path,manifestPage.path),'utf8'))}:{}),
         sourceId: page.id,
         sourceCanonicalId: page.canonicalId,
         sourceLocator: page.locator,
@@ -2172,6 +2208,7 @@ export class Migrator {
     }
     for (const warning of result.warnings) report.warning(warning);
     for (const error of result.errors) report.error(error);
+    if(options.sync)for(const [id,hashes] of Object.entries(result.presentationHashes??{})){const page=store.page(id);if(page&&page.syncOutputHash===hashes.before){page.syncOutputHash=hashes.after;await store.setPage(page);}if(report.data.sync)report.data.sync.linkPatches+=hashes.links;}
     return result;
   }
 
@@ -2404,13 +2441,13 @@ export class Migrator {
         await prepareFullArchive(`Full comment archive exceeded ${maximumInlineBytes} inline bytes and was attached as Markdown.`);
       }
       let result = current;
-      const verifies = (comment: import('./domain.js').DestinationComment | undefined): boolean => {
+      const verifies = async(comment: import('./domain.js').DestinationComment | undefined): Promise<boolean> => {
         if (!comment) return false;
         const verification = verifyCommentArchive(fullArchiveState.fullArchiveName ? fingerprint : inventory, comment.body, archiveResource?.name, mentionPolicy, hashtagPolicy);
         if (fullArchiveState.fullArchiveName && !comment.body.includes(fullArchiveState.fullArchiveName)) return false;
-        return verification.ok && verifyDestinationContent(expectedBody, comment.body, destination.kind, page).status === 'complete';
+        return verification.ok && (await verifyProviderContent(expectedBody,comment.body,destination,page,destinationPage)).status==='complete';
       };
-      const requiresWrite = !verifies(result);
+      const requiresWrite = !(await verifies(result));
       if (requiresWrite) {
         const write = async (body: string) => {
           if (input.signal?.aborted) throw input.signal.reason ?? new Error('Transfer cancelled');
@@ -2434,7 +2471,7 @@ export class Migrator {
                 message: `${page.title}: comment archive revision changed concurrently; retry ${attempt + 1} after ${delay} ms`,
               });
               currentComment = await destination.readArchiveComment!({page: destinationPage, commentId: currentComment.id});
-              if (verifies(currentComment)) {
+              if (await verifies(currentComment)) {
                 return currentComment;
               }
             }
@@ -2496,7 +2533,7 @@ export class Migrator {
         verification.ok = false;
         verification.differences.push('full Markdown comment archive reference is missing');
       }
-      const semanticVerification = verifyDestinationContent(expectedBody, verified.body, destination.kind, page);
+      const semanticVerification = await verifyProviderContent(expectedBody,verified.body,destination,page,destinationPage);
       if (semanticVerification.status !== 'complete') {
         verification.ok = false;
         verification.differences.push(...semanticVerification.differences);
@@ -2607,7 +2644,7 @@ export class Migrator {
     };
     if (options.retry) {
       for (const statePage of Object.values(store.value.pages)) {
-        if (statePage.destinationId) destinationPages.set(statePage.sourceCanonicalId, destinationFromState(statePage, destination));
+        if (statePage.destinationId&&!statePage.exclusion) destinationPages.set(statePage.sourceCanonicalId, destinationFromState(statePage, destination));
       }
     }
     const mappedOwners = new Map<string, string[]>();
@@ -2706,9 +2743,9 @@ export class Migrator {
       if (retryContextIds.has(page.canonicalId) && saved?.destinationId) {
         try {
           const confirmed = await verifyConfirmedDestinationPage(destination, destinationFromState(saved, destination), this.consistencyOptions);
-          if (confirmed.parentId === parent.id && (!page.sourceSpace || confirmed.title === page.title)) {
+          if ((confirmed.parentId===parent.id||options.keptPageIds?.has(page.canonicalId))&&(!page.sourceSpace||confirmed.title===page.title||options.sync)) {
             if (page.sourceSpace) {
-              assertDestinationContent(destination.kind === 'confluence' ? '<p></p>' : '', confirmed.content, destination.kind, page);
+              await assertProviderContent(destination.kind==='confluence'?'<p></p>':'',confirmed.content,destination,page,confirmed);
               report.updatePage(page.canonicalId, {status: 'complete', destinationId: confirmed.id, destinationTitle: confirmed.title, destinationUrl: confirmed.url, inventoryStatus: 'complete'});
             }
             destinationPages.set(page.canonicalId, confirmed);
@@ -2760,7 +2797,7 @@ export class Migrator {
         await scheduler.checkpoint(options.signal ? {signal: options.signal} : {});
         liveProgress.update(stagingOperation, `${options.dryRun ? 'Planning' : 'Staging'} destination · ${page.title}`);
         let created: DestinationPage;
-        const title = saved && saved.destinationTitle !== saved.sourceTitle
+        const title = saved && saved.sourceTitle===page.title && saved.destinationTitle !== saved.sourceTitle
           ? saved.destinationTitle
           : page.title;
         let resourcesForState = saved?.resources ?? {};
@@ -2792,7 +2829,7 @@ export class Migrator {
             });
             report.resolveIssues({pageId: page.canonicalId, codes: ['destination-consistency-retry']});
           } catch (error) {
-            if (!(error instanceof ConfirmedDestinationMissingError) || options.dryRun || options.rewrite) throw error;
+            if (!(error instanceof ConfirmedDestinationMissingError) || options.dryRun || options.rewrite || options.preserveMappedIds) throw error;
             if (page.projectedParentId) {
               await verifyConfirmedDestinationPage(destination, parent as DestinationPage, this.consistencyOptions);
             }
@@ -2829,7 +2866,7 @@ export class Migrator {
           }
           if (!mappingRecovered && created.parentId !== parent.id) {
             const oldPage = created;
-            if (options.rewrite && (!destination.capabilities.reparentPages || !destination.reparentPage)) {
+            if ((options.rewrite||options.preserveMappedIds) && (!destination.capabilities.reparentPages || !destination.reparentPage)) {
               throw new Error(`--rewrite cannot repair parent for mapped page ${created.id} without changing its ID; destination does not support moving pages.`);
             }
             if (options.dryRun) {
@@ -2942,6 +2979,7 @@ export class Migrator {
           destinationTitle: saved?.destinationId && !mappingRecovered ? title : created.title,
           ...(previousDestinationIds.length > 0 ? {previousDestinationIds} : {}),
           sourceFingerprint: (commentsOnly(page.canonicalId) && saved ? saved.sourceFingerprint : undefined) ?? sourceFingerprints.get(page.canonicalId)!,
+          ...(saved?.syncEvidence?{syncEvidence:saved.syncEvidence}:{}),
           ...(created.fingerprint ? {destinationFingerprint: created.fingerprint} : {}),
           ...(created.version ? {destinationVersion: created.version} : {}),
           status: options.dryRun ? 'planned' : 'skeleton-created',
@@ -3226,8 +3264,9 @@ export class Migrator {
           if (options.dryRun) {
             const destinationName = nameAllocator.allocate(resource, existing?.status === 'complete' ? existing.destinationName : undefined);
             setSourceResourceBinding(bindings, cachedPage, resources, resource, {kind: 'uploaded', resource: {
-              id: `dry-run:${resource.id}`,
+              id: existing?.status==='complete'&&existing.destinationId?existing.destinationId:`dry-run:${resource.id}`,
               name: destinationName,
+              ...(existing?.status==='complete'&&existing.destinationUrl?{url:existing.destinationUrl}:{}),
               ...(resource.size !== undefined ? {size: resource.size} : {}),
             }});
             progress.resources += 1;
@@ -3243,7 +3282,7 @@ export class Migrator {
                 existing.sourceName !== resource.name
                 || (existing.size !== undefined && resource.size !== undefined && existing.size !== resource.size)
               );
-            const cached = changedSource ? undefined : await verifiedCacheFile(filename, existing?.sha256 ? {
+            const cached = changedSource||options.sync ? undefined : await verifiedCacheFile(filename, existing?.sha256 ? {
               sha256: existing.sha256,
               ...(existing.size !== undefined ? {size: existing.size} : {}),
               ...(existing.mimeType ? {mimeType: existing.mimeType} : {}),
@@ -3318,7 +3357,7 @@ export class Migrator {
                 result = matchingName;
                 break;
               }
-              if (matchingName) {
+              if (matchingName && !(attempt===0&&updateExisting?.id===matchingName.id)) {
                 nameAllocator.reserve(matchingName.name);
                 destinationName = nameAllocator.allocate(resource);
                 continue;
@@ -3562,7 +3601,8 @@ export class Migrator {
               message: `${page.title}: applied the current source representation as destination version ${verified.version ?? 'confirmed'}`,
             });
           }
-          const verification = assertDestinationContent(rendered.body, verified.content, destination.kind, cachedPage);
+          const verification = await assertProviderContent(rendered.body,verified.content,destination,cachedPage,verified);
+          rendered.normalizations.push(...verification.normalizations??[]);
           verificationAdaptations = verification.adaptations;
           verificationDegradations = verification.status === 'partial' ? verification.differences : [];
         }
@@ -3648,6 +3688,7 @@ export class Migrator {
           ...(lastResourceProblem ? {lastError: lastResourceProblem} : {}),
           updatedAt: new Date().toISOString(),
         };
+        if(!options.dryRun&&!partial)finalState.syncEvidence=await checkpointSyncEvidence(options.runtimeDirectory,cachedPage,resources,commentInventory,mentionPolicy,hashtagPolicy,finalState.resources);
         await store.setPage(finalState);
         const fallbackDetails = resources.flatMap((resource) => {
           const resourceState = finalState.resources[resource.id];
@@ -3700,7 +3741,7 @@ export class Migrator {
               });
               recoveryExpectedBody = bootstrap.body;
             }
-            assertDestinationContent(recoveryExpectedBody, actual.content, destination.kind, cachedPage);
+            await assertProviderContent(recoveryExpectedBody,actual.content,destination,cachedPage,actual);
             failureStatus = 'partial';
           } catch {
             failureStatus = 'failed';

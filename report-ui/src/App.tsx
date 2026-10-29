@@ -782,7 +782,8 @@ function ReportOverview({report, locale, theme, setLocale, setTheme, t}: {
       </Stack>
       <Box className="overview-summary"><SummaryTable report={report} t={t} /></Box>
       <Box component="dl" className="run-details">
-        {report.retry && <>
+        {report.sync&&<><Box component="div" className="run-detail"><Text component="dt">SYNC</Text><Text component="dd" className="metadata-code">{report.sync.planId}</Text></Box><Box component="div" className="run-detail"><Text component="dt">{locale==='ru'?'Изменения':'Changes'}</Text><Text component="dd">{countText([[report.sync.added,locale==='ru'?'добавлено':'added'],[report.sync.updated,locale==='ru'?'обновлено':'updated'],[report.sync.reused,locale==='ru'?'без изменений':'unchanged'],[report.sync.kept,locale==='ru'?'оставлено':'kept'],[report.sync.excluded,locale==='ru'?'исключено':'excluded'],[report.sync.linkPatches,locale==='ru'?'ссылок исправлено':'links repaired'],[report.sync.unresolvedReferences,locale==='ru'?'ссылок требуют проверки':'links need review']])??t('notAvailable')}</Text></Box></>}
+        {report.retry&&!report.sync && <>
           <Box component="div" className="run-detail"><Text component="dt">{t('retryAttempt')}</Text><Text component="dd">#{report.retry.attempt}</Text></Box>
           <Box component="div" className="run-detail"><Text component="dt">{t('retryRoot')}</Text><Text component="dd" className="metadata-code">{report.retry.rootRunId}</Text></Box>
           <Box component="div" className="run-detail"><Text component="dt">{t('previousRun')}</Text><Text component="dd" className="metadata-code">{report.retry.parentRunId}</Text></Box>

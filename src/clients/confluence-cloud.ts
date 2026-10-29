@@ -6,6 +6,7 @@ import type {Readable} from 'node:stream';
 import {Transform} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import FormData from 'form-data';
+import {parseTrashEvidence} from '../confluence-trash.js';
 import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {RetryingHttpClient} from '../http.js';
@@ -37,6 +38,13 @@ function cloudRoot(baseUrl: string): string {
 }
 
 export class CloudConfluenceClient implements ConfluenceApi {
+  async trashEvidence(id:string,status:'current'|'trashed'='current') {
+    return this.readLimit(async()=>{const response=await this.http.request<unknown>({method:'GET',url:`/rest/api/content/${encodeURIComponent(id)}`,params:{status,expand:'version,childTypes.page,operations'}});return parseTrashEvidence(response.data,id);});
+  }
+  async trashPublishedLeaf(id:string,version:string):Promise<void> {
+    const evidence=await this.trashEvidence(id);if(!evidence.allowed||evidence.version!==version)throw new Error('Trash preview is stale or the page is not a proved published leaf');
+    await this.writeLimit(async()=>{await this.http.request({method:'DELETE',url:`/api/v2/pages/${encodeURIComponent(id)}`,params:{purge:false,draft:false}});});
+  }
   private readonly baseUrl: string;
   private readonly http: RetryingHttpClient;
   private readonly readLimit: <T>(task: () => Promise<T>) => Promise<T>;

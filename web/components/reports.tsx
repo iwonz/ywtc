@@ -151,7 +151,8 @@ export function Reports({
 							<span className="grow muted">
 								{new Date(r.finishedAt ?? r.startedAt).toLocaleString()}
 							</span>
-							{r.retry && (
+							{r.sync&&<span className="mono">sync · {r.sync.planId.slice(0,8)}</span>}
+							{r.retry&&!r.sync && (
 								<span className="mono">
 									retry {r.retry.attempt} · {r.retry.rootRunId.slice(0, 8)}
 								</span>

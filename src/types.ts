@@ -226,6 +226,8 @@ export interface YandexWikiApi {
 }
 
 export interface ConfluenceApi {
+  trashEvidence?(id:string,status?:'current'|'trashed'):Promise<import('./confluence-trash.js').TrashEvidence>;
+  trashPublishedLeaf?(id:string,version:string):Promise<void>;
   getSpace?(key: string): Promise<ConfluenceSpace>;
   getSpacePages?(space: ConfluenceSpace, signal?: AbortSignal): Promise<ConfluencePage[]>;
   getCurrentUser(): Promise<Record<string, unknown>>;

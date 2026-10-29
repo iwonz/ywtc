@@ -113,6 +113,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const {runRetryCommand} = await import('./retry-command.js');
     return runRetryCommand(command);
   }
+  if(command.command==='sync'){
+    const {runSyncCommand}=await import('./sync-command.js');
+    return runSyncCommand(command);
+  }
   if (command.command === 'mentions-export' || command.command === 'hashtags-export') {
     const {runMentionExportCommand} = await import('./mention-command.js');
     return runMentionExportCommand(command);

@@ -268,6 +268,8 @@ export interface TransferReportSummary {
 }
 
 export interface TransferReportData {
+  operation?: 'migrate'|'retry'|'sync';
+  sync?: import('./sync-contract.js').SyncRunMetadata;
   container?: TransferReportPage;
   runId: string;
   startedAt: string;

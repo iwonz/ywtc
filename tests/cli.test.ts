@@ -6,6 +6,18 @@ import {cliHelp, parseCliArguments} from '../src/cli-arguments.js';
 import {readWorkspaceConfig, secretValues, validateProfileSecrets} from '../src/config.js';
 import {resolveDestinationLocator, resolveSourceLocator, sameRemoteInstance} from '../src/locators.js';
 
+describe('reviewed synchronization CLI',()=>{
+  const run='1a715148-31fc-4a37-bdc0-e3f9a8c4c187',plan='27c90d20-a0ed-49b2-91b3-d056e684177c';
+  it('parses run-bound analysis and explicit application without new endpoint overrides',()=>{
+    expect(parseCliArguments(['sync',run,'-s','https://wiki.example.com/section','-w','workspace'])).toEqual({command:'sync',action:'analyze',runId:run,source:'https://wiki.example.com/section',workdir:'workspace'});
+    expect(parseCliArguments(['sync','apply',plan,'--confirm-trash','-w','workspace'])).toEqual({command:'sync',action:'apply',planId:plan,confirmTrash:true,workdir:'workspace'});
+    expect(cliHelp('sync')).toContain('apply');
+  });
+  it('rejects missing IDs, last, blank source and migration overrides',()=>{
+    for(const args of [['sync'],['sync','last'],['sync','apply','last'],['sync',run,'-s',' '],['sync',run,'--destination','x']])expect(()=>parseCliArguments(args)).toThrow();
+  });
+});
+
 const yaml = `defaults: { timeoutMs: 30000, concurrency: 4 }
 connections:
   wiki-main:

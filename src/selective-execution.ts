@@ -331,7 +331,7 @@ export async function readSelectivePreview(
 	if (result.id !== id) throw new Error('Invalid preview identity');
 	return result;
 }
-async function exportEvidence(directory: string): Promise<string> {
+export async function exportEvidence(directory: string): Promise<string> {
 	const files: Array<[string, string]> = [];
 	async function visit(relative: string): Promise<void> {
 		const filename = path.join(directory, relative),

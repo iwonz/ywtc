@@ -8,6 +8,12 @@ import {resolveWorkspace} from '../src/workspace.js';
 const configuration = {connections: {wiki: {type: 'yandex-wiki', webUrl: 'https://wiki.example.com', apiUrl: 'https://api.example.com', token: 'private-source-token', organization: {id: '1'}}}};
 const request = {kind: 'scan', source: 'a', sourceProfile: 'wiki', scope: 'page', sourceStatus: 'all', comments: false, kinds: ['mentions']} as const;
 describe('shared programmatic operations', () => {
+  it('restores synchronization requests and applies through the same prepared operation service',async()=>{const {syncFixture,syncConfig,syncOptions,sourcePage}=await import('./sync-fixture.js'),{Migrator}=await import('../src/migrator.js'),{prepareOperation,executeOperation}=await import('../src/operations.js'),fixture=syncFixture(),root=await mkdtemp(path.join(os.tmpdir(),'ywtc-sync-operation-')),workspace=await resolveWorkspace({explicit:root});
+    const {name:_source,...source}=fixture.source.profile,{name:_destination,...destination}=fixture.destination.profile;await writeFile(workspace.configFile,JSON.stringify({connections:{source,destination}}));
+    const baseline=await new Migrator(syncConfig,{info:()=>{},warn:()=>{},error:()=>{}},fixture.factory).run(syncOptions(root));fixture.sources.set('2',sourcePage('2','New','New body','1'));
+    const prepared=await prepareOperation({kind:'sync-plan',runId:baseline.reportPaths.runId},workspace),analyzed=await executeOperation(prepared,workspace,{},fixture.factory);expect(analyzed).toMatchObject({exitCode:0,planId:expect.any(String)});expect(JSON.stringify(prepared)).not.toContain('fixture-source');
+    const apply=await prepareOperation({kind:'sync-apply',planId:analyzed.planId},workspace),result=await executeOperation(apply,workspace,{},fixture.factory);expect(result.exitCode).toBe(0);expect(fixture.creates).toHaveLength(2);
+  });
   it('pins effective policies and refuses changed profile identity without persisting credentials', async () => {
     const {prepareOperation, restoreOperationConfig} = await import('../src/operations.js');
     const root = await mkdtemp(path.join(os.tmpdir(), 'ywtc-operation-')), workspace = await resolveWorkspace({explicit: root});

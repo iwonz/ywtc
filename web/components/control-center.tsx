@@ -19,6 +19,7 @@ import { Reports } from './reports';
 import { Decisions } from './decisions';
 import { Settings } from './settings';
 import { MigrationForm } from './migration-form';
+import {Synchronization} from './synchronization';
 
 export function ControlCenter() {
 	const [connected, setConnected] = useState(false),
@@ -179,6 +180,7 @@ export function ControlCenter() {
 								['reports', t('Миграции и отчёты', 'Migrations & reports')],
 								['jobs', t('Задачи', 'Tasks')],
 								['decisions', 'Decisions'],
+								['sync',t('Синхронизация','Synchronization')],
 								['settings', t('Подключения', 'Connections')],
 							].map(([id, label]) => (
 								<Button
@@ -227,6 +229,7 @@ export function ControlCenter() {
 							onJob={showJob}
 						/>
 					)}
+					{workspace&&tab==='sync'&&<Synchronization key={workspace} root={root} t={t} onError={fail} onJob={showJob}/>}
 					{workspace && tab === 'settings' && (
 						<Settings key={workspace} root={root} t={t} onError={fail} />
 					)}

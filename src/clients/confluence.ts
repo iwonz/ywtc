@@ -6,6 +6,7 @@ import type {Readable} from 'node:stream';
 import {Transform} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import FormData from 'form-data';
+import {parseTrashEvidence} from '../confluence-trash.js';
 import PQueue from 'p-queue';
 import type {ConfluenceConnectionProfile, NetworkLimits} from '../config.js';
 import {HttpRequestError, RetryingHttpClient} from '../http.js';
@@ -63,6 +64,13 @@ type DataCenterConfig = Pick<ConfluenceConnectionProfile, 'baseUrl' | 'token'> &
 type QueueRunner = <T>(task: () => Promise<T>) => Promise<T>;
 
 export class DataCenterConfluenceClient implements ConfluenceApi {
+  async trashEvidence(id:string,status:'current'|'trashed'='current') {
+    return this.readLimit(async()=>{const response=await this.http.request<unknown>({method:'GET',url:`/rest/api/content/${encodeURIComponent(id)}`,params:{status,expand:'version,childTypes.page,operations'}});return parseTrashEvidence(response.data,id);});
+  }
+  async trashPublishedLeaf(id:string,version:string):Promise<void> {
+    const evidence=await this.trashEvidence(id);if(!evidence.allowed||evidence.version!==version)throw new Error('Trash preview is stale or the page is not a proved published leaf');
+    await this.writeLimit(async()=>{await this.http.request({method:'DELETE',url:`/rest/api/content/${encodeURIComponent(id)}`,params:{status:'current'}});});
+  }
   private readonly http: RetryingHttpClient;
   private readonly readLimit: QueueRunner;
   private readonly writeLimit: QueueRunner;
@@ -166,7 +174,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         if (signal?.aborted) throw signal.reason ?? new Error('Space discovery cancelled');
         if (seen.has(start)) throw new Error('Confluence space pagination repeated an offset');
         seen.add(start);
-        const response = await this.http.request<unknown>({method: 'GET', url: `/rest/api/space/${encodeURIComponent(space.key)}/content/page`, ...(signal ? {signal} : {}), params: {start, limit: 100, depth: 'all', expand: 'space,version,ancestors,body.storage,body.view'}});
+        const response = await this.http.request<unknown>({method: 'GET', url: `/rest/api/space/${encodeURIComponent(space.key)}/content/page`, ...(signal ? {signal} : {}), params: {start, limit: 100, depth: 'all', expand: 'space,version,ancestors,body.storage'}});
         const batch = parseConfluenceList(dataCenterPageSchema, response.data, 'listing Data Center source space pages');
         let added = 0;
         for (const item of batch.results) {
@@ -189,7 +197,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
       const response = await this.http.request<unknown>({
         method: 'GET',
         url: `/rest/api/content/${encodeURIComponent(id)}`,
-        params: {expand: 'space,version,ancestors,body.storage,body.view,operations'},
+        params: {expand: 'space,version,ancestors,body.storage,operations'},
       });
       return normalizeDataCenterPage(parseConfluenceResponse(dataCenterPageSchema, response.data, `reading Data Center page ${id}`));
     });
@@ -380,7 +388,7 @@ export class DataCenterConfluenceClient implements ConfluenceApi {
         const response = await this.http.request<unknown>({
           method: 'GET',
           url: `/rest/api/content/${encodeURIComponent(pageId)}/descendant/page`,
-          params: {start, limit: 100, expand: 'space,version,ancestors,body.storage,body.view'},
+          params: {start, limit: 100, expand: 'space,version,ancestors,body.storage'},
         });
         const page = parseConfluenceList(dataCenterPageSchema, response.data, `listing descendants of Data Center page ${pageId}`);
         results.push(...page.results.map(normalizeDataCenterPage));

@@ -81,6 +81,7 @@ const uiHelp = await execFileAsync(executable, ['ui', '--help'], {encoding: 'utf
 if (!uiHelp.stdout.includes('--port') || !uiHelp.stdout.includes('--no-open')) throw Error('Packaged UI help is incomplete');
 const jobsHelp = await execFileAsync(executable, ['migrations', '--help'], {encoding: 'utf8'});
 if (!jobsHelp.stdout.includes('logs') || !jobsHelp.stdout.includes('stop')) throw Error('Packaged job controls are missing');
+const syncHelp=await execFileAsync(executable,['sync','--help'],{encoding:'utf8'});if(!syncHelp.stdout.includes('apply')||!syncHelp.stdout.includes('--source'))throw Error('Packaged synchronization commands are missing');
 const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {version: string};
 if (version.stdout.trim() !== packageJson.version) throw new Error('Installed ywtc version does not match package.json');
 await execFileAsync(executable, ['--help'], {encoding: 'utf8'});
@@ -461,4 +462,16 @@ try {
     if (attempt === 199) throw Error('Packaged background operation did not finish after UI closed');await new Promise(resolve => setTimeout(resolve, 100));
   }
 } finally {ui.kill('SIGTERM');apiFixture.closeAllConnections();await new Promise<void>(resolve => apiFixture.close(() => resolve()));}
+process.stdout.write('Verifying installed synchronization analysis and managed expansion...\n');
+const syncWorkdir=path.join(temporary,'installed-sync');await mkdir(syncWorkdir);let expandedAccess=false;
+const syncRequests:string[]=[],syncPage=(id:string)=>({id,type:'page',title:id==='1'?'Root':'New page',status:'current',space:{key:'DOC'},version:{number:1},ancestors:id==='1'?[]:[{id:'1'}],body:{storage:{value:`<p>${id==='1'?'Root body':'New body'}</p>`,representation:'storage'}},_links:{webui:`/pages/${id}`}});
+const syncServer=createServer((request,response)=>{syncRequests.push(`${request.method} ${request.url}`);const url=new URL(request.url!,'http://example.test');response.setHeader('content-type','application/json');if(url.pathname==='/rest/api/settings/systemInfo')response.end(JSON.stringify({version:'9.5.2'}));else if(url.pathname.endsWith('/child/attachment'))response.end(JSON.stringify({results:[],size:0}));else if(url.pathname.endsWith('/descendant/page'))response.end(JSON.stringify({results:expandedAccess?[syncPage('2')]:[],size:expandedAccess?1:0}));else if(/^\/rest\/api\/content\/[12]$/.test(url.pathname))response.end(JSON.stringify(syncPage(url.pathname.endsWith('/1')?'1':'2')));else{response.statusCode=404;response.end(JSON.stringify({message:'Unexpected synchronization fixture request'}));}});
+await new Promise<void>(resolve=>syncServer.listen(0,'127.0.0.1',resolve));
+try{
+ const port=(syncServer.address() as {port:number}).port;await writeFile(path.join(syncWorkdir,'ywtc.config.yaml'),stringifyYaml({connections:{source:{type:'confluence',deployment:'data-center',baseUrl:`http://127.0.0.1:${port}`,authType:'pat',token:'package-fixture-token'}}}),{mode:0o600});
+ const output=path.join(temporary,'sync-export');const initial=await execFileAsync(executable,['migrate','-s','1','-d',output,'-f','markdown','-N','-w',syncWorkdir],{encoding:'utf8'}),runId=initial.stdout.match(/Run ID\s+([a-f0-9-]{36})/)?.[1];if(!runId)throw Error('Installed migration did not return a Run ID');
+ expandedAccess=true;const analysis=await execFileAsync(executable,['sync',runId,'-w',syncWorkdir],{encoding:'utf8'}),planId=analysis.stdout.match(/Plan ID\s+([a-f0-9-]{36})/)?.[1];if(!planId)throw Error('Installed synchronization did not persist a plan');
+ const applied=await execFileAsync(executable,['sync','apply',planId,'-w',syncWorkdir],{encoding:'utf8'});if(!applied.stdout.includes('file://'))throw Error('Installed synchronization did not return a report');
+ const manifest=JSON.parse(await readFile(path.join(output,'.ywtc-export.json'),'utf8'));if(manifest.pages.length!==2||manifest.pages.find((p:any)=>p.sourceCanonicalId==='source:confluence:1')?.path!=='index.md')throw Error('Installed synchronization changed established paths or lost added pages');if(syncRequests.some(method=>!method.startsWith('GET ')))throw Error('Filesystem sync mutated a provider');
+}finally{syncServer.closeAllConnections();await new Promise<void>(resolve=>syncServer.close(()=>resolve()));}
 process.stdout.write(`Package verified: ${packResult.filename}\n`);

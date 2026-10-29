@@ -17,6 +17,9 @@ import { atomicJson, JobStore } from './jobs/store.js';
 import { boundedPath } from './local-paths.js';
 import { redact } from './logger.js';
 import { readSelectivePreview } from './selective-execution.js';
+import {SyncPlanStore,SyncRevisionError} from './sync-store.js';
+import type {PreparedSync} from './sync-execution.js';
+import {renderCommentArchive} from './comments.js';
 import type { TransferReportData } from './report-contract.js';
 import {
 	activateDecision,
@@ -341,6 +344,18 @@ export class LocalControlCenter {
 					return json(await createProviderAdapter(profile, config).preflight());
 				}
 			}
+			if(area==='sync') {
+        const store=new SyncPlanStore(workspace.root);
+        if(method==='GET'&&!id){const p=page(),plans=await store.list();return json({items:plans.slice(p.offset,p.offset+p.limit).map(({items,...plan})=>({...plan,counts:items.reduce<Record<string,number>>((counts,item)=>{counts[item.classification]=(counts[item.classification]??0)+1;return counts;},{})})),total:plans.length});}
+        if(method==='GET'&&id){
+          const plan=await store.get(id),decisions=await store.decisions(id);
+          if(action==='links'){const prepared=await store.prepared<PreparedSync>(id),trash=new Set(Object.entries(decisions.decisions).filter(([,decision])=>decision==='trash').map(([id])=>id)),links=prepared.links.filter(link=>link.needsPatch||trash.has(link.targetId)).map(link=>({...link,title:prepared.baseline.baseline.pages.find(page=>page.sourceCanonicalId===link.pageId)?.sourceTitle??link.pageId,...(trash.has(link.targetId)?{destinationUrl:plan.items.find(item=>item.id===link.targetId)?.sourceUrl}: {})})),p=page();const groups=new Map<string,any>();for(const link of links){const key=JSON.stringify([link.pageId,link.location,link.targetId,link.href,link.native]);const existing=groups.get(key);if(existing)existing.occurrences++;else groups.set(key,{...link,id:key,occurrences:1});}const rows=[...groups.values()];return json({items:rows.slice(p.offset,p.offset+p.limit),total:rows.length});}
+          if(action==='detail'){const itemId=url.searchParams.get('pageId')??'',prepared=await store.prepared<PreparedSync>(id),row=prepared.baseline.baseline.pages.find(page=>page.sourceCanonicalId===itemId),item=plan.items.find(item=>item.id===itemId)??(row?{id:itemId,title:row.sourceTitle}:undefined);if(!item)throw new HttpError(404,'Synchronization item not found');const sourceRecord=prepared.records?.[itemId],resources=Object.entries(sourceRecord?.files??{}).map(([resourceId,file])=>({id:resourceId,name:sourceRecord!.resources.find(r=>r.id===resourceId)?.preferredName??sourceRecord!.resources.find(r=>r.id===resourceId)?.name??resourceId,size:file.size,sha256:file.sha256,previousSha256:prepared.state?.pages[itemId]?.resources[resourceId]?.sha256})),inventory=sourceRecord?.comments,comments=inventory?{current:prepared.reads[itemId]?.comment?.body??'',proposed:inventory.status==='complete'?renderCommentArchive(inventory,prepared.baseline.baseline.destination.provider==='filesystem'?(prepared.baseline.baseline.destination.format==='html'?'html':'markdown'):prepared.baseline.baseline.destination.provider,{sourceUrl:sourceRecord!.page.url,mentionPolicy:prepared.policies.mentions,hashtagPolicy:prepared.policies.hashtags}):''}:undefined;return json({item,resources,comments,preview:prepared.previews[itemId]??{current:prepared.reads[itemId]?.page.content??'',proposed:prepared.reads[itemId]?.page.content??''},links:prepared.links.filter(link=>link.pageId===itemId)});}
+          const p=page(),query=(url.searchParams.get('q')??'').toLowerCase(),filter=url.searchParams.get('filter')??'all',items=plan.items.filter(item=>(filter==='all'||item.classification===filter)&&`${item.title} ${item.id} ${item.reasons.join(' ')}`.toLowerCase().includes(query)),missingDecisions=plan.items.filter(item=>['changed','unknown-baseline'].includes(item.classification)&&!decisions.decisions[item.id]).length;
+          return json({...plan,items:items.slice(p.offset,p.offset+p.limit),total:items.length,decisions,missingDecisions});
+        }
+        if(method==='PUT'&&id){const input=z.object({revision:z.string(),document:z.unknown()}).strict().parse(await this.body(request));const plan=await store.setDecisions(id,input.document,input.revision);return json({revision:plan.revision});}
+      }
 			if (area === 'jobs') {
 				await reconcileInterruptedJobs(workspace);
 				const store = new JobStore(workspace.root);
@@ -353,6 +368,7 @@ export class LocalControlCenter {
 						})
 						.strict()
 						.parse(await this.body(request));
+					if(input.request.kind==='sync-apply'&&!input.confirmed)throw new HttpError(400,'Explicit synchronization apply confirmation is required');
 					if (
 						(input.request.kind === 'migrate' ||
 							input.request.kind === 'retry' ||
@@ -563,7 +579,7 @@ export class LocalControlCenter {
 			const status =
 				error instanceof HttpError
 					? error.status
-					: error instanceof SettingsRevisionError ||
+					: error instanceof SettingsRevisionError || error instanceof SyncRevisionError ||
 							(error instanceof Error &&
 								/revision changed|reload before|immutable/.test(error.message))
 						? 409

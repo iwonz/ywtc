@@ -39,7 +39,7 @@ function mockWikiDestination(profile: YandexConnectionProfile, id = 100, slug = 
 function mockConfluenceSource(profile: ConfluenceConnectionProfile, id = '10', content = '<h1>Root</h1><p>Body</p>') {
   return nock(new URL(profile.baseUrl).origin, {reqheaders: {authorization: `Bearer ${profile.token}`}})
     .get('/confluence/rest/api/settings/systemInfo').reply(200, {version: '9.2.0'})
-    .get(`/confluence/rest/api/content/${id}`).query({expand: 'space,version,ancestors,body.storage,body.view,operations'})
+    .get(`/confluence/rest/api/content/${id}`).query({expand: 'space,version,ancestors,body.storage,operations'})
     .reply(200, {id, type: 'page', title: 'Root', space: {key: 'DOC'}, version: {number: 1}, body: {storage: {value: content, representation: 'storage'}}})
     .get(`/confluence/rest/api/content/${id}/child/attachment`).query({start: 0, limit: 100, expand: 'extensions,metadata'})
     .reply(200, {results: [], size: 0});
@@ -48,7 +48,7 @@ function mockConfluenceSource(profile: ConfluenceConnectionProfile, id = '10', c
 function mockConfluenceDestination(profile: ConfluenceConnectionProfile, id = '100') {
   return nock(new URL(profile.baseUrl).origin, {reqheaders: {authorization: `Bearer ${profile.token}`}})
     .get('/confluence/rest/api/settings/systemInfo').reply(200, {version: '11.0.0'})
-    .get(`/confluence/rest/api/content/${id}`).query({expand: 'space,version,ancestors,body.storage,body.view,operations'})
+    .get(`/confluence/rest/api/content/${id}`).query({expand: 'space,version,ancestors,body.storage,operations'})
     .reply(200, {id, type: 'page', title: 'Archive', space: {key: 'DOC'}, version: {number: 1}, body: {storage: {value: '<p>Archive</p>', representation: 'storage'}}});
 }
 

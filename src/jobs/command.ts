@@ -39,7 +39,7 @@ function accepted(id: string, workspace: Workspace): void {
 		`\n◆ Background job accepted\n  Job ID    ${id}\n  Status    queued\n  Inspect   ywtc migrations show ${id} --workdir ${JSON.stringify(workspace.root)}\n  Logs      ywtc migrations logs ${id} --follow --workdir ${JSON.stringify(workspace.root)}`,
 	);
 }
-async function foreground(workspace: Workspace, id: string): Promise<void> {
+export async function foreground(workspace: Workspace, id: string): Promise<void> {
 	const interrupt = () => {
 			void stopJob(workspace, id, 130);
 		},

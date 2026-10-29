@@ -53,9 +53,9 @@ describe('personal source contracts', () => {
   it('reads Data Center space identity without a user lookup and paginates independent branches', async () => {
     const api = nock('https://confluence.example.com')
       .get(`/context/rest/api/space/${encodeURIComponent(key)}`).query({expand: 'homepage'}).reply(200, {id: 7, key, name: 'Personal notes', homepage: {id: '10'}})
-      .get(`/context/rest/api/space/${encodeURIComponent(key)}/content/page`).query({start: 0, limit: 100, depth: 'all', expand: 'space,version,ancestors,body.storage,body.view'})
+      .get(`/context/rest/api/space/${encodeURIComponent(key)}/content/page`).query({start: 0, limit: 100, depth: 'all', expand: 'space,version,ancestors,body.storage'})
       .reply(200, {results: [page('10')], size: 1, _links: {next: '?start=1'}})
-      .get(`/context/rest/api/space/${encodeURIComponent(key)}/content/page`).query({start: 1, limit: 100, depth: 'all', expand: 'space,version,ancestors,body.storage,body.view'})
+      .get(`/context/rest/api/space/${encodeURIComponent(key)}/content/page`).query({start: 1, limit: 100, depth: 'all', expand: 'space,version,ancestors,body.storage'})
       .reply(200, {results: [page('20')], size: 1});
     const client = new DataCenterConfluenceClient(profile, 1000, limits);
     expect(await client.getSpace(key)).toMatchObject({id: '7', key, homepageId: '10'});

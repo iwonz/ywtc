@@ -1131,6 +1131,7 @@ interface SemanticContent {
   structure: {lists: number; rows: number; details: number; asides: number; codeBlocks: number};
   macros: string[];
   layouts: string[];
+  nativePageReferences: string[];
 }
 
 function semanticContent(body: string, provider: SourcePage['provider']): SemanticContent {
@@ -1159,8 +1160,10 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     .filter(Boolean);
   const macroNames: string[] = [];
   const mentionMarkers: string[] = [];
+  const nativePageReferences:string[]=[];
   if (provider === 'confluence') {
     const storage = load(`<root>${body}</root>`, {xmlMode: true}, false);
+    storage('ri\\:page').each((_index,element)=>{const node=storage(element);nativePageReferences.push(`${node.attr('ri:content-id')??node.attr('ri:content-title')??''}|${node.attr('ri:space-key')??''}`);});
     storage('ac\\:structured-macro').each((_index, element) => {
       const macro = storage(element);
       const name = macro.attr('ac:name') ?? 'unknown';
@@ -1229,6 +1232,7 @@ function semanticContent(body: string, provider: SourcePage['provider']): Semant
     },
     macros: macroNames.sort(),
     layouts,
+    nativePageReferences:nativePageReferences.sort(),
   };
 }
 
@@ -1254,6 +1258,7 @@ export function semanticContentFingerprint(body: string, provider: SourcePage['p
 }
 
 export interface ContentVerificationResult {
+  normalizations?:string[];
   status: 'complete' | 'partial' | 'failed';
   differences: string[];
   adaptations: string[];
@@ -1302,6 +1307,7 @@ export function verifyDestinationContent(
     ...(!containsMultiset(actual.tableCells, expected.tableCells) ? ['tableCells'] : []),
     ...(!containsMultiset(actual.code, expected.code) ? ['code'] : []),
     ...(!containsMultiset(actual.links, expected.links) ? ['links'] : []),
+    ...(!containsMultiset(actual.nativePageReferences,expected.nativePageReferences)?['nativePageReferences']:[]),
     ...(!containsMultiset(actual.anchorLinks, expected.anchorLinks) ? ['anchorLinks'] : []),
     ...(!containsMultiset(actual.images, expected.images) ? ['images'] : []),
     ...(!containsMultiset(actual.anchors, expected.anchors) ? ['anchors'] : []),

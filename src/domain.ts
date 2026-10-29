@@ -329,7 +329,7 @@ export interface SourceStatusExclusion {
   depth?: number;
   discoveredFromId?: string;
   metadataComplete?: boolean;
-  reason: 'source-status' | 'inventory-drift';
+  reason: 'source-status' | 'inventory-drift' | 'operator-trash';
   status?: string;
 }
 
@@ -368,6 +368,10 @@ export interface SourceAdapter {
 export type SourceRoot = {kind: 'page'; item: SourcePage} | {kind: 'space'; item: SourcePage & {sourceSpace: import('./types.js').ConfluenceSpace}};
 
 export interface DestinationAdapter {
+  trashEvidence?(page:DestinationPage):Promise<import('./confluence-trash.js').TrashEvidence>;
+  trashPage?(page:DestinationPage):Promise<void>;
+  verifyTrashedPage?(page:DestinationPage):Promise<boolean>;
+  resolveNativePageReference?(reference:{id?:string;title:string;space?:string},context:DestinationPage):Promise<{id:string;title:string;space:string}|undefined>;
   readonly profile: ConnectionProfile;
   readonly kind: ProviderKind;
   readonly capabilities: AdapterCapabilities;

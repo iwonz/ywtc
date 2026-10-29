@@ -94,10 +94,10 @@ describe('provider clients', () => {
   it('rejects incomplete pages and malformed lists before consumers access them', async () => {
     const api = nock('https://conf.example.test')
       .get('/confluence/rest/api/content/10')
-      .query({expand: 'space,version,ancestors,body.storage,body.view,operations'})
+      .query({expand: 'space,version,ancestors,body.storage,operations'})
       .reply(200, {id: '10', type: 'page', title: 'Missing space'})
       .get('/confluence/rest/api/content/10/descendant/page')
-      .query({start: 0, limit: 100, expand: 'space,version,ancestors,body.storage,body.view'})
+      .query({start: 0, limit: 100, expand: 'space,version,ancestors,body.storage'})
       .reply(200, {items: []});
     const client = new DataCenterConfluenceClient(dc, 5_000, limits);
     await expect(client.getPage('10')).rejects.toThrow(/invalid response.*space/iu);
@@ -268,7 +268,7 @@ describe('provider clients', () => {
   it('reads Data Center descendants and streams attachment downloads', async () => {
     const api = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
       .get('/confluence/rest/api/content/10/descendant/page')
-      .query({start: 0, limit: 100, expand: 'space,version,ancestors,body.storage,body.view'})
+      .query({start: 0, limit: 100, expand: 'space,version,ancestors,body.storage'})
       .reply(200, {results: [{id: '11', type: 'page', title: 'Child', space: {key: 'DOC'}, body: {storage: {value: '<p>x</p>', representation: 'storage'}}}]})
       .get('/confluence/download/attachments/10/file.txt').reply(200, 'hello', {'Content-Type': 'text/plain'});
     const client = new DataCenterConfluenceClient(dc, 5_000, limits);
@@ -282,7 +282,7 @@ describe('provider clients', () => {
 
   it('sends deployment-specific parent fields when updating Confluence pages', async () => {
     const dcApi = nock('https://conf.example.test', {reqheaders: {authorization: 'Bearer conf-token'}})
-      .get('/confluence/rest/api/content/10').query({expand: 'space,version,ancestors,body.storage,body.view,operations'})
+      .get('/confluence/rest/api/content/10').query({expand: 'space,version,ancestors,body.storage,operations'})
       .reply(200, {id: '10', type: 'page', title: 'Child', space: {key: 'DOC'}, version: {number: 2}, body: {storage: {value: '<p>x</p>', representation: 'storage'}}})
       .put('/confluence/rest/api/content/10', (body) => body.ancestors?.[0]?.id === '99' && body.version?.number === 3)
       .reply(200, {id: '10', type: 'page', title: 'Child', space: {key: 'DOC'}, ancestors: [{id: '99'}], version: {number: 3}, body: {storage: {value: '<p>x</p>', representation: 'storage'}}});

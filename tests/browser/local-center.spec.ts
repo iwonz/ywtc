@@ -5,12 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import {expect, test} from '@playwright/test';
 import {TransferReport} from '../../src/report.js';
+import {SyncPlanStore} from '../../src/sync-store.js';
+import {createSyncEvidence} from '../../src/sync-contract.js';
+import {sourcePage} from '../sync-fixture.js';
 let child: ChildProcess, origin: string, workdir: string;
 let fixture: ReturnType<typeof createServer>;
 test.use({timezoneId: 'UTC', locale: 'en-US'});
 const bootstrap = 'local-browser-fixture-secret';
 let cookies: Awaited<ReturnType<import('@playwright/test').BrowserContext['cookies']>> = [];
 const runId = '00000000-0000-4000-8000-000000000099';
+let syncPlanId:string;
 test.beforeAll(async () => {
   fixture = createServer((_request, response) => {response.setHeader('content-type', 'application/json');response.end(JSON.stringify({id: 1, slug: 'page', title: 'Fixture source', page_type: 'page', content: 'Hello @ivan #topic'}));});
   await new Promise<void>(resolve => fixture.listen(0, '127.0.0.1', resolve));
@@ -23,6 +27,7 @@ test.beforeAll(async () => {
   report.addPage({...base, sourceCanonicalId: 'root', sourceTitle: 'Root page', status: 'complete', resourceItems: [], resourceFallbacks: [], warnings: []});
   report.addPage({...base, sourceId: 'child', sourceCanonicalId: 'child', sourceTitle: 'Child failed', parentId: 'root', depth: 1, status: 'failed', resourceItems: [], resourceFallbacks: [], warnings: [], error: 'Fixture timeout'}, {source: '<p>Source text</p><script>parent.window.xss = true</script>', destination: '<p>Destination text</p>'});
   report.finish('partial');report.data.startedAt = '2026-01-01T12:00:00.000Z';report.data.finishedAt = '2026-01-01T12:01:00.000Z';await report.write(path.join(workdir, '.states/reports'));
+  const page=sourcePage('1','Reviewed page','New body'),evidence=createSyncEvidence(page,[],undefined,{mentions:{mode:'off'},hashtags:{mode:'off'}}),plan=await new SyncPlanStore(workdir).create({baselineRunId:runId,stateId:'0123456789abcdef01234567',sourceRootId:'1',sourceUrl:page.url,status:'review',items:[{id:'root',sourceId:'1',title:'Reviewed page',sourceUrl:page.url,classification:'changed',reasons:['body'],evidence,resources:0,comments:0,trash:{allowed:true}}],inventory:{complete:true,selected:1,failures:[]},references:{pages:1,comments:0,patches:0,unresolved:0}},{previews:{root:{current:'Current <script>window.xss=true</script>',proposed:'New body'}},links:[],baseline:{baseline:{pages:[]}}});syncPlanId=plan.id;
   child = spawn(process.execPath, [path.resolve('dist/web/server.js')], {stdio: 'pipe', env: {...process.env, PORT: String(port), HOSTNAME: '127.0.0.1', NEXT_TELEMETRY_DISABLED: '1', YWTC_UI_WORKDIR: workdir, YWTC_UI_BOOTSTRAP: bootstrap, YWTC_UI_RUNTIME: path.resolve('dist')}});
   let errors = '';child.stderr?.on('data', data => {errors += data;});child.stdout?.resume();
   for (let i = 0; i < 100; i++) {try {if ((await fetch(`${origin}/api/health`)).ok) return;} catch {}if (child.exitCode !== null) throw Error(errors);await new Promise(resolve => setTimeout(resolve, 100));}
@@ -87,3 +92,11 @@ test('report hierarchy, keyboard modal, sandbox, and paginated read-only evidenc
     await expect(page).toHaveScreenshot(`local-center-${theme}-${name}.png`, {fullPage: true, maxDiffPixelRatio: 0.04, mask: [page.getByRole('combobox', {name: 'Workspace'})]});
   }
 });
+
+test('synchronization review uses revision-checked decisions, keyboard modal and explicit confirmation',async({page,context})=>{await context.addCookies(cookies);await page.goto(origin);await page.getByRole('button',{name:'Synchronization',exact:true}).click();await page.getByRole('combobox',{name:'Synchronization plan',exact:true}).click();await page.getByRole('option').filter({hasText:'review'}).click();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeDisabled();await page.getByRole('button',{name:'Reviewed page',exact:true}).click();await expect(page.getByRole('dialog')).toContainText('Current <script>window.xss=true</script>');expect(await page.evaluate(()=>(window as any).xss)).toBeUndefined();await page.keyboard.press('Escape');
+ const tab=await context.newPage();await tab.goto(origin);await tab.getByRole('button',{name:'Synchronization',exact:true}).click();await tab.getByRole('combobox',{name:'Synchronization plan',exact:true}).click();await tab.getByRole('option').filter({hasText:'review'}).click();
+ await page.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await page.getByRole('option',{name:'Keep',exact:true}).click();await expect(page.getByText(/Decisions remaining/)).not.toBeVisible();
+ await tab.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await tab.getByRole('option',{name:'Update',exact:true}).click();await expect(tab.getByText(/revision.*changed|decisions.*changed/i)).toBeVisible();await tab.close();
+ await page.getByRole('checkbox',{name:/Confirm decisions/}).check();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeEnabled();
+ await page.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await page.getByRole('option',{name:'Trash',exact:true}).click();await page.getByRole('checkbox',{name:/Confirm decisions/}).check();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeDisabled();await page.getByRole('checkbox',{name:/Separately confirm/}).check();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeEnabled();
+ const spaces=await page.evaluate(async()=>fetch('/api/workspaces').then(r=>r.json())),w=spaces.items[0].id;const projection=await page.evaluate(async({w,id})=>fetch(`/api/w/${w}/sync/${id}`).then(r=>r.json()),{w,id:syncPlanId});expect(JSON.stringify(projection)).not.toContain('window.xss');await page.setViewportSize({width:390,height:844});await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeVisible();});

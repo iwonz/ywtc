@@ -15,6 +15,9 @@ import type {CommentInventory, ExportFormat, MentionOutcomeCounts, MentionProces
 import type {CommentTransferStatus} from './state.js';
 import {DestinationNameAllocator, preferredDestinationName, verifiedCacheFile} from './resource-reconciliation.js';
 import {acquireExclusiveLease} from './exclusive-lease.js';
+import {patchExportLinks} from './sync-static.js';
+import {applyTextPatches,xmlNodes} from './xml-patches.js';
+import {stableHash} from './sync-contract.js';
 
 export interface ExportManifestPage {
   sourceCanonicalId: string;
@@ -112,6 +115,7 @@ function separateContainer(manifest: ExportManifest, graph: PageGraph): void {
 }
 
 export interface FilesystemExportResult {
+  presentationHashes?:Record<string,{before:string;after:string;links:number}>;
   directory: string;
   mode: 'planned' | 'patched' | 'rebuilt';
   archive?: string;
@@ -272,6 +276,7 @@ export class FilesystemExporter {
     retryPageIds?: ReadonlySet<string>;
     retryResourceIds?: ReadonlyMap<string, ReadonlySet<string>>;
     preserveIdentity?: boolean;
+    allowExpansion?: boolean;
     preserveBodyPageIds?: ReadonlySet<string>;
     onPreparedPage?: (page: SourcePage, current: string, proposed: string) => void | Promise<void>;
     beforeCommit?: () => Promise<void>;
@@ -279,6 +284,7 @@ export class FilesystemExporter {
     loadDocument?: (page: SourcePage) => Promise<ReturnType<typeof normalizePageContent>>;
   }): Promise<FilesystemExportResult> {
     const warnings = [...input.graph.warnings];
+    const presentationHashes:NonNullable<FilesystemExportResult['presentationHashes']>={};
     const errors: string[] = [];
     const pagePaths = new Map(input.graph.pages.map((page) => [page.canonicalId, pagePath(page, input.format, input.graph.rootId)]));
     const manifest: ExportManifest = {
@@ -345,7 +351,9 @@ export class FilesystemExporter {
     if (input.preserveIdentity && previousManifest) for (const previous of manifestPages(previousManifest)) pagePaths.set(previous.sourceCanonicalId, previous.path);
     const patchExisting = previousManifest?.format === input.format
       && previousManifest.rootId === input.graph.rootId
-      && (input.preserveIdentity ? manifestPages(previousManifest).length === input.graph.pages.length && input.graph.pages.every(page => manifestPages(previousManifest).some(p => p.sourceCanonicalId === page.canonicalId)) : manifestMatchesGraph(previousManifest, input.graph, pagePaths));
+      && (input.preserveIdentity ? input.allowExpansion
+        ? manifestPages(previousManifest).every(previous=>input.graph.pages.some(page=>page.canonicalId===previous.sourceCanonicalId))
+        : manifestPages(previousManifest).length === input.graph.pages.length && input.graph.pages.every(page => manifestPages(previousManifest).some(p => p.sourceCanonicalId === page.canonicalId)) : manifestMatchesGraph(previousManifest, input.graph, pagePaths));
     if (input.preserveIdentity && !patchExisting) throw new Error('Managed export membership changed; prepare explicit recovery instead of rebuilding unselected pages');
     if (patchExisting) {
       await cp(input.directory, staging, {recursive: true, errorOnExist: true});
@@ -384,6 +392,7 @@ export class FilesystemExporter {
         const downloadedByResource = new Map<string, {path: string; size: number; sha256: string}>();
         const transferableResources = resources.filter((item) => item.kind !== 'grid');
         const previousPage = previousManifest?.pages.find((candidate) => candidate.sourceCanonicalId === page.canonicalId);
+        if(input.allowExpansion)for(const resource of previousPage?.resources??[])nameAllocator.reserve(resource.name);
         const targetedResourceIds = input.retryResourceIds?.get(page.canonicalId);
         for (const [resourceIndex, resource] of transferableResources.entries()) {
           const previousResource = previousPage?.resources.find((candidate) => candidate.sourceId === resource.id)
@@ -407,7 +416,7 @@ export class FilesystemExporter {
             downloadedByResource.set(resource.id, reusable);
             continue;
           }
-          const name = nameAllocator.allocate(resource);
+          const name = nameAllocator.allocate(resource,input.allowExpansion&&previousResource?.sourceId===resource.id?previousResource.name:undefined);
           await input.onActivity?.(`Downloading ${name} → ${page.title}`);
           const relative = `attachments/${stableSegment(page)}/${name}`;
           const destination = path.join(staging, relative);
@@ -561,6 +570,14 @@ export class FilesystemExporter {
         input.onItem?.(`page ${page.title}`);
       }
       manifest.pages.sort((left, right) => left.path.localeCompare(right.path));
+      if(input.allowExpansion){
+        const protectedUrls=new Set([...(input.mentionPolicy?.mode==='mapping'?input.mentionPolicy.document.entries.flatMap(e=>e.decision==='url'?[e.url]:[]):[]),...(input.hashtagPolicy?.mode==='mapping'?input.hashtagPolicy.document.entries.flatMap(e=>e.decision==='url'?[e.url]:[]):[])]);
+        const targets=manifest.pages.map(page=>({sourceUrl:page.sourceUrl,path:page.path}));
+        for(const page of manifest.pages){const filename=containedPath(staging,page.path)!,before=await readFile(filename,'utf8');let body=before;const repaired=patchExportLinks(body,input.format,page.path,page.sourceUrl,targets,protectedUrls);body=repaired.body;
+          if(input.format==='html'){const nav=xmlNodes(body).find(node=>node.name==='aside'&&node.attributes.class==='nav');if(nav)body=applyTextPatches(body,[{start:nav.start,end:nav.end,before:body.slice(nav.start,nav.end),after:`<aside class="nav"><a class="brand" href="${relativeHref(page.path,'index.html')}">ywtc export</a>${navigationFor(page.path)}</aside>`}]);}
+          if(body!==before){presentationHashes[page.sourceCanonicalId]={before:stableHash(before),after:stableHash(body),links:repaired.count};await writeFile(filename,body,{mode:0o600});}
+        }
+      }
       if (input.format === 'html') {
         await mkdir(path.join(staging, 'assets'), {recursive: true});
         await writeFile(path.join(staging, 'assets/site.css'), SITE_CSS, {mode: 0o600});
@@ -594,6 +611,7 @@ export class FilesystemExporter {
       return {
         directory: input.directory,
         mode: patchExisting ? 'patched' : 'rebuilt',
+        ...(input.allowExpansion?{presentationHashes}:{}),
         ...(archive ? {archive} : {}),
         ...(backup ? {backup} : {}),
         manifest,

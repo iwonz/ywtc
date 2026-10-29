@@ -2,9 +2,11 @@ import {Command, Option, type CommandUnknownOpts} from '@commander-js/extra-typi
 import type {ExportFormat, SourceStatus, TransferScope} from './domain.js';
 import {packageVersion} from './version.js';
 
-export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'reports' | 'mentions' | 'hashtags' | 'update' | 'ui' | 'migrations';
+export type CliHelpTopic = 'init' | 'doctor' | 'migrate' | 'retry' | 'sync' | 'reports' | 'mentions' | 'hashtags' | 'update' | 'ui' | 'migrations';
 
 export type CliCommand =
+  | {command:'sync';action:'analyze';runId:string;source?:string;workdir?:string}
+  | {command:'sync';action:'apply';planId:string;confirmTrash:boolean;workdir?:string}
   | {command: 'mentions-export'; background?: boolean; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
   | {command: 'hashtags-export'; background?: boolean; source: string; output: string; sourceProfile?: string; workdir?: string; scope: TransferScope; sourceStatus: SourceStatus; comments: boolean; concurrency?: number}
   | {command: 'ui'; workdir?: string; port: number; open: boolean}
@@ -224,6 +226,25 @@ export function createCliProgram(onCommand: (command: CliCommand) => void = () =
       });
     });
 
+  const sync=program.command('sync').description('Analyze an existing migration and review incremental changes')
+    .argument('[run-id]','canonical live Run ID')
+    .option('-s, --source <locator>','restrict discovery to a subtree of the original source')
+    .option('-w, --workdir <path>','existing workspace')
+    .action((runId,options)=>{
+      if(!runId||!runIdPattern.test(runId))throw new Error('sync requires a canonical live Run ID.');
+      onCommand({command:'sync',action:'analyze',runId,...(options.source!==undefined?{source:nonEmpty(options.source,'--source')!}:{}),...(options.workdir?{workdir:options.workdir}:{})});
+    });
+  sync.command('apply').description('Apply the current reviewed synchronization decisions')
+    .argument('<plan-id>','canonical synchronization Plan ID')
+    .option('-w, --workdir <path>','existing workspace')
+    .option('--confirm-trash','separately confirm explicit reversible leaf-trash decisions',false)
+    .action((planId,options)=>{
+      if(!runIdPattern.test(planId))throw new Error('sync apply requires a canonical Plan ID.');
+      if(sync.opts().source!==undefined)throw new Error('--source is only valid when analyzing synchronization.');
+      const workdir=options.workdir??sync.opts().workdir;
+      onCommand({command:'sync',action:'apply',planId,confirmTrash:options.confirmTrash,...(workdir?{workdir}:{})});
+    });
+
   for (const kind of ['mentions', 'hashtags'] as const) program.command(kind).description(`Export source ${kind} for explicit decisions`).command('export')
     .description('Create decisions.json and an offline editor from source pages and comments')
     .option('-b, --background', 'durably queue work and return its Job ID', false)
@@ -279,7 +300,7 @@ export function parseCliArguments(argv: string[]): CliCommand {
   const helpIndex = argv.findIndex((value) => ['--help', '-h'].includes(value));
   if (helpIndex >= 0) {
     const topic = argv[0];
-    return ['init', 'doctor', 'migrate', 'retry', 'reports', 'mentions', 'hashtags', 'update', 'ui', 'migrations'].includes(topic ?? '')
+    return ['init', 'doctor', 'migrate', 'retry', 'sync', 'reports', 'mentions', 'hashtags', 'update', 'ui', 'migrations'].includes(topic ?? '')
       ? {command: 'help', topic: topic as CliHelpTopic}
       : {command: 'help'};
   }
@@ -307,6 +328,7 @@ export function cliHelp(topic?: CliHelpTopic): string {
   const program = createCliProgram();
   if (!topic) return program.helpInformation();
   const command = program.commands.find((candidate) => candidate.name() === topic);
+  if(topic==='sync')return [command!.helpInformation(),command!.commands[0]!.helpInformation()].join('\n');
   if (topic === 'mentions' || topic === 'hashtags') return command!.commands[0]!.helpInformation();
   return command?.helpInformation() ?? program.helpInformation();
 }

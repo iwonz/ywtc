@@ -43,7 +43,7 @@ When changing a public option, default, configuration field, status, retry rule,
 
 - Never add tokens, authorization headers, populated secrets, internal organization names, migration-specific domains, user-home paths, downloaded attachments, state, cache, or generated reports to tracked files.
 - Keep automatic state, cache, backups, and reports under the selected workdir's `.states/`; an explicit `--state` path must remain inside that workdir. Keep direct credentials only in its ignored `ywtc.config.yaml`. Exclude runtime files from Git and npm; tracked configuration examples MUST use empty secrets and example domains.
-- Do not delete source or destination content, files, or comments on any provider. Preserve resumability and dry-run's no-destination-mutation guarantee.
+- Do not delete source content, attachments, comments or versions, or purge destination content. The sole exception is separately confirmed `sync` trash of a mapped published Confluence leaf with fresh authoritative no-children evidence, reversible trash and read-back; preserve its mapping and explicit exclusion. Preserve resumability and dry-run's no-destination-mutation guarantee.
 - Do not weaken TLS verification or secret redaction.
 - Mention processing is explicit `off`/`mapping` only. Keep historical state/report values readable without restoring lookup behavior; source-only mention exports must not read resources or mutate migration state. Decision bundles contain private identities and source contexts and must not be tracked or packed as runtime data.
 - Use `apply_patch` for source edits and preserve unrelated user changes.

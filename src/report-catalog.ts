@@ -9,6 +9,8 @@ import type {MigrationReportPaths} from './report.js';
 const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const reportListSchema = z.object({
+  operation:z.enum(['migrate','retry','sync']).optional(),
+  sync:z.object({planId:z.string().uuid(),baselineRunId:z.string(),added:z.number(),updated:z.number(),reused:z.number(),kept:z.number(),excluded:z.number(),linkPatches:z.number(),unresolvedReferences:z.number()}).optional(),
   source: z.object({kind: z.enum(['page', 'space']).optional()}).passthrough().optional(),
   runId: z.string().regex(runIdPattern),
   startedAt: z.string(),
@@ -78,6 +80,8 @@ const reportListSchema = z.object({
 });
 
 export interface ReportCatalogEntry {
+  operation?:'migrate'|'retry'|'sync';
+  sync?:z.infer<typeof reportListSchema>['sync'];
   sourceKind?: 'space';
   runId: string;
   startedAt: string;
@@ -263,6 +267,7 @@ async function readEntry(reportsDirectory: string, directoryName: string): Promi
     json,
     url: pathToFileURL(html).href,
     ...(parsed.retry ? {retry: parsed.retry} : {}),
+    ...(parsed.operation?{operation:parsed.operation}:{}),...(parsed.sync?{sync:parsed.sync}:{}),
   };
 }
 

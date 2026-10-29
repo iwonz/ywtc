@@ -70,7 +70,7 @@ function profileBinding(profile: ConnectionProfile): string {
 	return decisionRevision(rest);
 }
 async function effectiveMigration(
-	request: Extract<JobRequest, { kind: 'retry' | 'targeted' }>,
+	request: Extract<JobRequest, { kind: 'retry' | 'targeted' | 'sync-plan' }>,
 	workspace: Workspace,
 ) {
 	const baseline = await resolveRetryBaseline(
@@ -94,9 +94,9 @@ async function effectiveMigration(
 		sourceStatus: invocation.sourceStatus,
 		comments: invocation.comments,
 		archive: invocation.archive,
-		dryRun: request.dryRun,
+			dryRun: request.kind==='sync-plan'?true:request.dryRun,
 		stateFilename: invocation.state.path,
-		...((request.kind === 'retry' && request.rewrite) || invocation.rewrite
+		...((request.kind === 'retry' && request.rewrite) || (request.kind!=='sync-plan'&&invocation.rewrite)
 			? { rewrite: true }
 			: {}),
 		...(request.kind === 'retry' && request.concurrency !== undefined
@@ -111,9 +111,17 @@ export async function prepareOperation(
 	cwd = process.cwd(),
 ): Promise<PreparedOperation> {
 	let request = jobRequestSchema.parse(value);
+	if(request.kind==='sync-apply') {
+    const {SyncPlanStore}=await import('./sync-store.js');
+    const store=new SyncPlanStore(workspace.root),plan=await store.get(request.planId),saved=await store.prepared<import('./sync-execution.js').PreparedSync>(plan.id);
+    store.validateDecisions(plan,await store.decisions(plan.id));
+    if(request.revision&&request.revision!==plan.revision)throw new Error('Synchronization revision changed; refresh the plan');
+    const base=await prepareOperation({kind:'sync-plan',runId:saved.baseline.baseline.runId},workspace,cwd);
+    return {...base,request:{...request,revision:plan.revision}};
+  }
 	const config = readWorkspaceConfig(workspace.configFile);
 	const effective =
-		request.kind === 'retry' || request.kind === 'targeted'
+		request.kind === 'retry' || request.kind === 'targeted' || request.kind==='sync-plan'
 			? (await effectiveMigration(request, workspace)).migration
 			: request;
 	const source = resolveSourceLocator(
@@ -233,6 +241,10 @@ export async function executeOperation(
 		error: (message) => emit({ type: 'message', message }),
 	};
 	try {
+		if(request.kind==='sync-plan'||request.kind==='sync-apply') {
+      const service=await import('./sync-execution.js');
+      return request.kind==='sync-plan'?await service.analyzeSync(prepared,config,workspace,hooks,factory):await service.applySync(prepared,config,workspace,hooks,factory);
+    }
 		if (request.kind === 'scan') {
 			const source = resolveSourceLocator(
 				config,
@@ -439,7 +451,7 @@ export async function executeOperation(
 			? hooks.signal?.reason instanceof OperationCancelled
 				? hooks.signal.reason.exitCode
 				: 130
-			: 2;
+			: (request.kind==='sync-plan'||request.kind==='sync-apply')&&!(error&&typeof error==='object'&&'exitCode' in error&&error.exitCode===2)?1:2;
 		const message = redact(error, secrets);
 		emit({
 			type: 'diagnostic',
