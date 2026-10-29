@@ -2,6 +2,18 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.3.0](https://github.com/iwonz/ywtc/compare/v5.2.0...v5.3.0) (2026-10-29)
+
+
+### Features
+
+* **ui:** add local migration control center ([46bb056](https://github.com/iwonz/ywtc/commit/46bb056f843c30cabd29bc3365bc978b964c97e7))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v5.2.0 ([6485f05](https://github.com/iwonz/ywtc/commit/6485f055ebe634510c786f8d7a95669e24dea611))
+
 ## [5.2.0](https://github.com/iwonz/ywtc/compare/v5.1.1...v5.2.0) (2026-10-26)
 
 
