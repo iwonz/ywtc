@@ -59,6 +59,65 @@ test('workspace sidebar, collapse preference, help and repository link guide the
   await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Collapse sidebar',exact:true}).click();for(const button of await nav.getByRole('button').all())await expect(button).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)).toBe(true);
 });
 
+test('branded header and localized action labels fit narrow containers',async({page})=>{
+  await page.goto(origin);
+  const github=page.getByRole('link',{name:'Project on GitHub',exact:true});
+  await expect(github.locator('svg[data-brand="github"]')).toBeVisible();
+  expect(await github.evaluate(el=>el===document.querySelector('.header-controls')?.lastElementChild)).toBe(true);
+  await expect(page.getByText('Local folder with configuration and results.',{exact:true})).toHaveCount(0);
+  for(const locale of ['en','ru']) {
+    if(locale==='ru')await page.getByLabel('Language',{exact:true}).click();
+    for(const width of [360,768,1280]) {
+      await page.setViewportSize({width,height:900});
+      const action=page.getByRole('button',{name:locale==='ru'?'Подключить пространство':'Connect workspace',exact:true});
+      await expect(action).toBeVisible();
+      expect(await action.evaluate(el=>{
+        const icon=el.querySelector('.ui-button-icon')!,label=el.querySelector('.ui-button-label')!,box=el.getBoundingClientRect(),i=icon.getBoundingClientRect(),l=label.getBoundingClientRect(),parent=el.closest('.workspace-navigation')!.getBoundingClientRect();
+        return {fits:box.left>=parent.left-1&&box.right<=parent.right+1&&l.right<=box.right+1&&l.bottom<=box.bottom+1,leading:i.right<=l.left+1,readable:label.scrollWidth<=label.clientWidth+1};
+      })).toEqual({fits:true,leading:true,readable:true});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)).toBe(true);
+    }
+  }
+});
+
+test('illustrated empty areas guide the next action without empty pagination or writes',async({page,context})=>{
+  const external:string[]=[],writes:string[]=[],errors:string[]=[];
+  page.on('request',r=>{if(!r.url().startsWith(origin)&&!r.url().startsWith('data:'))external.push(r.url());if(r.method()!=='GET')writes.push(r.url());});page.on('pageerror',e=>errors.push(e.message));
+  await page.route(/\/api\/w\/[^/]+\/(settings|reports|jobs|sync|decisions)(?:\?|$)/,async route=>{
+    const response=await route.fetch(),data=await response.json();
+    if(/\/settings$/.test(route.request().url()))data.connections={};else {data.items=[];data.total=0;data.invalid=[];}
+    await route.fulfill({response,json:data});
+  });
+  await page.goto(origin);
+  const areas=[['Connections','connections'],['Migrations & reports','reports'],['Tasks','tasks'],['Synchronization','sync'],['Mentions & hashtags','decisions']] as const;
+  for(const [label,kind]of areas){
+    await page.getByRole('navigation',{name:'Work areas'}).getByRole('button',{name:label,exact:true}).click();
+    const state=page.locator(`[data-empty-state="${kind}"]`);await expect(state).toBeVisible();
+    const image=state.locator('img');await expect(image).toHaveAttribute('src',`/illustrations/${kind}.png`);await expect.poll(()=>image.evaluate((el:HTMLImageElement)=>el.complete&&el.naturalWidth>0)).toBe(true);await expect(image).toHaveAttribute('alt','');
+    await expect(page.getByRole('button',{name:'Previous page',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Next page',exact:true})).toHaveCount(0);
+    expect(await page.locator('button.ui-button:visible').evaluateAll(buttons=>buttons.filter(el=>el.textContent?.trim()&&el.getAttribute('role')!=='combobox'&&!el.querySelector('svg')).map(el=>el.textContent))).toEqual([]);
+    if(kind==='connections'){await state.getByRole('button',{name:'Add connection',exact:true}).click();await expect(page.getByRole('dialog',{name:'Connection profile',exact:true})).toBeVisible();await page.keyboard.press('Escape');}
+    if(kind==='tasks'||kind==='reports'){await state.getByRole('button',{name:'Prepare migration',exact:true}).click();await expect(page.getByRole('dialog',{name:'New migration',exact:true})).toBeVisible();await page.keyboard.press('Escape');}
+    if(kind==='sync'){await state.getByRole('button',{name:'New analysis',exact:true}).click();await expect(page.getByLabel('Original migration Run ID',{exact:true})).toBeFocused();await expect(page.getByRole('button',{name:'Analyze without writes',exact:true})).toBeDisabled();}
+    if(kind==='decisions'){await state.getByRole('button',{name:'Analyze source',exact:true}).click();await expect(page.getByRole('dialog',{name:'Source-only analysis',exact:true})).toBeVisible();await page.keyboard.press('Escape');}
+  }
+  await page.getByRole('navigation',{name:'Work areas'}).getByRole('button',{name:'Tasks',exact:true}).click();await expect(page.locator('[data-empty-state="tasks"]')).toBeVisible();
+  for(const theme of ['light','dark'])for(const [name,viewport]of [['desktop',{width:1280,height:900}],['mobile',{width:390,height:844}]]as const){
+    await page.evaluate(value=>{localStorage.setItem('ywtc-ui-theme',value);document.documentElement.classList.toggle('dark',value==='dark');document.documentElement.classList.toggle('light',value==='light');},theme);await page.setViewportSize(viewport);await page.mouse.move(0,0);await page.evaluate(()=>{(document.activeElement as HTMLElement)?.blur();window.scrollTo(0,0);});
+    await expect(page).toHaveScreenshot(`local-center-empty-${theme}-${name}.png`,{fullPage:true,maxDiffPixelRatio:0.01,mask:[page.getByRole('combobox',{name:'Workspace',exact:true})]});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)).toBe(true);
+  }
+  expect(external).toEqual([]);expect(writes).toEqual([]);expect(errors).toEqual([]);expect(await context.cookies()).not.toHaveLength(0);
+});
+
+test('delayed and failed collection reads never masquerade as empty success',async({page})=>{
+  let release!:()=>void;const held=new Promise<void>(resolve=>release=resolve);let failed=false;
+  await page.route(/\/api\/w\/[^/]+\/jobs(?:\?|$)/,async route=>{await held;if(failed)await route.fulfill({status:503,json:{error:'Fixture history is unavailable'}});else await route.fulfill({json:{items:[],total:0}});});
+  await page.goto(origin);await page.getByRole('button',{name:'Tasks',exact:true}).click();await expect(page.getByRole('status').filter({hasText:'Loading data'})).toBeVisible();await expect(page.locator('[data-empty-state]')).toHaveCount(0);
+  const failure=page.getByRole('alert').filter({hasText:'Fixture history is unavailable'});failed=true;release();await expect(failure).toBeVisible();await expect(page.locator('[data-empty-state]')).toHaveCount(0);
+  failed=false;await page.getByRole('button',{name:'Retry loading',exact:true}).click();await expect(page.locator('[data-empty-state="tasks"]')).toBeVisible();await expect(failure).toHaveCount(0);
+});
+
 test('migration form explains scope, required fields and options and invalidates live confirmation',async({page})=>{
   await page.goto(origin);await page.getByRole('button',{name:'New migration',exact:true}).click();const form=page.getByRole('dialog',{name:'New migration',exact:true});
   await expect(form.getByLabel('Source · URL / ID / slug / space URL',{exact:true})).toHaveAttribute('required','');await expect(form.getByRole('combobox',{name:'Source profile',exact:true})).toHaveAttribute('aria-required','true');
@@ -74,7 +133,7 @@ test('migration form explains scope, required fields and options and invalidates
 test('connecting another workspace selects its connections and clears report context',async({page})=>{
   const other=await mkdtemp(path.join(os.tmpdir(),'ywtc-ui-other-'));await page.goto(origin);await page.getByRole('button',{name:'Migrations & reports',exact:true}).click();await page.getByRole('button',{name:'Fixture migration',exact:true}).click();await expect(page.getByRole('treeitem')).toHaveCount(2);
   await page.getByRole('button',{name:'Connect workspace',exact:true}).click();await page.getByLabel('Absolute path',{exact:true}).fill(other);await page.getByRole('button',{name:'Create',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);await expect(page.getByRole('button',{name:'Connections',exact:true})).toHaveAttribute('aria-current','page');await expect(page.getByRole('combobox',{name:'Workspace',exact:true})).toContainText(await realpath(other));
-  await page.getByRole('button',{name:'Migrations & reports',exact:true}).click();await expect(page.getByText(/No reports yet/)).toBeVisible();await expect(page.getByRole('treeitem')).toHaveCount(0);
+  await page.getByRole('button',{name:'Migrations & reports',exact:true}).click();await expect(page.locator('[data-empty-state="reports"]')).toBeVisible();await expect(page.getByRole('treeitem')).toHaveCount(0);
   await page.getByRole('combobox',{name:'Workspace',exact:true}).click();await page.getByRole('option',{name:await realpath(workdir),exact:true}).click();await expect(page.getByRole('button',{name:'Connections',exact:true})).toHaveAttribute('aria-current','page');
 });
 
@@ -184,6 +243,7 @@ test('report hierarchy, keyboard modal, sandbox, and paginated read-only evidenc
   await page.getByRole('button', {name: 'Fixture migration', exact: true}).click();
   await expect(page.getByRole('treeitem').filter({hasText: 'Child failed'})).toHaveAttribute('aria-level', '2');
   const sourceLink=page.getByRole('treeitem').filter({hasText:'Child failed'}).getByRole('link',{name:'Source',exact:true});await expect(sourceLink).toHaveAttribute('href','https://wiki.example.com/root');await context.route('https://wiki.example.com/**',route=>route.abort());const opening=page.waitForEvent('popup');await sourceLink.click();await(await opening).close();await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByLabel('Search tree').fill('no matching fixture page');await expect(page.getByRole('button',{name:'Clear filters',exact:true})).toBeVisible();await expect(page.locator('[data-empty-state]')).toHaveCount(0);await page.getByRole('button',{name:'Clear filters',exact:true}).click();await expect(page.getByRole('treeitem')).toHaveCount(2);
   await page.getByLabel('Search tree').fill('Child failed');await expect(page.getByRole('treeitem')).toHaveCount(2);
   const child = page.getByRole('treeitem').filter({hasText: 'Child failed'});await child.focus();await page.keyboard.press('Enter');
   await expect(page.getByRole('dialog')).toBeVisible();await page.getByRole('tab', {name: 'Compare', exact: true}).click();
@@ -199,6 +259,7 @@ test('report hierarchy, keyboard modal, sandbox, and paginated read-only evidenc
 });
 
 test('synchronization review uses revision-checked decisions, keyboard modal and explicit confirmation',async({page,context})=>{await context.addCookies(cookies);await page.goto(origin);await page.getByRole('button',{name:'Synchronization',exact:true}).click();await page.getByRole('combobox',{name:'Synchronization plan',exact:true}).click();await page.getByRole('option').filter({hasText:'review'}).click();await expect(page.getByRole('button',{name:'Apply plan',exact:true})).toBeDisabled();await page.getByRole('button',{name:'Reviewed page',exact:true}).click();await expect(page.getByRole('dialog')).toContainText('Current <script>window.xss=true</script>');expect(await page.evaluate(()=>(window as any).xss)).toBeUndefined();await page.keyboard.press('Escape');
+ await page.getByLabel('Search pages',{exact:true}).fill('no matching sync fixture');await expect(page.getByRole('button',{name:'Clear filters',exact:true})).toBeVisible();await expect(page.locator('[data-empty-state]')).toHaveCount(0);await page.getByRole('button',{name:'Clear filters',exact:true}).click();await expect(page.getByRole('button',{name:'Reviewed page',exact:true})).toBeVisible();
  const tab=await context.newPage();await tab.goto(origin);await tab.getByRole('button',{name:'Synchronization',exact:true}).click();await tab.getByRole('combobox',{name:'Synchronization plan',exact:true}).click();await tab.getByRole('option').filter({hasText:'review'}).click();
  await page.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await page.getByRole('option',{name:'Keep',exact:true}).click();await expect(page.getByText(/Decisions remaining/)).not.toBeVisible();
  await tab.getByRole('combobox',{name:'Decision: Reviewed page',exact:true}).click();await tab.getByRole('option',{name:'Update',exact:true}).click();await expect(tab.getByRole('alert').getByText(/revision.*changed|decisions.*changed/i)).toBeVisible();await tab.close();

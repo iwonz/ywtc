@@ -22,4 +22,5 @@ async function portable(directory) {
 }
 await portable(output);
 await mkdir(path.join(output, 'public'), {recursive: true});
+await cp(path.join(root, 'web/public'), path.join(output, 'public'), {recursive: true});
 await cp(path.join(root, 'node_modules/@fontsource-variable/inter/files/inter-latin-cyrillic-wght-normal.woff2'), path.join(output, 'public/inter.woff2')).catch(async () => cp(path.join(root, 'node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2'), path.join(output, 'public/inter.woff2')));

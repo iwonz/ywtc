@@ -40,10 +40,13 @@ function Button({
 	variant = "default",
 	size = "default",
 	asChild = false,
+	leadingIcon,
+	children,
 	...props
 }: React.ComponentProps<"button"> &
 	VariantProps<typeof buttonVariants> & {
 		asChild?: boolean;
+		leadingIcon?: React.ReactNode;
 	}) {
 	const Comp = asChild ? Slot.Root : "button";
 	return (
@@ -51,9 +54,34 @@ function Button({
 			data-slot="button"
 			data-variant={variant}
 			data-size={size}
-			className={cn(buttonVariants({ variant, size, className }))}
+			className={cn(
+				buttonVariants({ variant, size }),
+				"ui-button",
+				leadingIcon && [
+					"ui-button-action h-auto",
+					size === "xs"
+						? "min-h-6"
+						: size === "sm"
+							? "min-h-8"
+							: size === "lg"
+								? "min-h-10"
+								: "min-h-9",
+				],
+				className,
+			)}
 			{...props}
-		/>
+		>
+			{leadingIcon ? (
+				<>
+					<span className="ui-button-icon" aria-hidden="true">
+						{leadingIcon}
+					</span>
+					<span className="ui-button-label">{children}</span>
+				</>
+			) : (
+				children
+			)}
+		</Comp>
 	);
 }
 export { Button, buttonVariants };

@@ -9,7 +9,10 @@ import {
 	AppDialog,
 	CheckboxField,
 } from "../../ui/fields";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Pencil, Plug, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { CollectionState, useCollection } from "./collection-state";
+import { EmptyState } from "./empty-state";
 import { api, type Translate } from "./api";
 import { RequiredNote } from "./operator-fields";
 const limitHelp: Record<string, [string, string, string, string]> = {
@@ -79,13 +82,22 @@ export function Settings({
 		[busy, setBusy] = useState(false),
 		[profileError, setProfileError] = useState("");
 	const recovering = settings?.validation?.valid === false;
+	const listing = useCollection(
+		useCallback(() => api(`${root}/settings`), [root]),
+	);
 	useEffect(() => {
-		setSettings(undefined);
+		setSettings(listing.data);
 		setEdit(undefined);
 		setDirty(false);
 		setConfirmed(false);
-		api(`${root}/settings`).then(setSettings).catch(onError);
-	}, [root, onError]);
+	}, [listing.data]);
+	const addProfile = () => {
+		setProfileError("");
+		setPrevious("");
+		setName("");
+		setEdit(fresh("confluence"));
+	};
+	const hasConnections = Object.keys(settings?.connections ?? {}).length > 0;
 	useEffect(() => {
 		if (!dirty) return;
 		const warn = (event: BeforeUnloadEvent) => event.preventDefault();
@@ -146,17 +158,15 @@ export function Settings({
 				<div className="section-title">
 					{t("Подключения и настройки", "Connections & settings")}
 				</div>
-				<Button
-					disabled={!settings || busy}
-					onClick={() => {
-						setProfileError("");
-						setPrevious("");
-						setName("");
-						setEdit(fresh("confluence"));
-					}}
-				>
-					{t("Добавить подключение", "Add connection")}
-				</Button>
+				{hasConnections && (
+					<Button
+						disabled={!settings || busy}
+						onClick={addProfile}
+						leadingIcon={<Plug />}
+					>
+						{t("Добавить подключение", "Add connection")}
+					</Button>
+				)}
 			</div>
 			<p className="workflow-hint">
 				{t(
@@ -207,6 +217,21 @@ export function Settings({
 					: {settings.backupPath}
 				</Notice>
 			)}
+			<CollectionState {...listing} t={t} />
+			{listing.status === "ready" && settings && !hasConnections && (
+				<EmptyState
+					kind="connections"
+					title={t("Подключите ваши системы", "Connect your systems")}
+					description={t(
+						"Добавьте профиль источника и назначения. Токены хранятся локально; проверить доступ можно до первой миграции.",
+						"Add source and destination profiles. Tokens stay local, and you can probe access before your first migration.",
+					)}
+				>
+					<Button leadingIcon={<Plug />} onClick={addProfile}>
+						{t("Добавить подключение", "Add connection")}
+					</Button>
+				</EmptyState>
+			)}
 			{Object.entries(settings?.connections ?? {}).map(
 				([key, value]: [string, any]) => (
 					<div className="row" key={key}>
@@ -220,6 +245,7 @@ export function Settings({
 								: t("Нет токена", "No token")}
 						</span>
 						<Button
+							leadingIcon={<Pencil />}
 							onClick={() => {
 								setProfileError("");
 								setName(key);
@@ -231,6 +257,7 @@ export function Settings({
 							{t("Изменить", "Edit")}
 						</Button>
 						<Button
+							leadingIcon={<ShieldCheck />}
 							disabled={recovering || busy}
 							onClick={() =>
 								api(`${root}/settings/probe`, "POST", { profile: key })
@@ -243,6 +270,7 @@ export function Settings({
 						</Button>
 						{recovering && (
 							<Button
+								leadingIcon={<Trash2 />}
 								variant="ghost"
 								onClick={() => {
 									const connections = { ...settings.connections };
@@ -372,6 +400,7 @@ export function Settings({
 						/>
 					)}
 					<Button
+						leadingIcon={<Save />}
 						style={{ marginTop: 16 }}
 						disabled={
 							busy ||
@@ -579,6 +608,7 @@ export function Settings({
 							))}
 						</details>
 						<Button
+							leadingIcon={<Save />}
 							disabled={busy || !/^[a-z0-9][a-z0-9._-]*$/.test(name)}
 							onClick={save}
 						>

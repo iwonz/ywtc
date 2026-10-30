@@ -15,8 +15,22 @@ import {
 	TabsContent,
 	Tabs,
 } from "../../ui/components/tabs";
-import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Eye } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+	ChevronDown,
+	ChevronLeft,
+	ChevronRight,
+	Database,
+	Download,
+	ExternalLink,
+	Eye,
+	FileText,
+	FilterX,
+	Plus,
+	RotateCcw,
+} from "lucide-react";
+import { CollectionState, useCollection } from "./collection-state";
+import { EmptyState } from "./empty-state";
 import { api, download, safeLink, statusColor, type Translate } from "./api";
 const isolated = (body: string) =>
 	`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'"><style>body{font:14px system-ui;padding:16px;overflow-wrap:anywhere}img{max-width:100%}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:5px}</style>${body}`;
@@ -49,19 +63,17 @@ export function Reports({
 	initialRun,
 	onError,
 	onJob,
+	onNewMigration,
 }: {
 	root: string;
 	t: Translate;
 	initialRun?: string;
 	onError: (e: unknown) => void;
 	onJob: (id: string) => void;
+	onNewMigration: () => void;
 }) {
-	const [reports, setReports] = useState<any[]>([]),
-		[invalidReports, setInvalidReports] = useState<string[]>([]),
-		[run, setRun] = useState(initialRun),
+	const [run, setRun] = useState(initialRun),
 		[report, setReport] = useState<any>(),
-		[rows, setRows] = useState<any[]>([]),
-		[total, setTotal] = useState(0),
 		[offset, setOffset] = useState(0),
 		[query, setQuery] = useState(""),
 		[filter, setFilter] = useState("all"),
@@ -73,17 +85,16 @@ export function Reports({
 		[collapsed, setCollapsed] = useState<string[]>([]),
 		[state, setState] = useState<any>(),
 		[stateOffset, setStateOffset] = useState(0),
-		[reportOffset, setReportOffset] = useState(0),
-		[reportTotal, setReportTotal] = useState(0);
-	useEffect(() => {
-		api(`${root}/reports?offset=${reportOffset}`)
-			.then((d) => {
-				setReports(d.items);
-				setInvalidReports(d.invalid ?? []);
-				setReportTotal(d.total);
-			})
-			.catch(onError);
-	}, [root, reportOffset, onError]);
+		[reportOffset, setReportOffset] = useState(0);
+	const listing = useCollection(
+		useCallback(
+			() => api(`${root}/reports?offset=${reportOffset}`),
+			[root, reportOffset],
+		),
+	);
+	const reports: any[] = listing.data?.items ?? [],
+		invalidReports: string[] = listing.data?.invalid ?? [],
+		reportTotal = listing.data?.total ?? 0;
 	useEffect(() => {
 		if (run) {
 			api(`${root}/reports/${run}`).then(setReport).catch(onError);
@@ -92,17 +103,19 @@ export function Reports({
 			setComments([]);
 		}
 	}, [root, run, onError]);
-	useEffect(() => {
-		if (run)
-			api(
-				`${root}/reports/${run}/rows?offset=${offset}&q=${encodeURIComponent(query)}&filter=${filter}`,
-			)
-				.then((d) => {
-					setRows(d.items);
-					setTotal(d.total);
-				})
-				.catch(onError);
-	}, [root, run, offset, query, filter, onError]);
+	const rowListing = useCollection(
+		useCallback(
+			() =>
+				run
+					? api(
+							`${root}/reports/${run}/rows?offset=${offset}&q=${encodeURIComponent(query)}&filter=${filter}`,
+						)
+					: Promise.resolve({ items: [], total: 0 }),
+			[root, run, offset, query, filter],
+		),
+	);
+	const rows: any[] = rowListing.data?.items ?? [],
+		total = rowListing.data?.total ?? 0;
 	const toggle = (items: string[], id: string) =>
 		items.includes(id) ? items.filter((i) => i !== id) : [...items, id];
 	const open = (id: string) =>
@@ -154,6 +167,7 @@ export function Reports({
 								{r.dryRun ? "dry-run" : r.status}
 							</Badge>
 							<Button
+								leadingIcon={<FileText />}
 								onClick={() => {
 									setRun(r.runId);
 									setOffset(0);
@@ -186,12 +200,41 @@ export function Reports({
 					))}
 				</section>
 			))}
-			{!reports.length && (
+			<CollectionState {...listing} t={t} />
+			{listing.status === "ready" &&
+				!reportTotal &&
+				!reports.length &&
+				!invalidReports.length &&
+				!run && (
+					<EmptyState
+						kind="reports"
+						title={t(
+							"История начинается с первого анализа",
+							"Your history starts with an analysis",
+						)}
+						description={t(
+							"Отчёты покажут страницы, файлы и точные причины проблем. Подготовьте миграцию и начните с dry-run или подключите пространство с готовыми отчётами.",
+							"Reports will show pages, files and exact issue causes. Prepare a migration and start with dry-run, or connect a workspace containing existing reports.",
+						)}
+					>
+						<Button leadingIcon={<Plus />} onClick={onNewMigration}>
+							{t("Подготовить перенос", "Prepare migration")}
+						</Button>
+					</EmptyState>
+				)}
+			{listing.status === "ready" && reportTotal > 0 && !reports.length && (
 				<div className="empty">
 					{t(
-						"Отчётов пока нет. Можно запустить dry-run или подключить существующий workspace.",
-						"No reports yet. Start a dry-run or connect an existing workspace.",
-					)}
+						"На этой странице списка нет запусков.",
+						"There are no runs on this list page.",
+					)}{" "}
+					<Button
+						leadingIcon={<RotateCcw />}
+						variant="ghost"
+						onClick={() => setReportOffset(0)}
+					>
+						{t("К началу списка", "Back to first page")}
+					</Button>
 				</div>
 			)}
 			{reportTotal > 100 && (
@@ -205,16 +248,18 @@ export function Reports({
 					}}
 				>
 					<Button
+						aria-label={t("Предыдущая страница", "Previous page")}
 						disabled={!reportOffset}
 						onClick={() => setReportOffset(Math.max(0, reportOffset - 100))}
 					>
-						←
+						<ChevronLeft aria-hidden="true" />
 					</Button>
 					<Button
+						aria-label={t("Следующая страница", "Next page")}
 						disabled={reportOffset + 100 >= reportTotal}
 						onClick={() => setReportOffset(reportOffset + 100)}
 					>
-						→
+						<ChevronRight aria-hidden="true" />
 					</Button>
 				</div>
 			)}
@@ -327,6 +372,7 @@ export function Reports({
 						<dt>STATE</dt>
 						<dd>
 							<Button
+								leadingIcon={<Database />}
 								onClick={() => {
 									setStateOffset(0);
 									api(`${root}/states/${report.state.id}`)
@@ -378,6 +424,7 @@ export function Reports({
 						}}
 					>
 						<Button
+							leadingIcon={<RotateCcw />}
 							onClick={() =>
 								api(`${root}/jobs`, "POST", {
 									request: { kind: "retry", runId: run, dryRun: true },
@@ -391,6 +438,7 @@ export function Reports({
 							{t("План автоматического retry", "Preview automatic retry")}
 						</Button>
 						<Button
+							leadingIcon={<Download />}
 							onClick={() => download(report, `run-${run}-summary.json`)}
 							variant="ghost"
 						>
@@ -508,6 +556,7 @@ export function Reports({
 										</Button>
 									</Hint>
 									<Button
+										leadingIcon={<FileText />}
 										className="grow"
 										onClick={() => open(row.id)}
 										variant="ghost"
@@ -530,36 +579,59 @@ export function Reports({
 								</div>
 							))}
 					</div>
-					<div
-						style={{
-							display: "flex",
-							flexDirection: "row",
-							gap: 8,
-							alignItems: "center",
-							flexWrap: "wrap",
-							marginTop: 16,
-						}}
-					>
-						<Button
-							disabled={!offset}
-							onClick={() => setOffset(Math.max(0, offset - 100))}
-							variant="ghost"
+					<CollectionState {...rowListing} t={t} />
+					{rowListing.status === "ready" &&
+						!total &&
+						(query || filter !== "all") && (
+							<div className="empty">
+								{t("Поиск не нашёл совпадений.", "No pages match this filter.")}{" "}
+								<Button
+									leadingIcon={<FilterX />}
+									variant="ghost"
+									onClick={() => {
+										setQuery("");
+										setFilter("all");
+										setOffset(0);
+									}}
+								>
+									{t("Сбросить фильтры", "Clear filters")}
+								</Button>
+							</div>
+						)}
+					{total > 0 && (
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "row",
+								gap: 8,
+								alignItems: "center",
+								flexWrap: "wrap",
+								marginTop: 16,
+							}}
 						>
-							←
-						</Button>
-						<span className="muted">
-							{total
-								? `${offset + 1}–${Math.min(offset + 100, total)} / ${total}`
-								: t("Нет совпадений", "No matches")}
-						</span>
-						<Button
-							disabled={offset + 100 >= total}
-							onClick={() => setOffset(offset + 100)}
-							variant="ghost"
-						>
-							→
-						</Button>
-					</div>
+							<Button
+								aria-label={t("Предыдущая страница", "Previous page")}
+								disabled={!offset}
+								onClick={() => setOffset(Math.max(0, offset - 100))}
+								variant="ghost"
+							>
+								<ChevronLeft aria-hidden="true" />
+							</Button>
+							<span className="muted">
+								{total
+									? `${offset + 1}–${Math.min(offset + 100, total)} / ${total}`
+									: t("Нет совпадений", "No matches")}
+							</span>
+							<Button
+								aria-label={t("Следующая страница", "Next page")}
+								disabled={offset + 100 >= total}
+								onClick={() => setOffset(offset + 100)}
+								variant="ghost"
+							>
+								<ChevronRight aria-hidden="true" />
+							</Button>
+						</div>
+					)}
 					{Boolean(
 						selected.length ||
 							Object.values(resources).some((a) => a.length) ||
@@ -581,7 +653,7 @@ export function Reports({
 								checked={override}
 								onCheckedChange={(e) => setOverride(e)}
 							/>
-							<Button onClick={preview}>
+							<Button leadingIcon={<RotateCcw />} onClick={preview}>
 								{t("Подготовить точечный retry", "Preview selected retry")}
 							</Button>
 						</div>
@@ -793,6 +865,7 @@ export function Reports({
 						}}
 					>
 						<Button
+							aria-label={t("Предыдущая страница", "Previous page")}
 							disabled={!stateOffset}
 							onClick={() => {
 								setStateOffset(Math.max(0, stateOffset - 100));
@@ -803,9 +876,10 @@ export function Reports({
 									.catch(onError);
 							}}
 						>
-							←
+							<ChevronLeft aria-hidden="true" />
 						</Button>
 						<Button
+							aria-label={t("Следующая страница", "Next page")}
 							disabled={stateOffset + 100 >= state.items[0].pageCount}
 							onClick={() => {
 								setStateOffset(stateOffset + 100);
@@ -816,7 +890,7 @@ export function Reports({
 									.catch(onError);
 							}}
 						>
-							→
+							<ChevronRight aria-hidden="true" />
 						</Button>
 					</div>
 				)}

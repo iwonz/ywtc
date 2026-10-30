@@ -3,7 +3,21 @@ import { Badge } from "../../ui/components/badge";
 import { Button } from "../../ui/components/button";
 import { Notice, CheckboxField, Hint } from "../../ui/fields";
 import { Progress } from "../../ui/components/progress";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	Activity,
+	Check,
+	ChevronLeft,
+	ChevronRight,
+	FileText,
+	Play,
+	Plus,
+	RotateCcw,
+	ScanSearch,
+	Square,
+} from "lucide-react";
+import { CollectionState, useCollection } from "./collection-state";
+import { EmptyState } from "./empty-state";
 import { api, statusColor, type Translate } from "./api";
 import {
 	lifecycleGuidance,
@@ -18,6 +32,7 @@ export function Tasks({
 	onError,
 	onReport,
 	onJob,
+	onNewMigration,
 }: {
 	root: string;
 	t: Translate;
@@ -25,30 +40,23 @@ export function Tasks({
 	onError: (e: unknown) => void;
 	onReport: (id: string) => void;
 	onJob: (id: string) => void;
+	onNewMigration: () => void;
 }) {
-	const [jobs, setJobs] = useState<any[]>([]),
-		[selected, setSelected] = useState(initialJob),
+	const [selected, setSelected] = useState(initialJob),
 		[job, setJob] = useState<any>(),
 		[events, setEvents] = useState<any[]>([]),
 		[snapshot, setSnapshot] = useState<any>(),
 		[preview, setPreview] = useState<any>(),
 		[confirmed, setConfirmed] = useState(false),
 		[offset, setOffset] = useState(0),
-		[total, setTotal] = useState(0),
 		[disconnected, setDisconnected] = useState(false);
 	const cursor = useRef(0);
-	useEffect(() => {
-		const load = () =>
-			api(`${root}/jobs?offset=${offset}`)
-				.then((d) => {
-					setJobs(d.items);
-					setTotal(d.total);
-				})
-				.catch(onError);
-		load();
-		const timer = setInterval(load, 3000);
-		return () => clearInterval(timer);
-	}, [root, offset, onError]);
+	const listing = useCollection(
+		useCallback(() => api(`${root}/jobs?offset=${offset}`), [root, offset]),
+		3000,
+	);
+	const jobs: any[] = listing.data?.items ?? [],
+		total = listing.data?.total ?? 0;
 	useEffect(() => {
 		if (!selected) return;
 		setEvents([]);
@@ -105,14 +113,22 @@ export function Tasks({
 							{item.status}
 						</Badge>
 					</Hint>
-					<Button onClick={() => setSelected(item.id)} variant="ghost">
+					<Button
+						leadingIcon={<Activity />}
+						onClick={() => setSelected(item.id)}
+						variant="ghost"
+					>
 						{operationLabel(item.request.kind, t)} · {item.id.slice(0, 8)}
 					</Button>
 					<span className="grow muted">
 						{new Date(item.createdAt).toLocaleString()}
 					</span>
 					{item.runId && (
-						<Button onClick={() => onReport(item.runId)} variant="ghost">
+						<Button
+							leadingIcon={<FileText />}
+							onClick={() => onReport(item.runId)}
+							variant="ghost"
+						>
 							{t("Отчёт", "Report")}
 						</Button>
 					)}
@@ -123,34 +139,65 @@ export function Tasks({
 					)}
 				</div>
 			))}
-			{!jobs.length && (
-				<div className="empty">{t("Задач пока нет.", "No jobs yet.")}</div>
+			<CollectionState {...listing} t={t} />
+			{listing.status === "ready" && !total && !jobs.length && !selected && (
+				<EmptyState
+					kind="tasks"
+					title={t("Всё готово к первой задаче", "Ready for your first task")}
+					description={t(
+						"Здесь появятся очередь, текущий этап и журнал выполнения. Начните с анализа миграции — запись потребует отдельного подтверждения.",
+						"Your queue, current phase and execution log will appear here. Start by analyzing a migration; writes require separate confirmation.",
+					)}
+				>
+					<Button leadingIcon={<Plus />} onClick={onNewMigration}>
+						{t("Подготовить перенос", "Prepare migration")}
+					</Button>
+				</EmptyState>
 			)}
-			<div
-				style={{
-					display: "flex",
-					flexDirection: "row",
-					gap: 8,
-					alignItems: "center",
-					flexWrap: "wrap",
-					marginTop: 16,
-				}}
-			>
-				<Button
-					disabled={!offset}
-					onClick={() => setOffset(Math.max(0, offset - 100))}
-					variant="ghost"
+			{listing.status === "ready" && total > 0 && !jobs.length && (
+				<div className="empty">
+					{t(
+						"На этой странице списка нет задач.",
+						"There are no tasks on this list page.",
+					)}{" "}
+					<Button
+						leadingIcon={<RotateCcw />}
+						variant="ghost"
+						onClick={() => setOffset(0)}
+					>
+						{t("К началу списка", "Back to first page")}
+					</Button>
+				</div>
+			)}
+			{total > 100 && (
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "row",
+						gap: 8,
+						alignItems: "center",
+						flexWrap: "wrap",
+						marginTop: 16,
+					}}
 				>
-					←
-				</Button>
-				<Button
-					disabled={offset + 100 >= total}
-					onClick={() => setOffset(offset + 100)}
-					variant="ghost"
-				>
-					→
-				</Button>
-			</div>
+					<Button
+						aria-label={t("Предыдущая страница", "Previous page")}
+						disabled={!offset}
+						onClick={() => setOffset(Math.max(0, offset - 100))}
+						variant="ghost"
+					>
+						<ChevronLeft aria-hidden="true" />
+					</Button>
+					<Button
+						aria-label={t("Следующая страница", "Next page")}
+						disabled={offset + 100 >= total}
+						onClick={() => setOffset(offset + 100)}
+						variant="ghost"
+					>
+						<ChevronRight aria-hidden="true" />
+					</Button>
+				</div>
+			)}
 			{job && (
 				<section className="section">
 					<p className="workflow-hint">
@@ -183,6 +230,7 @@ export function Tasks({
 						</div>
 						{["queued", "running", "stopping"].includes(job.status) && (
 							<Button
+								leadingIcon={<Square />}
 								disabled={job.status === "stopping"}
 								onClick={() =>
 									api(`${root}/jobs/${job.id}/stop`, "POST", {})
@@ -316,6 +364,7 @@ export function Tasks({
 					{job.error && <Notice tone={"red"}>{job.error}</Notice>}
 					{job.result?.runId && (
 						<Button
+							leadingIcon={<FileText />}
 							onClick={() => onReport(job.result.runId)}
 							variant="secondary"
 							style={{ marginTop: 16 }}
@@ -330,6 +379,7 @@ export function Tasks({
 								"Task interrupted. No writes are automatically retried.",
 							)}
 							<Button
+								leadingIcon={<RotateCcw />}
 								onClick={() =>
 									job.request.kind === "targeted"
 										? submit({
@@ -379,6 +429,7 @@ export function Tasks({
 									onCheckedChange={(e) => setConfirmed(e)}
 								/>
 								<Button
+									leadingIcon={<Play />}
 									disabled={!confirmed}
 									onClick={() =>
 										submit({ ...job.request, dryRun: false }, true)
@@ -405,6 +456,7 @@ export function Tasks({
 						!job.request.dryRun &&
 						job.result?.status === "failed" && (
 							<Button
+								leadingIcon={<ScanSearch />}
 								onClick={() =>
 									submit({ ...job.request, dryRun: true, previewId: undefined })
 								}
@@ -477,6 +529,7 @@ export function Tasks({
 								onCheckedChange={(e) => setConfirmed(e)}
 							/>
 							<Button
+								leadingIcon={<Check />}
 								disabled={!confirmed || preview.ready === false}
 								onClick={() =>
 									submit(

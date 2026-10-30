@@ -64,6 +64,9 @@ for (const file of packResult.files.filter(file => file.path.startsWith('dist/we
 for (const required of ['dist/report-ui/index.html', 'dist/mentions-ui/index.html', 'dist/web/server.js', 'dist/ui-service.js', 'dist/jobs/worker.js', 'docs/assets/report-header-transparent.png', 'ui/LICENSE']) {
   if (!packResult.files.some((file) => file.path === required)) throw new Error(`Packed archive is missing ${required}`);
 }
+for (const kind of ['connections', 'reports', 'tasks', 'sync', 'decisions']) {
+  if (!packResult.files.some(file => file.path === `dist/web/public/illustrations/${kind}.png`)) throw Error(`Packaged UI illustration is missing: ${kind}`);
+}
 
 const prefix = path.join(temporary, 'prefix');
 process.stdout.write('Installing packed CLI in an isolated prefix...\n');
@@ -463,6 +466,10 @@ try {
   const settings = await fetch(`${origin}/api/workspaces`, {headers: {cookie}}).then(r => r.json()) as {items: Array<{id: string}>};
   const workspaceId = settings.items[0]!.id;
   const html = await fetch(origin).then(r => r.text());if (!html.includes('ywtc')) throw Error('Packaged UI did not render');
+  for (const kind of ['connections', 'reports', 'tasks', 'sync', 'decisions']) {
+    const asset = await fetch(`${origin}/illustrations/${kind}.png`), bytes = Buffer.from(await asset.arrayBuffer());
+    if (!asset.ok || !asset.headers.get('content-type')?.includes('image/png') || bytes.length < 1000 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw Error(`Installed UI illustration is unavailable: ${kind}`);
+  }
   const submitted = await fetch(`${origin}/api/w/${workspaceId}/jobs`, {method: 'POST', headers: {origin, cookie, 'content-type': 'application/json'}, body: JSON.stringify({request: {kind: 'scan', source: 'page', scope: 'page', sourceStatus: 'all', comments: false, kinds: ['mentions', 'hashtags']}})});
   const job = await submitted.json() as {id: string};if (!submitted.ok) throw Error(`Packaged submission failed: ${JSON.stringify(job)}`);
   ui.kill('SIGTERM');

@@ -12,6 +12,8 @@ import {
 	Trash2,
 	Undo2,
 	Upload,
+	X,
+	RefreshCw,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -328,12 +330,19 @@ function Editor({ initial }: { initial: EditorDocument }) {
 					marginBlock: 24,
 				}}
 			>
-				<Button onClick={() => fileInput.current?.click()} variant="secondary">
-					{<Upload size={16} />}Открыть JSON
+				<Button
+					leadingIcon={<Upload />}
+					onClick={() => fileInput.current?.click()}
+					variant="secondary"
+				>
+					Открыть JSON
 				</Button>
-				<Button onClick={save}>{<Download size={16} />}Сохранить JSON</Button>
+				<Button leadingIcon={<Download />} onClick={save}>
+					Сохранить JSON
+				</Button>
 				{removed && (
 					<Button
+						leadingIcon={<Undo2 />}
 						onClick={() => {
 							setDocument((current) => {
 								const entries = [...current.entries];
@@ -344,7 +353,7 @@ function Editor({ initial }: { initial: EditorDocument }) {
 						}}
 						variant="ghost"
 					>
-						{<Undo2 size={16} />}Отменить удаление
+						Отменить удаление
 					</Button>
 				)}
 				{dirty && (
@@ -535,10 +544,15 @@ function Editor({ initial }: { initial: EditorDocument }) {
 						justifyContent: "flex-end",
 					}}
 				>
-					<Button onClick={() => setPending(undefined)} variant="outline">
+					<Button
+						leadingIcon={<X />}
+						onClick={() => setPending(undefined)}
+						variant="outline"
+					>
 						Отмена
 					</Button>
 					<Button
+						leadingIcon={<RefreshCw />}
 						onClick={() => {
 							if (pending) replaceDocument(pending);
 						}}

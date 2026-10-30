@@ -183,6 +183,23 @@
 	overflow-x: auto;
 	max-width: 100%;
 }
+.ui-button {
+	min-width: 0;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.ui-button-icon {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-self: center;
+}
+.ui-button-label {
+	display: block;
+	min-width: 0;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
 .ui-muted {
 	color: var(--muted-foreground);
 }

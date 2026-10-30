@@ -12,7 +12,21 @@ import {
 } from "../../ui/fields";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Trash2, Undo2 } from "lucide-react";
+import {
+	Check,
+	Download,
+	Eye,
+	FilterX,
+	FolderOpen,
+	Plug,
+	Save,
+	ScanSearch,
+	Trash2,
+	Undo2,
+	Upload,
+} from "lucide-react";
+import { CollectionState, useCollection } from "./collection-state";
+import { EmptyState } from "./empty-state";
 import {
 	changeDecision,
 	changeText,
@@ -37,8 +51,7 @@ export function Decisions({
 	onError: (e: unknown) => void;
 	onJob: (id: string) => void;
 }) {
-	const [catalogs, setCatalogs] = useState<any[]>([]),
-		[catalog, setCatalog] = useState<any>(),
+	const [catalog, setCatalog] = useState<any>(),
 		[document, setDocument] = useState<any>(),
 		[dirty, setDirty] = useState(false),
 		[search, setSearch] = useState(""),
@@ -64,15 +77,12 @@ export function Decisions({
 		[operationBusy, setOperationBusy] = useState(false),
 		[dialogError, setDialogError] = useState("");
 	const container = useRef<HTMLDivElement>(null);
-	const refresh = useCallback(
-		() =>
-			api(`${root}/decisions?limit=500`)
-				.then((d) => setCatalogs(d.items))
-				.catch(onError),
-		[root, onError],
+	const listing = useCollection(
+		useCallback(() => api(`${root}/decisions?limit=500`), [root]),
 	);
+	const catalogs: any[] = listing.data?.items ?? [],
+		refresh = listing.reload;
 	useEffect(() => {
-		refresh();
 		api(`${root}/settings`)
 			.then((s) => {
 				setConfigInvalid(s.validation?.valid === false);
@@ -82,7 +92,7 @@ export function Decisions({
 				setProfile(available[0] ?? "");
 			})
 			.catch(onError);
-	}, [root, refresh, onError]);
+	}, [root, onError]);
 	useEffect(() => {
 		if (!dirty) return;
 		const handler = (e: BeforeUnloadEvent) => {
@@ -272,37 +282,43 @@ export function Decisions({
 				<div className="section-title">
 					{t("Упоминания и хэштеги", "Mentions & hashtags")}
 				</div>
-				<div
-					style={{
-						display: "flex",
-						flexDirection: "row",
-						gap: 8,
-						alignItems: "center",
-						flexWrap: "wrap",
-					}}
-				>
-					<Button
-						onClick={() => {
-							setDialogError("");
-							setAnalysis(true);
+				{(catalogs.length > 0 || document) && (
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "row",
+							gap: 8,
+							alignItems: "center",
+							flexWrap: "wrap",
 						}}
-						variant="secondary"
 					>
-						{t("Анализ source", "Analyze source")}
-					</Button>
-					<Button
-						onClick={() => {
-							setDialogError("");
-							api(`${root}/reports?limit=500`)
-								.then((d) => setReports(d.items.filter((r: any) => !r.dryRun)))
-								.catch(onError);
-							setApplying(true);
-						}}
-						variant="ghost"
-					>
-						{t("Применить к миграции", "Apply to migration")}
-					</Button>
-				</div>
+						<Button
+							leadingIcon={<ScanSearch />}
+							onClick={() => {
+								setDialogError("");
+								setAnalysis(true);
+							}}
+							variant="secondary"
+						>
+							{t("Анализ source", "Analyze source")}
+						</Button>
+						<Button
+							leadingIcon={<Check />}
+							onClick={() => {
+								setDialogError("");
+								api(`${root}/reports?limit=500`)
+									.then((d) =>
+										setReports(d.items.filter((r: any) => !r.dryRun)),
+									)
+									.catch(onError);
+								setApplying(true);
+							}}
+							variant="ghost"
+						>
+							{t("Применить к миграции", "Apply to migration")}
+						</Button>
+					</div>
+				)}
 			</div>
 			<p className="workflow-hint">
 				{t(
@@ -313,7 +329,11 @@ export function Decisions({
 			{catalogs.map((c) => (
 				<div className="row" key={c.id}>
 					<Badge variant="secondary">{c.kind}</Badge>
-					<Button onClick={() => load(c.id)} variant="ghost">
+					<Button
+						leadingIcon={<FolderOpen />}
+						onClick={() => load(c.id)}
+						variant="ghost"
+					>
 						{c.id.slice(0, 8)}
 					</Button>
 					<span className="grow muted">
@@ -329,13 +349,30 @@ export function Decisions({
 					</Badge>
 				</div>
 			))}
-			{!catalogs.length && (
-				<div className="empty">
-					{t(
-						"Запустите анализ источника или импортируйте decisions.json.",
-						"Analyze a source or import decisions.json.",
+			<CollectionState {...listing} t={t} />
+			{listing.status === "ready" && !catalogs.length && !document && (
+				<EmptyState
+					kind="decisions"
+					title={t(
+						"Задайте правила для упоминаний и тегов",
+						"Define mention and hashtag decisions",
 					)}
-				</div>
+					description={t(
+						"Соберите упоминания и хэштеги из источника или откройте decisions.json. Здесь можно настроить текст и ссылки перед применением к миграции.",
+						"Analyze source mentions and hashtags or open decisions.json. Review text and link decisions here before applying them to a migration.",
+					)}
+				>
+					<Button
+						leadingIcon={<ScanSearch />}
+						variant="secondary"
+						onClick={() => {
+							setDialogError("");
+							setAnalysis(true);
+						}}
+					>
+						{t("Анализ source", "Analyze source")}
+					</Button>
+				</EmptyState>
 			)}
 			<div
 				style={{
@@ -369,7 +406,7 @@ export function Decisions({
 				/>
 				<JsonFilePicker accept="application/json,.json" onFile={importFile}>
 					{(props) => (
-						<Button {...props} variant="secondary">
+						<Button leadingIcon={<FolderOpen />} {...props} variant="secondary">
 							{t("Открыть JSON", "Open JSON")}
 						</Button>
 					)}
@@ -401,6 +438,7 @@ export function Decisions({
 							}}
 						>
 							<Button
+								leadingIcon={<Download />}
 								disabled={!valid}
 								onClick={() => {
 									try {
@@ -416,14 +454,23 @@ export function Decisions({
 							>
 								{t("Скачать JSON", "Download JSON")}
 							</Button>
-							<Button disabled={!valid} onClick={save}>
+							<Button leadingIcon={<Save />} disabled={!valid} onClick={save}>
 								{t("Сохранить черновик", "Save draft")}
 							</Button>
-							<Button disabled={!valid} onClick={publish} variant="secondary">
+							<Button
+								leadingIcon={<Upload />}
+								disabled={!valid}
+								onClick={publish}
+								variant="secondary"
+							>
 								{t("Опубликовать версию", "Publish revision")}
 							</Button>
 							{catalog.published && !dirty && (
-								<Button onClick={activate} variant="secondary">
+								<Button
+									leadingIcon={<Plug />}
+									onClick={activate}
+									variant="secondary"
+								>
 									{t("Подключить к пространству", "Activate in workspace")}
 								</Button>
 							)}
@@ -474,6 +521,7 @@ export function Decisions({
 						/>
 						{deleted && (
 							<Button
+								leadingIcon={<Undo2 />}
 								onClick={() => {
 									const next = [...document.entries];
 									next.splice(deleted.index, 0, deleted.entry);
@@ -483,7 +531,6 @@ export function Decisions({
 								}}
 								variant="ghost"
 							>
-								{<Undo2 size={15} />}
 								{t("Отменить удаление", "Undo delete")}
 							</Button>
 						)}
@@ -644,11 +691,28 @@ export function Decisions({
 						</ul>
 					</div>
 					{!document.entries.length && (
-						<div className="empty">
-							{t(
-								"Упоминаний или тегов нет. Отсутствующие записи означают skip.",
-								"No mentions or tags. Missing entries mean skip.",
+						<EmptyState
+							kind="decisions"
+							title={t("Записей пока нет", "No entries yet")}
+							description={t(
+								"В документе нет упоминаний или тегов. Отсутствующие записи означают skip; можно открыть другой JSON или выполнить новый анализ.",
+								"The document has no mentions or tags. Missing entries mean skip; open another JSON or analyze a source again.",
 							)}
+						/>
+					)}
+					{document.entries.length > 0 && !entries.length && (
+						<div className="empty">
+							{t("Поиск не нашёл совпадений.", "No entries match this filter.")}{" "}
+							<Button
+								leadingIcon={<FilterX />}
+								variant="ghost"
+								onClick={() => {
+									setSearch("");
+									setFilter("all");
+								}}
+							>
+								{t("Сбросить фильтры", "Clear filters")}
+							</Button>
 						</div>
 					)}
 				</section>
@@ -714,6 +778,7 @@ export function Decisions({
 						onCheckedChange={(e) => setComments(e)}
 					/>
 					<Button
+						leadingIcon={<ScanSearch />}
 						disabled={
 							operationBusy || configInvalid || !source.trim() || !profile
 						}
@@ -781,6 +846,7 @@ export function Decisions({
 						)}
 					</Notice>
 					<Button
+						leadingIcon={<Eye />}
 						disabled={
 							operationBusy || !run || (!mentionRevision && !hashtagRevision)
 						}

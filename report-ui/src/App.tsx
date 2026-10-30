@@ -33,6 +33,7 @@ import {
 	CheckCircle2,
 	ChevronRight,
 	CircleDashed,
+	Code,
 	Database,
 	Download,
 	ExternalLink,
@@ -1051,6 +1052,7 @@ function IssueList({
 							</p>
 							<div>
 								<Button
+									leadingIcon={<Code />}
 									type="button"
 									onClick={() =>
 										setExpanded((current) => {

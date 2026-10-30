@@ -9,19 +9,20 @@ import {
 	AppDialog,
 } from "../../ui/fields";
 import { Button } from "../../ui/components/button";
+import { GitHubMark } from "../../ui/components/github-mark";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ArrowRightLeft,
+	CircleHelp,
 	Files,
 	FolderOpen,
-	GitBranch,
-	CircleHelp,
-	PanelLeftClose,
-	PanelLeftOpen,
+	FolderPlus,
 	Languages,
 	ListTodo,
 	Monitor,
 	Moon,
+	PanelLeftClose,
+	PanelLeftOpen,
 	Plug,
 	Plus,
 	RefreshCw,
@@ -236,18 +237,6 @@ export function ControlCenter() {
 							<CircleHelp aria-hidden="true" />
 						</Button>
 					</Hint>
-					<Hint content={t("Проект на GitHub", "Project on GitHub")}>
-						<Button asChild variant="ghost" size="icon-sm">
-							<a
-								href="https://github.com/iwonz/ywtc"
-								target="_blank"
-								rel="noopener noreferrer"
-								aria-label={t("Проект на GitHub", "Project on GitHub")}
-							>
-								<GitBranch aria-hidden="true" />
-							</a>
-						</Button>
-					</Hint>
 					<Hint
 						content={`${colorScheme} → ${colorScheme === "system" ? "light" : colorScheme === "light" ? "dark" : "system"}`}
 					>
@@ -288,6 +277,18 @@ export function ControlCenter() {
 							size="icon-sm"
 						>
 							<Languages size={18} />
+						</Button>
+					</Hint>
+					<Hint content={t("Проект на GitHub", "Project on GitHub")}>
+						<Button asChild variant="ghost" size="icon-sm">
+							<a
+								href="https://github.com/iwonz/ywtc"
+								target="_blank"
+								rel="noopener noreferrer"
+								aria-label={t("Проект на GitHub", "Project on GitHub")}
+							>
+								<GitHubMark />
+							</a>
 						</Button>
 					</Hint>
 				</div>
@@ -374,12 +375,10 @@ export function ControlCenter() {
 											label: w.path,
 										}))}
 										onValueChange={chooseWorkspace}
-										description={t(
-											"Локальная папка с конфигурацией и результатами.",
-											"Local folder with configuration and results.",
-										)}
 									/>
 									<Button
+										className="workspace-connect"
+										leadingIcon={<Plus />}
 										variant="ghost"
 										size="sm"
 										onClick={() => {
@@ -391,7 +390,6 @@ export function ControlCenter() {
 											"Connect workspace",
 										)}
 									>
-										<Plus aria-hidden="true" />
 										{t("Подключить или создать", "Connect or create")}
 									</Button>
 								</>
@@ -446,6 +444,7 @@ export function ControlCenter() {
 								onError={fail}
 								onReport={showRun}
 								onJob={showJob}
+								onNewMigration={() => setNewMigration(true)}
 							/>
 						)}
 						{workspace && tab === "reports" && (
@@ -456,6 +455,7 @@ export function ControlCenter() {
 								initialRun={run}
 								onError={fail}
 								onJob={showJob}
+								onNewMigration={() => setNewMigration(true)}
 							/>
 						)}
 						{workspace && tab === "decisions" && (
@@ -512,12 +512,14 @@ export function ControlCenter() {
 					}}
 				>
 					<Button
+						leadingIcon={<Plug />}
 						disabled={!directory.trim() || workspaceBusy}
 						onClick={() => register(false)}
 					>
 						{t("Подключить", "Connect")}
 					</Button>
 					<Button
+						leadingIcon={<FolderPlus />}
 						disabled={!directory.trim() || workspaceBusy}
 						onClick={() => register(true)}
 						variant="secondary"

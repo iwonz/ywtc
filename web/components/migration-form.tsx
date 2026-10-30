@@ -1,4 +1,5 @@
 "use client";
+import { Play, ScanSearch, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
 	Notice,
@@ -6,7 +7,6 @@ import {
 	InputField,
 	CheckboxField,
 	NumberField,
-	Spinner,
 } from "../../ui/fields";
 import { Button } from "../../ui/components/button";
 import { api, type Translate } from "./api";
@@ -419,8 +419,19 @@ export function MigrationForm({
 						{missing.join(", ")}.
 					</p>
 				)}
-				<Button type="submit" disabled={!ready}>
-					{busy && <Spinner />}
+				<Button
+					leadingIcon={
+						busy ? (
+							<LoaderCircle className="animate-spin" />
+						) : live ? (
+							<Play />
+						) : (
+							<ScanSearch />
+						)
+					}
+					type="submit"
+					disabled={!ready}
+				>
 					{live
 						? t("Запустить перенос", "Start migration")
 						: t("Сначала dry-run", "Start dry-run")}
