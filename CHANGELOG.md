@@ -2,6 +2,19 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.4.6](https://github.com/iwonz/ywtc/compare/v5.4.5...v5.4.6) (2026-10-30)
+
+
+### Bug Fixes
+
+* **ui:** contain long labels beside row actions ([b30b9d5](https://github.com/iwonz/ywtc/commit/b30b9d5b6e65c779b094dd67ef79abbd2a635c48))
+* **ui:** polish actions and illustrate empty work areas ([e6d2193](https://github.com/iwonz/ywtc/commit/e6d2193919277b30712cedc90b714ad6173de0c6))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v5.4.5 ([f039abd](https://github.com/iwonz/ywtc/commit/f039abd3ccf136e7c3762898ff0c59978f8aa895))
+
 ## [5.4.5](https://github.com/iwonz/ywtc/compare/v5.4.4...v5.4.5) (2026-10-30)
 
 
