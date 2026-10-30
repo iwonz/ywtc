@@ -2,6 +2,18 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.4.5](https://github.com/iwonz/ywtc/compare/v5.4.4...v5.4.5) (2026-10-30)
+
+
+### Bug Fixes
+
+* **ui:** guide operator workflows and clarify forms ([9a99200](https://github.com/iwonz/ywtc/commit/9a992004ce305fbb26a000ff86e70b63106e2dd3))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v5.4.4 ([d53d83c](https://github.com/iwonz/ywtc/commit/d53d83cbaf4ee403fc045d6c79384f5f7208b2b2))
+
 ## [5.4.4](https://github.com/iwonz/ywtc/compare/v5.4.3...v5.4.4) (2026-10-29)
 
 
