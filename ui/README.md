@@ -17,3 +17,7 @@ not need an extra action icon. Use the stable `ui-button` classes for layout:
 Radix tooltip composition can replace `data-slot`. With `asChild`, the caller owns
 the single child and its content. The GitHub mark comes from MIT-licensed Octicons;
 its attribution is included in `LICENSE`.
+
+Text actions may shrink beside sibling controls, retaining their icon and minimum
+content width. Data containers inherit word wrapping so unbroken provider labels
+cannot extend outside their row; full labels remain available without truncation.

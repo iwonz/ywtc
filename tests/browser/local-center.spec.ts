@@ -118,6 +118,32 @@ test('delayed and failed collection reads never masquerade as empty success',asy
   failed=false;await page.getByRole('button',{name:'Retry loading',exact:true}).click();await expect(page.locator('[data-empty-state="tasks"]')).toBeVisible();await expect(failure).toHaveCount(0);
 });
 
+test('long page and profile labels yield width to sibling actions in both locales',async({page})=>{
+  const title='Оченьдлинноеназваниедокумента'.repeat(24),profile='profile'.repeat(80),writes:string[]=[];
+  page.on('request',r=>{if(r.method()!=='GET')writes.push(r.url());});
+  await page.route(/\/api\/w\/[^/]+\/(settings|reports)(?:\/|\?|$)/,async route=>{
+    const response=await route.fetch(),data=await response.json(),url=new URL(route.request().url());
+    if(url.pathname.endsWith('/settings'))data.connections={[profile]:Object.values(data.connections)[0]};
+    else if(url.pathname.endsWith('/rows'))for(const [i,row]of data.items.entries())row.title=title+i;
+    else if(url.pathname.endsWith('/reports'))for(const item of data.items)item.source.title=title;
+    else if(data.source)data.source.title=title;
+    await route.fulfill({response,json:data});
+  });
+  await page.goto(origin);
+  const fits=async()=>expect(await page.evaluate(()=>{
+    const bad=Array.from(document.querySelectorAll('.workspace-content .row')).flatMap(row=>Array.from(row.children).filter(el=>{const box=el.getBoundingClientRect(),parent=row.getBoundingClientRect();return box.left<parent.left-1||box.right>parent.right+1||el.scrollWidth>el.clientWidth+1;}).map(el=>({tag:el.tagName,cls:el.className,text:el.textContent?.slice(0,50),width:el.clientWidth,scroll:el.scrollWidth})));
+    return {overflow:document.documentElement.scrollWidth>innerWidth+2,bad};
+  })).toEqual({overflow:false,bad:[]});
+  for(const locale of ['en','ru']){
+    if(locale==='ru')await page.getByLabel('Language',{exact:true}).click();
+    await page.getByRole('navigation',{name:locale==='ru'?'Рабочие разделы':'Work areas'}).getByRole('button',{name:locale==='ru'?'Подключения':'Connections',exact:true}).click();await expect(page.getByText(profile,{exact:true})).toBeVisible();
+    for(const width of [1280,900,720,390]){await page.setViewportSize({width,height:900});await fits();}
+    await page.getByRole('button',{name:locale==='ru'?'Миграции и отчёты':'Migrations & reports',exact:true}).click();await page.getByRole('button',{name:title,exact:true}).click();await expect(page.getByRole('treeitem')).toHaveCount(2);
+    for(const width of [1280,900,720,390]){await page.setViewportSize({width,height:900});await fits();}
+  }
+  expect(writes).toEqual([]);
+});
+
 test('migration form explains scope, required fields and options and invalidates live confirmation',async({page})=>{
   await page.goto(origin);await page.getByRole('button',{name:'New migration',exact:true}).click();const form=page.getByRole('dialog',{name:'New migration',exact:true});
   await expect(form.getByLabel('Source · URL / ID / slug / space URL',{exact:true})).toHaveAttribute('required','');await expect(form.getByRole('combobox',{name:'Source profile',exact:true})).toHaveAttribute('aria-required','true');

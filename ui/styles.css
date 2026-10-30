@@ -189,6 +189,10 @@
 	white-space: normal;
 	overflow-wrap: anywhere;
 }
+.ui-button.ui-button-action {
+	flex-shrink: 1;
+	min-width: min-content;
+}
 .ui-button-icon {
 	display: inline-flex;
 	flex-shrink: 0;

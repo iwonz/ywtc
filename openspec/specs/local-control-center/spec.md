@@ -134,6 +134,10 @@ Visible text action buttons SHALL pair a thematic leading icon with a readable l
 - **WHEN** the operator focuses, activates or disables an action
 - **THEN** its accessible name, focus indication and existing confirmation requirements SHALL remain intact; decorative icons SHALL be hidden from assistive naming
 
+#### Scenario: Long data labels share a row
+- **WHEN** page titles, profile names or other unbroken data labels share a row with action controls and status indicators
+- **THEN** text actions SHALL yield available width and wrap, icons SHALL remain legible and row content SHALL stay within the page at supported desktop/mobile widths in both locales
+
 ### Requirement: Illustrated empty work areas
 Successfully loaded empty connections, reports, tasks, synchronization and mention/hashtag areas SHALL display distinct local project-style illustrations, localized explanations and an appropriate next action. Empty pagination SHALL be absent. Missing data SHALL NOT be presented as completed work or hide errors.
 
