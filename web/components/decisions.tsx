@@ -25,6 +25,7 @@ import {
 } from "../../mentions-ui/src/adapter";
 import { filterDecisions } from "../../mentions-ui/src/model";
 import { api, download, safeLink, type Translate } from "./api";
+import { RequiredNote, ScopeField, SourceStatusField } from "./operator-fields";
 export function Decisions({
 	root,
 	t,
@@ -59,7 +60,9 @@ export function Decisions({
 		[reports, setReports] = useState<any[]>([]),
 		[run, setRun] = useState(""),
 		[mentionRevision, setMentionRevision] = useState<string | null>(null),
-		[hashtagRevision, setHashtagRevision] = useState<string | null>(null);
+		[hashtagRevision, setHashtagRevision] = useState<string | null>(null),
+		[operationBusy, setOperationBusy] = useState(false),
+		[dialogError, setDialogError] = useState("");
 	const container = useRef<HTMLDivElement>(null);
 	const refresh = useCallback(
 		() =>
@@ -73,7 +76,8 @@ export function Decisions({
 		api(`${root}/settings`)
 			.then((s) => {
 				setConfigInvalid(s.validation?.valid === false);
-				const available = s.validation?.valid === false ? [] : Object.keys(s.connections);
+				const available =
+					s.validation?.valid === false ? [] : Object.keys(s.connections);
 				setProfiles(available);
 				setProfile(available[0] ?? "");
 			})
@@ -169,7 +173,7 @@ export function Decisions({
 			if (
 				!window.confirm(
 					t(
-						"Подключить эту опубликованную версию к следующим миграциям workspace?",
+						"Подключить эту опубликованную версию к следующим миграциям пространства?",
 						"Activate this published revision for future workspace migrations?",
 					),
 				)
@@ -204,11 +208,14 @@ export function Decisions({
 			onError(e);
 		}
 	};
-	const scan = () =>
-		api(`${root}/jobs`, "POST", {
+	const scan = () => {
+		if (operationBusy || !source.trim() || !profile || configInvalid) return;
+		setOperationBusy(true);
+		setDialogError("");
+		return api(`${root}/jobs`, "POST", {
 			request: {
 				kind: "scan",
-				source,
+				source: source.trim(),
 				sourceProfile: profile,
 				scope,
 				sourceStatus,
@@ -221,9 +228,14 @@ export function Decisions({
 				setAnalysis(false);
 				onJob(j.id);
 			})
-			.catch(onError);
-	const apply = () =>
-		api(`${root}/jobs`, "POST", {
+			.catch((e) => setDialogError(e instanceof Error ? e.message : String(e)))
+			.finally(() => setOperationBusy(false));
+	};
+	const apply = () => {
+		if (operationBusy || !run || (!mentionRevision && !hashtagRevision)) return;
+		setOperationBusy(true);
+		setDialogError("");
+		return api(`${root}/jobs`, "POST", {
 			request: {
 				kind: "targeted",
 				runId: run,
@@ -242,7 +254,9 @@ export function Decisions({
 			},
 		})
 			.then((j) => onJob(j.id))
-			.catch(onError);
+			.catch((e) => setDialogError(e instanceof Error ? e.message : String(e)))
+			.finally(() => setOperationBusy(false));
+	};
 	return (
 		<>
 			<div
@@ -256,7 +270,7 @@ export function Decisions({
 				}}
 			>
 				<div className="section-title">
-					{t("Анализы и версии решений", "Analyses & decision revisions")}
+					{t("Упоминания и хэштеги", "Mentions & hashtags")}
 				</div>
 				<div
 					style={{
@@ -267,11 +281,18 @@ export function Decisions({
 						flexWrap: "wrap",
 					}}
 				>
-					<Button onClick={() => setAnalysis(true)} variant="secondary">
+					<Button
+						onClick={() => {
+							setDialogError("");
+							setAnalysis(true);
+						}}
+						variant="secondary"
+					>
 						{t("Анализ source", "Analyze source")}
 					</Button>
 					<Button
 						onClick={() => {
+							setDialogError("");
 							api(`${root}/reports?limit=500`)
 								.then((d) => setReports(d.items.filter((r: any) => !r.dryRun)))
 								.catch(onError);
@@ -283,6 +304,12 @@ export function Decisions({
 					</Button>
 				</div>
 			</div>
+			<p className="workflow-hint">
+				{t(
+					"1. Анализ → 2. Разметка и черновик → 3. Публикация версии → 4. Подключение к будущим миграциям или отдельное применение к существующей. Сохранение черновика не изменяет destination.",
+					"1. Analyze → 2. Edit and save draft → 3. Publish revision → 4. Activate for future migrations or apply separately to an existing migration. Saving a draft does not change destination data.",
+				)}
+			</p>
 			{catalogs.map((c) => (
 				<div className="row" key={c.id}>
 					<Badge variant="secondary">{c.kind}</Badge>
@@ -397,7 +424,7 @@ export function Decisions({
 							</Button>
 							{catalog.published && !dirty && (
 								<Button onClick={activate} variant="secondary">
-									{t("Подключить к workspace", "Activate in workspace")}
+									{t("Подключить к пространству", "Activate in workspace")}
 								</Button>
 							)}
 						</div>
@@ -631,44 +658,48 @@ export function Decisions({
 				open={analysis}
 				onDismiss={() => setAnalysis(false)}
 			>
-				<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-					{configInvalid && <Notice tone="orange">{t("Исправьте конфигурацию в разделе «Подключения» перед анализом.", "Repair configuration in Connections before analysis.")}</Notice>}
+				<div className="operation-form">
+					<RequiredNote t={t} />
+					<p className="workflow-hint">
+						{t(
+							"Читаются только выбранные source-страницы и комментарии. Вложения/Grid payload не скачиваются, destination и migration state не изменяются.",
+							"Only selected source pages and comments are read. Attachment/Grid payloads are not downloaded; destination and migration state are unchanged.",
+						)}
+					</p>
+					{dialogError && <Notice tone="red">{dialogError}</Notice>}
+					{configInvalid && (
+						<Notice tone="orange">
+							{t(
+								"Исправьте конфигурацию в разделе «Подключения» перед анализом.",
+								"Repair configuration in Connections before analysis.",
+							)}
+						</Notice>
+					)}
 					<ChoiceField
+						required
 						label={t("Профиль", "Profile")}
 						value={profile}
 						options={profiles}
 						onValueChange={(v) => setProfile(v ?? "")}
 					/>
 					<InputField
+						required
 						label="Source URL / ID / slug / space URL"
 						value={source}
 						onChange={(e) => setSource(e.target.value)}
 					/>
-					<div
-						style={{
-							display: "flex",
-							flexDirection: "row",
-							gap: 8,
-							alignItems: "center",
-							flexWrap: "wrap",
-						}}
-						className="ui-grow"
-					>
-						<ChoiceField
-							label="Scope"
-							value={scope}
-							options={["page", "subtree", "linked"]}
-							onValueChange={(e) => setScope(e)}
-						/>
-						<ChoiceField
-							label="Source status"
-							value={sourceStatus}
-							options={["all", "current"]}
-							onValueChange={(e) => setSourceStatus(e)}
-						/>
-					</div>
+					<ScopeField value={scope} onValueChange={setScope} t={t} />
+					<SourceStatusField
+						value={sourceStatus}
+						onValueChange={setSourceStatus}
+						t={t}
+					/>
 					<ChoiceField
 						label={t("Сканировать", "Scan")}
+						description={t(
+							"both — оба типа за одно чтение; отдельный тип — только упоминания или теги.",
+							"both scans both types in one pass; a single type collects only mentions or hashtags.",
+						)}
 						value={kind}
 						options={["both", "mentions", "hashtags"]}
 						onValueChange={(e) => setKind(e)}
@@ -676,20 +707,32 @@ export function Decisions({
 					<CheckboxField
 						label={t("Комментарии", "Comments")}
 						checked={comments}
+						description={t(
+							"Включить в анализ комментарии, ответы и inline-контекст.",
+							"Include comments, replies and inline context in the analysis.",
+						)}
 						onCheckedChange={(e) => setComments(e)}
 					/>
-					<Button disabled={!source || !profile} onClick={scan}>
+					<Button
+						disabled={
+							operationBusy || configInvalid || !source.trim() || !profile
+						}
+						onClick={scan}
+					>
 						{t("Запустить анализ", "Start analysis")}
 					</Button>
 				</div>
 			</AppDialog>
 			<AppDialog
-				title={t("Применение decisions · preview", "Apply decisions · preview")}
+				title={t("Применение решений · preview", "Apply decisions · preview")}
 				open={applying}
 				onDismiss={() => setApplying(false)}
 			>
 				<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+					<RequiredNote t={t} />
+					{dialogError && <Notice tone="red">{dialogError}</Notice>}
 					<ChoiceField
+						required
 						searchable
 						label={t("Миграция", "Migration")}
 						value={run}
@@ -702,6 +745,10 @@ export function Decisions({
 					<ChoiceField
 						clearable
 						label="Mentions"
+						description={t(
+							"Необязательно: опубликованная версия решений упоминаний.",
+							"Optional: a published mention decision revision.",
+						)}
 						value={mentionRevision}
 						options={catalogs
 							.filter((c) => c.kind === "mentions" && c.published)
@@ -714,6 +761,10 @@ export function Decisions({
 					<ChoiceField
 						clearable
 						label="Hashtags"
+						description={t(
+							"Необязательно: опубликованная версия решений тегов. Выберите хотя бы один тип.",
+							"Optional: a published hashtag decision revision. Select at least one type.",
+						)}
 						value={hashtagRevision}
 						options={catalogs
 							.filter((c) => c.kind === "hashtags" && c.published)
@@ -730,7 +781,9 @@ export function Decisions({
 						)}
 					</Notice>
 					<Button
-						disabled={!run || (!mentionRevision && !hashtagRevision)}
+						disabled={
+							operationBusy || !run || (!mentionRevision && !hashtagRevision)
+						}
 						onClick={apply}
 					>
 						{t("Подготовить preview", "Prepare preview")}

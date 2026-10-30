@@ -1,6 +1,6 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:http';
-import {mkdtemp, readFile, stat, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, realpath, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {expect, test} from '@playwright/test';
@@ -44,10 +44,52 @@ test.beforeEach(async ({page, context}) => {
   await context.addCookies(cookies);
 });
 
+test('workspace sidebar, collapse preference, help and repository link guide the workflow', async ({page}) => {
+  await page.goto(origin);
+  const sidebar=page.locator('.workspace-navigation'),nav=page.getByRole('navigation',{name:'Work areas'});
+  await expect(nav.getByRole('button',{name:'Connections',exact:true})).toHaveAttribute('aria-current','page');
+  await expect(sidebar.getByRole('combobox',{name:'Workspace',exact:true})).toBeVisible();
+  await expect(page.locator('header').getByRole('combobox')).toHaveCount(0);
+  await expect(page.getByText('Migration control center',{exact:true})).toHaveCount(0);
+  const github=page.getByRole('link',{name:'Project on GitHub',exact:true});await expect(github).toHaveAttribute('href','https://github.com/iwonz/ywtc');await expect(github).toHaveAttribute('target','_blank');await expect(github).toHaveAttribute('rel',/noopener/);
+  expect(await page.locator('.top').evaluate(el=>getComputedStyle(el).borderBottomWidth)).toBe('0px');expect(await sidebar.evaluate(el=>getComputedStyle(el).borderRightWidth)).toBe('0px');
+  await page.getByRole('button',{name:'Collapse sidebar',exact:true}).click();await expect(page.getByRole('button',{name:'Expand sidebar',exact:true})).toHaveAttribute('aria-expanded','false');await expect(sidebar.getByRole('combobox')).toHaveCount(0);
+  await page.reload();await expect(page.getByRole('button',{name:'Expand sidebar',exact:true})).toBeVisible();await page.getByRole('button',{name:'Choose workspace',exact:true}).click();await expect(sidebar.getByRole('combobox',{name:'Workspace',exact:true})).toBeFocused();
+  await page.getByRole('button',{name:'Help',exact:true}).click();const help=page.getByRole('dialog',{name:'Using ywtc',exact:true});await expect(help).toContainText('This is not a Confluence space');await help.getByRole('tab',{name:'Statuses',exact:true}).click();await expect(help).toContainText('finished means execution ended');await expect(help.getByRole('link',{name:'Full status conditions in README'})).toHaveAttribute('target','_blank');await page.keyboard.press('Escape');
+  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Collapse sidebar',exact:true}).click();for(const button of await nav.getByRole('button').all())await expect(button).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)).toBe(true);
+});
+
+test('migration form explains scope, required fields and options and invalidates live confirmation',async({page})=>{
+  await page.goto(origin);await page.getByRole('button',{name:'New migration',exact:true}).click();const form=page.getByRole('dialog',{name:'New migration',exact:true});
+  await expect(form.getByLabel('Source · URL / ID / slug / space URL',{exact:true})).toHaveAttribute('required','');await expect(form.getByRole('combobox',{name:'Source profile',exact:true})).toHaveAttribute('aria-required','true');
+  await expect(form.getByRole('radio',{name:'subtree',exact:true})).toBeChecked();await expect(form.getByRole('radio',{name:'subtree',exact:true})).toHaveAccessibleDescription(/all accessible space pages/);await expect(form.getByRole('radio',{name:'page',exact:true})).toHaveAccessibleDescription(/homepage/);await expect(form.getByRole('radio',{name:'linked',exact:true})).toHaveAccessibleDescription(/Comment links do not expand/);
+  await page.screenshot({path:path.join(os.tmpdir(),'ywtc-guided-migration.png'),animations:'disabled'});
+  const info=form.getByRole('button',{name:'Info: Source profile',exact:true});await info.hover();await expect(page.getByRole('dialog',{name:'Source profile',exact:true})).toBeVisible();await page.mouse.move(0,0);await expect(page.getByRole('dialog',{name:'Source profile',exact:true})).toHaveCount(0);await info.focus();await info.click();await expect(page.getByRole('dialog',{name:'Source profile',exact:true})).toBeVisible();await page.keyboard.press('Escape');await expect(form).toBeVisible();
+  await form.getByRole('combobox',{name:'Destination',exact:true}).click();await page.getByRole('option',{name:'HTML',exact:true}).click();await form.getByLabel('Source · URL / ID / slug / space URL',{exact:true}).fill('page');await form.getByLabel('Export directory',{exact:true}).fill('/tmp/fixture-export');await form.getByRole('radio',{name:'page',exact:true}).check();await form.getByLabel('Include comments',{exact:true}).uncheck();
+  await form.getByLabel('Live · write to destination',{exact:true}).check();const confirm=form.getByLabel('I confirm this migration will write destination data',{exact:true});await confirm.check();await expect(form.getByRole('button',{name:'Start migration',exact:true})).toBeEnabled();await form.getByLabel('Source · URL / ID / slug / space URL',{exact:true}).fill('changed-page');await expect(confirm).not.toBeChecked();await expect(form.getByRole('button',{name:'Start migration',exact:true})).toBeDisabled();await form.getByLabel('Live · write to destination',{exact:true}).uncheck();
+  let request:any;await page.route(/\/api\/w\/[^/]+\/jobs$/,async route=>{request=route.request().postDataJSON();await route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Fixture preflight rejected; repair selected profile'})});});
+  await form.getByRole('button',{name:'Start dry-run',exact:true}).click();await expect(form.getByRole('alert')).toContainText('Fixture preflight rejected');expect(request.request).toMatchObject({kind:'migrate',source:'changed-page',scope:'page',sourceStatus:'all',comments:false,format:'html',archive:false,dryRun:true});expect(request.confirmed).toBe(false);
+});
+
+test('connecting another workspace selects its connections and clears report context',async({page})=>{
+  const other=await mkdtemp(path.join(os.tmpdir(),'ywtc-ui-other-'));await page.goto(origin);await page.getByRole('button',{name:'Migrations & reports',exact:true}).click();await page.getByRole('button',{name:'Fixture migration',exact:true}).click();await expect(page.getByRole('treeitem')).toHaveCount(2);
+  await page.getByRole('button',{name:'Connect workspace',exact:true}).click();await page.getByLabel('Absolute path',{exact:true}).fill(other);await page.getByRole('button',{name:'Create',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);await expect(page.getByRole('button',{name:'Connections',exact:true})).toHaveAttribute('aria-current','page');await expect(page.getByRole('combobox',{name:'Workspace',exact:true})).toContainText(await realpath(other));
+  await page.getByRole('button',{name:'Migrations & reports',exact:true}).click();await expect(page.getByText(/No reports yet/)).toBeVisible();await expect(page.getByRole('treeitem')).toHaveCount(0);
+  await page.getByRole('combobox',{name:'Workspace',exact:true}).click();await page.getByRole('option',{name:await realpath(workdir),exact:true}).click();await expect(page.getByRole('button',{name:'Connections',exact:true})).toHaveAttribute('aria-current','page');
+});
+
+test('task progress separates lifecycle and result and never invents unknown-total completion',async({page})=>{
+  const id='00000000-0000-4000-8000-000000000112';const job={id,status:'finished',createdAt:'2026-01-01T12:00:00Z',request:{kind:'migrate',dryRun:true},runId,result:{runId,status:'partial',exitCode:1},progress:{type:'progress',phase:'Source inventory',completed:2,unit:'pages',elapsedMs:2000,lastCompletedAt:Date.now(),active:[]}};
+  await page.route(/\/api\/w\/[^/]+\/jobs(?:\?.*)?$/,route=>route.fulfill({contentType:'application/json',body:JSON.stringify({items:[job],total:1})}));
+  await page.route(/\/api\/w\/[^/]+\/jobs\/00000000-0000-4000-8000-000000000112\/events$/,route=>route.fulfill({contentType:'text/event-stream',body:`event: snapshot\ndata: ${JSON.stringify(job)}\n\n`}));
+  await page.goto(origin);await page.getByRole('button',{name:'Tasks',exact:true}).click();await page.getByRole('button',{name:'Migration · 00000000',exact:true}).click();await expect(page.getByText('Source inventory',{exact:true})).toBeVisible();await expect(page.getByText(/not destination writing yet/)).toBeVisible();await expect(page.getByRole('progressbar')).toHaveCount(0);await expect(page.getByText(/Job state: finished/)).toBeVisible();await expect(page.getByText(/Operation result: partial/)).toBeVisible();await expect(page.getByRole('button',{name:'Run live',exact:true})).toHaveCount(0);await expect(page.getByText(/Analysis did not produce a live-ready result/)).toBeVisible();
+});
+
 test('recognizable navigation keeps labels, active semantics and keyboard access on desktop and mobile',async({page})=>{
   await page.setViewportSize({width:1280,height:900});await page.goto(origin);await expect(page.locator('.brand')).toHaveText('ywtc');
   const nav=page.getByRole('navigation',{name:'Work areas'});await expect(nav.getByRole('button')).toHaveCount(5);
-  for(const label of ['Migrations & reports','Tasks','Decisions','Synchronization','Connections']){
+  expect(await nav.getByRole('button').allTextContents()).toEqual(['Connections','Migrations & reports','Tasks','Synchronization','Mentions & hashtags']);
+  for(const label of ['Migrations & reports','Tasks','Mentions & hashtags','Synchronization','Connections']){
     const button=nav.getByRole('button',{name:label,exact:true});await expect(button.locator('svg')).toHaveAttribute('aria-hidden','true');await button.focus();await page.keyboard.press('Enter');await expect(button).toHaveAttribute('aria-current','page');await expect(nav.locator('[aria-current=page]')).toHaveCount(1);await expect(page.locator('.context-strip')).not.toBeEmpty();
   }
   expect(await page.locator('.workspace-navigation').evaluate((el)=>el.getBoundingClientRect().right)).toBeLessThan(await page.locator('.workspace-content').evaluate((el)=>el.getBoundingClientRect().left));
@@ -107,14 +149,14 @@ test('localhost analysis, editor revisions, cross-tab conflict, mobile and no ex
   await page.getByLabel('Destination', {exact: true}).click();await page.getByRole('option', {name: 'Yandex Wiki', exact: true}).click();await expect(page.getByLabel('Create ZIP')).not.toBeVisible();await page.keyboard.press('Escape');
   await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
   expect(errors).toEqual([]);
-  await page.getByRole('button', {name: 'Decisions', exact: true}).click();
+  await page.getByRole('button', {name: 'Mentions & hashtags', exact: true}).click();
   await page.getByRole('button', {name: 'Analyze source'}).click();
   await page.getByLabel('Source URL / ID / slug / space URL').fill('page');
-  await page.getByLabel('Scope', {exact: true}).click();await page.getByRole('option', {name: 'page', exact: true}).click();
+  await page.getByRole('radio', {name: 'page', exact: true}).check();
   await page.getByLabel('Comments', {exact: true}).uncheck();
   await page.getByRole('button', {name: 'Start analysis'}).click();
   await expect(page.getByText('completed · exit 0')).toBeVisible({timeout: 20000});
-  await page.getByRole('button', {name: 'Decisions', exact: true}).click();
+  await page.getByRole('button', {name: 'Mentions & hashtags', exact: true}).click();
   await expect(page.getByText('mentions', {exact: true}).first()).toBeVisible();
   const catalogRow = page.locator('.row').filter({has: page.getByText('mentions', {exact: true})});
   await catalogRow.getByRole('button').click();
@@ -122,7 +164,7 @@ test('localhost analysis, editor revisions, cross-tab conflict, mobile and no ex
   await page.getByLabel('Decision @ivan', {exact: true}).click();await page.getByRole('option', {name: 'url', exact: true}).click();
   await page.getByLabel('URL @ivan', {exact: true}).fill('https://people.example.com/ivan');
   await page.getByLabel('Text @ivan', {exact: true}).fill('@ivan');
-  const tab = await context.newPage();await tab.goto(origin);await tab.getByRole('button', {name: 'Decisions', exact: true}).click();
+  const tab = await context.newPage();await tab.goto(origin);await tab.getByRole('button', {name: 'Mentions & hashtags', exact: true}).click();
   await tab.locator('.row').filter({has: tab.getByText('mentions', {exact: true})}).getByRole('button').click();
   await page.getByRole('button', {name: 'Save draft', exact: true}).click();
   await tab.getByLabel('Decision @ivan', {exact: true}).click();await tab.getByRole('option', {name: 'url', exact: true}).click();await tab.getByLabel('URL @ivan', {exact: true}).fill('https://people.example.com/other');
@@ -138,8 +180,10 @@ test('localhost analysis, editor revisions, cross-tab conflict, mobile and no ex
 });
 test('report hierarchy, keyboard modal, sandbox, and paginated read-only evidence', async ({page, context}) => {
   if (!cookies.length) {const response = await fetch(`${origin}/api/session`, {method: 'POST', headers: {origin, 'content-type': 'application/json'}, body: JSON.stringify({secret: bootstrap})});const value = response.headers.get('set-cookie')!.split(';')[0]!.split('=')[1]!;await context.addCookies([{name: 'ywtc-session', value, url: origin}]);} else await context.addCookies(cookies);await page.goto(origin);
+  await page.getByRole('button', {name: 'Migrations & reports', exact: true}).click();
   await page.getByRole('button', {name: 'Fixture migration', exact: true}).click();
   await expect(page.getByRole('treeitem').filter({hasText: 'Child failed'})).toHaveAttribute('aria-level', '2');
+  const sourceLink=page.getByRole('treeitem').filter({hasText:'Child failed'}).getByRole('link',{name:'Source',exact:true});await expect(sourceLink).toHaveAttribute('href','https://wiki.example.com/root');await context.route('https://wiki.example.com/**',route=>route.abort());const opening=page.waitForEvent('popup');await sourceLink.click();await(await opening).close();await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByLabel('Search tree').fill('Child failed');await expect(page.getByRole('treeitem')).toHaveCount(2);
   const child = page.getByRole('treeitem').filter({hasText: 'Child failed'});await child.focus();await page.keyboard.press('Enter');
   await expect(page.getByRole('dialog')).toBeVisible();await page.getByRole('tab', {name: 'Compare', exact: true}).click();

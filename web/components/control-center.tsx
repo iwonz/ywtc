@@ -9,10 +9,15 @@ import {
 	AppDialog,
 } from "../../ui/fields";
 import { Button } from "../../ui/components/button";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ArrowRightLeft,
 	Files,
+	FolderOpen,
+	GitBranch,
+	CircleHelp,
+	PanelLeftClose,
+	PanelLeftOpen,
 	Languages,
 	ListTodo,
 	Monitor,
@@ -30,22 +35,38 @@ import { Decisions } from "./decisions";
 import { Settings } from "./settings";
 import { MigrationForm } from "./migration-form";
 import { Synchronization } from "./synchronization";
+import { OperatorHelp } from "./operator-help";
 export function ControlCenter() {
 	const [connected, setConnected] = useState(false),
 		[error, setError] = useState(""),
 		[workspaces, setWorkspaces] = useState<any[]>([]),
 		[workspace, setWorkspace] = useState(""),
-		[tab, setTab] = useState("reports"),
+		[tab, setTab] = useState("settings"),
 		[language, setLanguage] = useState("ru"),
 		[add, setAdd] = useState(false),
 		[directory, setDirectory] = useState(""),
 		[newMigration, setNewMigration] = useState(false),
 		[job, setJob] = useState<string>(),
 		[run, setRun] = useState<string>(),
-		[revision, setRevision] = useState(0);
+		[revision, setRevision] = useState(0),
+		[collapsed, setCollapsed] = useState(false),
+		[help, setHelp] = useState(false),
+		[pickerFocus, setPickerFocus] = useState(false),
+		[workspaceBusy, setWorkspaceBusy] = useState(false),
+		[workspaceError, setWorkspaceError] = useState("");
+	const picker = useRef<HTMLDivElement>(null);
 	const { theme: colorScheme, setTheme: setColorScheme } = useUiTheme();
 	const t: Translate = (ru, en) => (language === "ru" ? ru : en);
 	const navigation = [
+		{
+			id: "settings",
+			label: t("Подключения", "Connections"),
+			icon: Plug,
+			hint: t(
+				"Начните с профилей, доступов и настроек выбранного пространства.",
+				"Start with profiles, access and settings for the selected workspace.",
+			),
+		},
 		{
 			id: "reports",
 			label: t("Миграции и отчёты", "Migrations & reports"),
@@ -65,15 +86,6 @@ export function ControlCenter() {
 			),
 		},
 		{
-			id: "decisions",
-			label: "Decisions",
-			icon: Tags,
-			hint: t(
-				"Анализ и решения для упоминаний и тегов.",
-				"Analysis and decisions for mentions and hashtags.",
-			),
-		},
-		{
 			id: "sync",
 			label: t("Синхронизация", "Synchronization"),
 			icon: RefreshCw,
@@ -83,12 +95,12 @@ export function ControlCenter() {
 			),
 		},
 		{
-			id: "settings",
-			label: t("Подключения", "Connections"),
-			icon: Plug,
+			id: "decisions",
+			label: t("Упоминания и хэштеги", "Mentions & hashtags"),
+			icon: Tags,
 			hint: t(
-				"Профили, доступы и настройки рабочего каталога.",
-				"Profiles, access and workspace settings.",
+				"Анализ → разметка → публикация версии → подключение или применение к миграции.",
+				"Analyze → edit → publish a revision → activate or apply to a migration.",
 			),
 		},
 	];
@@ -109,6 +121,9 @@ export function ControlCenter() {
 	}, []);
 	useEffect(() => {
 		try {
+			setCollapsed(
+				localStorage.getItem("ywtc-ui-sidebar-collapsed") === "true",
+			);
 			setLanguage(
 				localStorage.getItem("ywtc-ui-language") ??
 					(navigator.language.startsWith("ru") ? "ru" : "en"),
@@ -121,6 +136,54 @@ export function ControlCenter() {
 			await refresh();
 		})().catch(fail);
 	}, [fail, refresh]);
+	useEffect(() => {
+		if (!collapsed && pickerFocus) {
+			picker.current
+				?.querySelector<HTMLButtonElement>('button[role="combobox"]')
+				?.focus();
+			setPickerFocus(false);
+		}
+	}, [collapsed, pickerFocus]);
+	const collapse = (next: boolean) => {
+		setCollapsed(next);
+		try {
+			localStorage.setItem("ywtc-ui-sidebar-collapsed", String(next));
+		} catch {}
+	};
+	const chooseWorkspace = (id: string) => {
+		setWorkspace(id);
+		setJob(undefined);
+		setRun(undefined);
+		setNewMigration(false);
+		setTab("settings");
+		setError("");
+	};
+	const register = async (create: boolean) => {
+		if (!directory.trim() || workspaceBusy) return;
+		setWorkspaceBusy(true);
+		setWorkspaceError("");
+		try {
+			const data = await api("workspaces", "POST", {
+				path: directory.trim(),
+				...(create ? { create: true } : {}),
+			});
+			const selected =
+				data.items.find(
+					(w: any) => !workspaces.some((old) => old.id === w.id),
+				) ??
+				data.items.find(
+					(w: any) => w.path === directory.trim().replace(/\/$/, ""),
+				);
+			setWorkspaces(data.items);
+			chooseWorkspace(selected?.id ?? workspace);
+			setAdd(false);
+			setDirectory("");
+		} catch (e) {
+			setWorkspaceError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setWorkspaceBusy(false);
+		}
+	};
 	const showJob = (id: string) => {
 		setJob(id);
 		setTab("jobs");
@@ -132,7 +195,7 @@ export function ControlCenter() {
 		setTab("reports");
 	};
 	return (
-		<main className="shell">
+		<main className="shell" data-sidebar-collapsed={collapsed}>
 			<h1
 				style={{
 					position: "absolute",
@@ -146,15 +209,10 @@ export function ControlCenter() {
 			<header className="top">
 				<div className="product-identity">
 					<ArrowRightLeft className="product-mark" aria-hidden="true" />
-					<div>
-						<span className="brand">ywtc</span>
-						<p className="product-caption">
-							{t("Центр миграций", "Migration control center")}
-						</p>
-					</div>
+					<span className="brand">ywtc</span>
 				</div>
 				<div
-					className="workspace-controls"
+					className="header-controls"
 					style={{
 						display: "flex",
 						flexDirection: "row",
@@ -163,25 +221,31 @@ export function ControlCenter() {
 						gap: 8,
 					}}
 				>
-					<ChoiceField
-						aria-label={t("Рабочая директория", "Workspace")}
-						value={workspace}
-						options={workspaces.map((w) => ({ value: w.id, label: w.path }))}
-						onValueChange={(value) => {
-							setWorkspace(value ?? "");
-							setJob(undefined);
-							setRun(undefined);
-						}}
-						style={{ width: 260, flex: "1 1 160px" }}
-					/>
-					<Hint content={t("Подключить workspace", "Connect workspace")}>
+					<Hint
+						content={t(
+							"Справка: порядок работы и статусы",
+							"Help: workflow and statuses",
+						)}
+					>
 						<Button
-							aria-label={t("Подключить workspace", "Connect workspace")}
-							onClick={() => setAdd(true)}
+							aria-label={t("Справка", "Help")}
 							variant="ghost"
 							size="icon-sm"
+							onClick={() => setHelp(true)}
 						>
-							<Plus size={18} />
+							<CircleHelp aria-hidden="true" />
+						</Button>
+					</Hint>
+					<Hint content={t("Проект на GitHub", "Project on GitHub")}>
+						<Button asChild variant="ghost" size="icon-sm">
+							<a
+								href="https://github.com/iwonz/ywtc"
+								target="_blank"
+								rel="noopener noreferrer"
+								aria-label={t("Проект на GitHub", "Project on GitHub")}
+							>
+								<GitBranch aria-hidden="true" />
+							</a>
 						</Button>
 					</Hint>
 					<Hint
@@ -250,32 +314,123 @@ export function ControlCenter() {
 				</div>
 			) : (
 				<div className="workspace-layout">
-					<aside className="workspace-navigation">
-						<Button
-							className="create-migration"
-							onClick={() => setNewMigration(true)}
-						>
-							<Plus size={16} aria-hidden="true" />
-							{t("Новая миграция", "New migration")}
-						</Button>
+					<aside className="workspace-navigation" id="workspace-sidebar">
+						<div className="sidebar-heading">
+							{!collapsed && <span>{t("Пространство", "Workspace")}</span>}
+							<Hint
+								content={
+									collapsed
+										? t("Развернуть сайдбар", "Expand sidebar")
+										: t("Свернуть сайдбар", "Collapse sidebar")
+								}
+							>
+								<Button
+									size="icon-sm"
+									variant="ghost"
+									aria-expanded={!collapsed}
+									aria-controls="workspace-sidebar"
+									aria-label={
+										collapsed
+											? t("Развернуть сайдбар", "Expand sidebar")
+											: t("Свернуть сайдбар", "Collapse sidebar")
+									}
+									onClick={() => collapse(!collapsed)}
+								>
+									{collapsed ? (
+										<PanelLeftOpen aria-hidden="true" />
+									) : (
+										<PanelLeftClose aria-hidden="true" />
+									)}
+								</Button>
+							</Hint>
+						</div>
+						<div ref={picker} className="sidebar-workspace">
+							{collapsed ? (
+								<Hint
+									content={
+										workspaces.find((w) => w.id === workspace)?.path ??
+										t("Выбрать пространство", "Choose workspace")
+									}
+								>
+									<Button
+										variant="ghost"
+										size="icon-sm"
+										aria-label={t("Выбрать пространство", "Choose workspace")}
+										onClick={() => {
+											collapse(false);
+											setPickerFocus(true);
+										}}
+									>
+										<FolderOpen aria-hidden="true" />
+									</Button>
+								</Hint>
+							) : (
+								<>
+									<ChoiceField
+										aria-label={t("Пространство", "Workspace")}
+										value={workspace}
+										options={workspaces.map((w) => ({
+											value: w.id,
+											label: w.path,
+										}))}
+										onValueChange={chooseWorkspace}
+										description={t(
+											"Локальная папка с конфигурацией и результатами.",
+											"Local folder with configuration and results.",
+										)}
+									/>
+									<Button
+										variant="ghost"
+										size="sm"
+										onClick={() => {
+											setWorkspaceError("");
+											setAdd(true);
+										}}
+										aria-label={t(
+											"Подключить пространство",
+											"Connect workspace",
+										)}
+									>
+										<Plus aria-hidden="true" />
+										{t("Подключить или создать", "Connect or create")}
+									</Button>
+								</>
+							)}
+						</div>
 						<nav
 							className="work-area-nav"
 							aria-label={t("Рабочие разделы", "Work areas")}
 						>
 							{navigation.map(({ id, label, icon: Icon, hint }) => (
-								<Hint key={id} content={hint}>
+								<Hint key={id} content={collapsed ? `${label}: ${hint}` : hint}>
 									<Button
 										className="nav-link"
+										aria-label={label}
 										aria-current={tab === id ? "page" : undefined}
 										onClick={() => setTab(id)}
 										variant="ghost"
 									>
 										<Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-										<span>{label}</span>
+										<span className={collapsed ? "sr-only" : undefined}>
+											{label}
+										</span>
 									</Button>
 								</Hint>
 							))}
 						</nav>
+						<Hint content={t("Новая миграция", "New migration")}>
+							<Button
+								disabled={!workspace}
+								className="create-migration"
+								aria-label={t("Новая миграция", "New migration")}
+								onClick={() => setNewMigration(true)}
+							>
+								<Plus aria-hidden="true" />
+								<span className={collapsed ? "sr-only" : undefined}>
+									{t("Новая миграция", "New migration")}
+								</span>
+							</Button>
+						</Hint>
 					</aside>
 					<div className="workspace-content">
 						<div className="context-strip">
@@ -329,7 +484,7 @@ export function ControlCenter() {
 			)}
 			<AppDialog
 				title={t(
-					"Подключить или создать workspace",
+					"Подключить или создать пространство",
 					"Connect or create workspace",
 				)}
 				open={add}
@@ -338,8 +493,14 @@ export function ControlCenter() {
 				<InputField
 					label={t("Полный путь", "Absolute path")}
 					value={directory}
+					required
+					description={t(
+						"Укажите папку на этом компьютере. Подключение использует её данные; создание добавит отсутствующую папку, не миграцию.",
+						"Choose a folder on this computer. Connecting uses its data; creating adds a missing folder, not a migration.",
+					)}
 					onChange={(e) => setDirectory(e.target.value)}
 				/>
+				{workspaceError && <Notice tone="red">{workspaceError}</Notice>}
 				<div
 					style={{
 						display: "flex",
@@ -351,32 +512,21 @@ export function ControlCenter() {
 					}}
 				>
 					<Button
-						onClick={() =>
-							api("workspaces", "POST", { path: directory })
-								.then(() => {
-									setAdd(false);
-									return refresh();
-								})
-								.catch(fail)
-						}
+						disabled={!directory.trim() || workspaceBusy}
+						onClick={() => register(false)}
 					>
 						{t("Подключить", "Connect")}
 					</Button>
 					<Button
-						onClick={() =>
-							api("workspaces", "POST", { path: directory, create: true })
-								.then(() => {
-									setAdd(false);
-									return refresh();
-								})
-								.catch(fail)
-						}
+						disabled={!directory.trim() || workspaceBusy}
+						onClick={() => register(true)}
 						variant="secondary"
 					>
 						{t("Создать", "Create")}
 					</Button>
 				</div>
 			</AppDialog>
+			<OperatorHelp open={help} onDismiss={() => setHelp(false)} t={t} />
 			<AppDialog
 				title={t("Новая миграция", "New migration")}
 				open={newMigration}

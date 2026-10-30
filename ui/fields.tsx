@@ -6,6 +6,7 @@ import {
 	Eye,
 	EyeOff,
 	LoaderCircle,
+	Info,
 	X,
 } from "lucide-react";
 import { Collapsible as CollapsiblePrimitive } from "radix-ui";
@@ -58,7 +59,75 @@ type FieldMeta = {
 	error?: React.ReactNode;
 	leading?: React.ReactNode;
 	className?: string | undefined;
+	help?: React.ReactNode;
+	trailing?: React.ReactNode;
 };
+function InfoControl({
+	label,
+	children,
+}: {
+	label: string;
+	children: React.ReactNode;
+}) {
+	const [open, setOpen] = React.useState(false);
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-xs"
+					aria-label={`Info: ${label}`}
+					onPointerEnter={() => setOpen(true)}
+					onPointerLeave={() => setOpen(false)}
+					onFocus={() => setOpen(true)}
+					onBlur={() => setOpen(false)}
+					onClick={(e) => {
+						e.preventDefault();
+						setOpen(true);
+					}}
+				>
+					<Info aria-hidden="true" />
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent
+				aria-label={label}
+				className="max-w-[calc(100vw-2rem)] text-sm leading-relaxed"
+				onOpenAutoFocus={(e) => e.preventDefault()}
+				onCloseAutoFocus={(e) => e.preventDefault()}
+			>
+				{children}
+			</PopoverContent>
+		</Popover>
+	);
+}
+function FieldLabel({
+	label,
+	id,
+	required,
+	help,
+}: {
+	label: React.ReactNode;
+	id: string;
+	required?: boolean | undefined;
+	help?: React.ReactNode;
+}) {
+	return (
+		<div className="flex items-center gap-1.5">
+			<Label htmlFor={id}>{label}</Label>
+			{required && (
+				<span aria-hidden="true" className="text-primary">
+					*
+				</span>
+			)}
+			{help && (
+				<InfoControl label={typeof label === "string" ? label : "Field"}>
+					{help}
+				</InfoControl>
+			)}
+		</div>
+	);
+}
 export function InputField({
 	label,
 	description,
@@ -66,13 +135,23 @@ export function InputField({
 	leading,
 	className,
 	id,
+	required,
+	help,
+	trailing,
 	...props
 }: React.ComponentProps<typeof Input> & FieldMeta) {
 	const generated = React.useId(),
 		fieldId = id ?? generated;
 	return (
 		<div className={cn("ui-field", className)}>
-			{label && <Label htmlFor={fieldId}>{label}</Label>}
+			{label && (
+				<FieldLabel
+					label={label}
+					id={fieldId}
+					required={required}
+					help={help}
+				/>
+			)}
 			<div className="relative">
 				{leading && (
 					<span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground">
@@ -82,12 +161,18 @@ export function InputField({
 				<Input
 					{...props}
 					id={fieldId}
-					className={leading ? "pl-9" : undefined}
+					required={required}
+					className={cn(leading && "pl-9", trailing && "pr-10")}
 					aria-invalid={Boolean(error)}
 					aria-describedby={
 						error || description ? `${fieldId}-hint` : undefined
 					}
 				/>
+				{trailing && (
+					<span className="absolute right-1 top-1/2 -translate-y-1/2">
+						{trailing}
+					</span>
+				)}
 			</div>
 			{(error || description) && (
 				<p
@@ -105,19 +190,21 @@ export function PasswordField(
 ) {
 	const [visible, setVisible] = React.useState(false);
 	return (
-		<div className="relative">
-			<InputField {...props} type={visible ? "text" : "password"} />
-			<Button
-				type="button"
-				variant="ghost"
-				size="icon-sm"
-				className="absolute bottom-0.5 right-1"
-				aria-label={visible ? "Hide password" : "Show password"}
-				onClick={() => setVisible(!visible)}
-			>
-				{visible ? <EyeOff /> : <Eye />}
-			</Button>
-		</div>
+		<InputField
+			{...props}
+			type={visible ? "text" : "password"}
+			trailing={
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-sm"
+					aria-label={visible ? "Hide password" : "Show password"}
+					onClick={() => setVisible(!visible)}
+				>
+					{visible ? <EyeOff /> : <Eye />}
+				</Button>
+			}
+		/>
 	);
 }
 export function NumberField({
@@ -159,6 +246,8 @@ export function ChoiceField({
 	className,
 	style,
 	disabled,
+	required,
+	help,
 	...props
 }: {
 	options: ChoiceOption[];
@@ -172,6 +261,8 @@ export function ChoiceField({
 	className?: string | undefined;
 	style?: React.CSSProperties | undefined;
 	disabled?: boolean | undefined;
+	required?: boolean | undefined;
+	help?: React.ReactNode;
 	"aria-label"?: string | undefined;
 }) {
 	const id = React.useId(),
@@ -184,7 +275,9 @@ export function ChoiceField({
 		current = items.find((item) => item.value === value);
 	return (
 		<div className={cn("ui-field", className)} style={style}>
-			{label && <Label htmlFor={id}>{label}</Label>}
+			{label && (
+				<FieldLabel label={label} id={id} required={required} help={help} />
+			)}
 			<div className="flex min-w-0 items-center gap-1">
 				{searchable ? (
 					<Popover open={open} onOpenChange={setOpen}>
@@ -195,6 +288,8 @@ export function ChoiceField({
 								role="combobox"
 								aria-expanded={open}
 								aria-label={name}
+								aria-required={required}
+								aria-describedby={description ? `${id}-hint` : undefined}
 								disabled={disabled}
 								className="w-full min-w-0 justify-between font-normal"
 							>
@@ -235,10 +330,17 @@ export function ChoiceField({
 				) : (
 					<Select
 						value={value ?? ""}
+						required={required}
 						onValueChange={onValueChange}
 						disabled={disabled}
 					>
-						<SelectTrigger id={id} aria-label={name} className="w-full min-w-0">
+						<SelectTrigger
+							id={id}
+							aria-label={name}
+							aria-required={required}
+							aria-describedby={description ? `${id}-hint` : undefined}
+							className="w-full min-w-0"
+						>
 							<SelectValue placeholder={placeholder ?? "—"} />
 						</SelectTrigger>
 						<SelectContent position="popper">
@@ -270,17 +372,23 @@ export function ChoiceField({
 					</Button>
 				)}
 			</div>
-			{description && <p className="ui-field-hint">{description}</p>}
+			{description && (
+				<p id={`${id}-hint`} className="ui-field-hint">
+					{description}
+				</p>
+			)}
 		</div>
 	);
 }
 export function CheckboxField({
 	label,
+	description,
 	checked,
 	onCheckedChange,
 	...props
 }: Omit<React.ComponentProps<typeof Checkbox>, "onCheckedChange"> & {
 	label?: React.ReactNode;
+	description?: React.ReactNode;
 	onCheckedChange: (checked: boolean) => void;
 }) {
 	const id = React.useId();
@@ -290,12 +398,20 @@ export function CheckboxField({
 				{...props}
 				id={id}
 				checked={checked}
+				aria-describedby={description ? `${id}-hint` : undefined}
 				onCheckedChange={(value) => onCheckedChange(value === true)}
 			/>
 			{label && (
-				<Label htmlFor={id} className="leading-5 font-normal">
-					{label}
-				</Label>
+				<div>
+					<Label htmlFor={id} className="leading-5 font-normal">
+						{label}
+					</Label>
+					{description && (
+						<p id={`${id}-hint`} className="ui-field-hint mt-1">
+							{description}
+						</p>
+					)}
+				</div>
 			)}
 		</div>
 	);
@@ -355,6 +471,7 @@ export function AppDialog({
 	className?: string | undefined;
 }) {
 	const opener = React.useRef<HTMLElement | null>(null);
+	const content = React.useRef<HTMLDivElement | null>(null);
 	return (
 		<Dialog
 			open={open}
@@ -363,15 +480,25 @@ export function AppDialog({
 			}}
 		>
 			<DialogContent
+				ref={content}
 				className={cn("ui-dialog", className)}
 				style={{ maxWidth: `min(${width}, calc(100vw - 2rem))` }}
 				showCloseButton={false}
 				aria-describedby={undefined}
-				onOpenAutoFocus={() => {
+				onOpenAutoFocus={(event) => {
 					opener.current =
 						document.activeElement instanceof HTMLElement
 							? document.activeElement
 							: null;
+					const initial = Array.from(
+						content.current?.querySelectorAll<HTMLElement>(
+							'input:not([type="hidden"]):not(:disabled), button[role="combobox"]:not(:disabled), textarea:not(:disabled), [role="radio"]:not(:disabled)',
+						) ?? [],
+					).find((element) => element.getClientRects().length > 0);
+					if (initial) {
+						event.preventDefault();
+						initial.focus();
+					}
 				}}
 				onCloseAutoFocus={(event) => {
 					if (opener.current?.isConnected) {

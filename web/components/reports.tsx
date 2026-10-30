@@ -25,14 +25,20 @@ function LinkIcon({ url, label }: { url?: string; label: string }) {
 	return (
 		<Hint content={label}>
 			<Button
-				{...(href
-					? { href, target: "_blank", rel: "noopener noreferrer" }
-					: { disabled: true })}
+				asChild={Boolean(href)}
+				disabled={!href}
+				className="report-reference"
 				aria-label={label}
 				variant="ghost"
 				size="icon-sm"
 			>
-				<ExternalLink size={15} />
+				{href ? (
+					<a href={href} target="_blank" rel="noopener noreferrer">
+						<ExternalLink size={15} aria-hidden="true" />
+					</a>
+				) : (
+					<ExternalLink size={15} aria-hidden="true" />
+				)}
 			</Button>
 		</Hint>
 	);

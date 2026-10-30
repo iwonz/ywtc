@@ -1,10 +1,16 @@
 "use client";
 import { Badge } from "../../ui/components/badge";
 import { Button } from "../../ui/components/button";
-import { Notice, CheckboxField } from "../../ui/fields";
+import { Notice, CheckboxField, Hint } from "../../ui/fields";
 import { Progress } from "../../ui/components/progress";
 import { useEffect, useRef, useState } from "react";
 import { api, statusColor, type Translate } from "./api";
+import {
+	lifecycleGuidance,
+	measuredPercentage,
+	operationLabel,
+	phaseGuidance,
+} from "./operator-guidance";
 export function Tasks({
 	root,
 	t,
@@ -86,6 +92,7 @@ export function Tasks({
 			onError(e);
 		}
 	};
+	const percent = measuredPercentage(snapshot);
 	return (
 		<>
 			<div className="section-title">
@@ -93,14 +100,13 @@ export function Tasks({
 			</div>
 			{jobs.map((item) => (
 				<div className="row" key={item.id}>
-					<Badge
-						data-tone={statusColor(item.result?.status ?? item.status)}
-						variant="secondary"
-					>
-						{item.status}
-					</Badge>
+					<Hint content={lifecycleGuidance(item.status, t)}>
+						<Badge data-tone={statusColor(item.status)} variant="secondary">
+							{item.status}
+						</Badge>
+					</Hint>
 					<Button onClick={() => setSelected(item.id)} variant="ghost">
-						{item.request.kind} · {item.id.slice(0, 8)}
+						{operationLabel(item.request.kind, t)} · {item.id.slice(0, 8)}
 					</Button>
 					<span className="grow muted">
 						{new Date(item.createdAt).toLocaleString()}
@@ -147,6 +153,21 @@ export function Tasks({
 			</div>
 			{job && (
 				<section className="section">
+					<p className="workflow-hint">
+						{operationLabel(job.request.kind, t)} ·{" "}
+						{t("Состояние задачи", "Job state")}: <strong>{job.status}</strong>.{" "}
+						{lifecycleGuidance(job.status, t)}
+					</p>
+					{job.result && (
+						<p>
+							{t("Результат операции", "Operation result")}:{" "}
+							<strong>{job.result.status}</strong> · exit {job.result.exitCode}.{" "}
+							{t(
+								"Итог запуска и исходы объектов смотрите в отчёте.",
+								"Consult the report for run results and object outcomes.",
+							)}
+						</p>
+					)}
 					<div
 						style={{
 							display: "flex",
@@ -189,6 +210,14 @@ export function Tasks({
 							{new Date(job.heartbeatAt).toLocaleString()}
 						</p>
 					)}
+					{job.status === "running" && !snapshot && (
+						<Notice>
+							{t(
+								"Worker запущен; ожидается первый progress/checkpoint. Процент пока неизвестен.",
+								"The worker has started; awaiting its first progress/checkpoint. Percentage is not known yet.",
+							)}
+						</Notice>
+					)}
 					{job.inventory && (
 						<div
 							style={{
@@ -212,11 +241,11 @@ export function Tasks({
 					{snapshot && (
 						<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
 							<strong>{snapshot.phase}</strong>
-							{snapshot.total > 0 && (
-								<Progress
-									aria-label="Operation progress"
-									value={(snapshot.completed / snapshot.total) * 100}
-								/>
+							<p className="workflow-hint">
+								{phaseGuidance(snapshot.phase, t)}
+							</p>
+							{percent !== undefined && (
+								<Progress aria-label="Operation progress" value={percent} />
 							)}
 							<span>
 								{snapshot.completed ?? ""}
@@ -257,13 +286,25 @@ export function Tasks({
 								{snapshot.etaMs
 									? `ETA ${Math.ceil(snapshot.etaMs / 60000)} min · `
 									: ""}
-								{t("Прошло", "Elapsed")} {Math.round(snapshot.elapsedMs / 1000)}{" "}
-								s · {t("Без завершений", "Since last completion")}{" "}
-								{Math.max(
-									0,
-									Math.round((Date.now() - snapshot.lastCompletedAt) / 1000),
-								)}{" "}
-								s
+								{Number.isFinite(snapshot.elapsedMs) && (
+									<>
+										{t("Прошло", "Elapsed")}{" "}
+										{Math.round(snapshot.elapsedMs / 1000)} s
+									</>
+								)}
+								{Number.isFinite(snapshot.lastCompletedAt) && (
+									<>
+										{" "}
+										· {t("Без завершений", "Since last completion")}{" "}
+										{Math.max(
+											0,
+											Math.round(
+												(Date.now() - snapshot.lastCompletedAt) / 1000,
+											),
+										)}{" "}
+										s
+									</>
+								)}
 							</span>
 							{snapshot.active?.map((a: any) => (
 								<span className="mono" key={a.id}>
@@ -318,7 +359,7 @@ export function Tasks({
 					{["migrate", "retry"].includes(job.request.kind) &&
 						job.request.dryRun &&
 						job.result?.runId &&
-						!["failed", "cancelled", "interrupted"].includes(
+						["completed", "completed-with-warnings"].includes(
 							job.result.status,
 						) && (
 							<div
@@ -346,6 +387,19 @@ export function Tasks({
 									{t("Запустить live", "Run live")}
 								</Button>
 							</div>
+						)}
+					{["migrate", "retry"].includes(job.request.kind) &&
+						job.request.dryRun &&
+						job.result &&
+						!["completed", "completed-with-warnings"].includes(
+							job.result.status,
+						) && (
+							<Notice tone="orange" style={{ marginTop: 16 }}>
+								{t(
+									"Анализ не дал готового к live результата. Откройте issues/отчёт, устраните блокирующие причины и повторите анализ.",
+									"Analysis did not produce a live-ready result. Review issues/the report, resolve blockers and analyze again.",
+								)}
+							</Notice>
 						)}
 					{job.request.kind === "targeted" &&
 						!job.request.dryRun &&

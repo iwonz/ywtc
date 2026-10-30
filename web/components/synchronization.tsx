@@ -19,6 +19,7 @@ import {
 import { Badge } from "../../ui/components/badge";
 import { useCallback, useEffect, useState, useRef } from "react";
 import { api, safeLink, type Translate } from "./api";
+import { FormSection, RequiredNote } from "./operator-fields";
 export function Synchronization({
 	root,
 	t,
@@ -112,348 +113,397 @@ export function Synchronization({
 	}
 	return (
 		<div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
-			<div
-				style={{
-					display: "flex",
-					flexDirection: "row",
-					gap: 8,
-					flexWrap: "wrap",
-					alignItems: "flex-end",
-				}}
+			<p className="workflow-hint">
+				{t(
+					"Анализ → решения по изменениям → проверка preview → подтверждение записи. Неизменённые объекты переиспользуются; «Оставить» действует до следующего изменения source. Корзина требует отдельного подтверждения.",
+					"Analyze → decide changes → review preview → confirm writes. Unchanged objects are reused; Keep lasts until source changes again. Trash requires a separate confirmation.",
+				)}
+			</p>
+			<FormSection
+				title={t("1. Новый анализ", "1. New analysis")}
+				description={t(
+					"Нужен Run ID существующего live-переноса. Этот шаг не записывает destination.",
+					"Requires a Run ID from an existing live migration. This step does not write destination data.",
+				)}
 			>
-				<InputField
-					label={t("Run ID исходной миграции", "Original migration Run ID")}
-					value={runId}
-					onChange={(e) => setRunId(e.currentTarget.value)}
-					style={{ width: 340 }}
-				/>
-				<InputField
-					label={t("Подраздел — необязательно", "Subtree — optional")}
-					value={source}
-					onChange={(e) => setSource(e.currentTarget.value)}
-					style={{ flex: 1 }}
-				/>
-				<Button
-					disabled={!runId || busy}
-					onClick={() =>
-						task({ kind: "sync-plan", runId, ...(source ? { source } : {}) })
-					}
-				>
-					{t("Анализировать без записи", "Analyze without writes")}
-				</Button>
-			</div>
-			<div
-				style={{
-					display: "flex",
-					flexDirection: "row",
-					gap: 8,
-					alignItems: "center",
-					flexWrap: "wrap",
-				}}
-			>
-				<ChoiceField
-					label={t("План синхронизации", "Synchronization plan")}
-					value={planId}
-					style={{ flex: 1 }}
-					searchable
-					options={plans.map((p) => ({
-						value: p.id,
-						label: `${p.createdAt} · ${p.status} · ${p.sourceUrl}`,
-					}))}
-					onValueChange={(v) => {
-						setPlanId(v ?? "");
-						setPage(1);
-						setConfirm(false);
-						setTrash(false);
+				<RequiredNote t={t} />
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "row",
+						gap: 8,
+						flexWrap: "wrap",
+						alignItems: "flex-end",
 					}}
-				/>
-				<Button
-					onClick={() => {
-						refresh().catch(onError);
-						load().catch(onError);
-					}}
-					variant="ghost"
 				>
-					{t("Обновить", "Refresh")}
-				</Button>
-			</div>
-			{plan && (
-				<>
-					{!plan.inventory.complete && (
-						<Notice tone={"orange"}>
-							{t(
-								"Inventory неполон. Применение запрещено; устраните причины и повторите анализ.",
-								"Inventory is incomplete. Resolve the failures and analyze again before applying.",
-							)}{" "}
-							{plan.inventory.failures
-								.map((f: any) => `${f.code}: ${f.message}`)
-								.join("; ")}
-						</Notice>
-					)}
-					<p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>
-						{t(
-							"Новые страницы добавляются. Изменившиеся и страницы без baseline требуют решения. Неизменённые сохраняют ID и тело.",
-							"New pages are added. Changed pages and unknown baselines require a decision. Unchanged pages retain their IDs and bodies.",
+					<InputField
+						label={t("Run ID исходной миграции", "Original migration Run ID")}
+						required
+						description={t(
+							"Скопируйте полный UUID из отчёта в этом пространстве.",
+							"Copy the full UUID from a report in this workspace.",
 						)}
-					</p>
-					{plan.references.unreadable?.length > 0 && (
-						<Notice tone={"yellow"}>
-							{t(
-								"Аудит входящих ссылок неполон. Обязательная ветка проверена; ссылки в этих непрочитанных объектах пока не исправляются. Корзина недоступна.",
-								"Inbound link audit is incomplete. Required dependencies were checked; links in these unreadable objects cannot be patched. Trash is unavailable.",
-							)}{" "}
-							{plan.references.unreadable
-								.map((failure: any) => `${failure.pageId}: ${failure.message}`)
-								.join("; ")}
-						</Notice>
-					)}
-					<div
-						style={{
-							display: "flex",
-							flexDirection: "row",
-							gap: 8,
-							alignItems: "center",
-							flexWrap: "wrap",
-						}}
+						value={runId}
+						onChange={(e) => setRunId(e.currentTarget.value)}
+						style={{ width: 340 }}
+					/>
+					<InputField
+						label={t("Подраздел — необязательно", "Subtree — optional")}
+						description={t(
+							"Оставьте пустым для исходного корня. URL подраздела ограничит повторный discovery, сохраняя mappings большого переноса.",
+							"Leave empty for the original root. A subtree URL limits discovery while preserving the larger migration's mappings.",
+						)}
+						value={source}
+						onChange={(e) => setSource(e.currentTarget.value)}
+						style={{ flex: 1 }}
+					/>
+					<Button
+						disabled={!runId || busy}
+						onClick={() =>
+							task({ kind: "sync-plan", runId, ...(source ? { source } : {}) })
+						}
 					>
-						<InputField
-							aria-label={t("Поиск страниц", "Search pages")}
-							placeholder={t("Название или ID", "Title or ID")}
-							value={query}
-							onChange={(e) => {
-								setQuery(e.currentTarget.value);
-								setPage(1);
-							}}
-							style={{ flex: 1 }}
-						/>
-						<ChoiceField
-							aria-label={t("Фильтр изменений", "Change filter")}
-							value={filter}
-							options={[
-								"all",
-								"add",
-								"changed",
-								"unknown-baseline",
-								"unchanged",
-								"kept",
-								"excluded",
-							].map((value) => ({
-								value,
-								label: value === "all" ? t("Все", "All") : value,
-							}))}
-							onValueChange={(v) => {
-								setFilter(v ?? "all");
-								setPage(1);
-							}}
-						/>
-					</div>
-					<div className="table-scroll overflow-x-auto">
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead>{t("Страница", "Page")}</TableHead>
-									<TableHead>{t("Изменение", "Change")}</TableHead>
-									<TableHead>{t("Решение", "Decision")}</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{plan.items.map((item: any) => (
-									<TableRow key={item.id}>
-										<TableCell>
-											<Button
-												onClick={async () => {
-													try {
-														setDetail(
-															await api(
-																`${root}/sync/${planId}/detail?pageId=${encodeURIComponent(item.id)}`,
-															),
-														);
-													} catch (error) {
-														onError(error);
-													}
-												}}
-												variant="ghost"
-											>
-												{item.title}
-											</Button>
-											<div
-												style={{
-													display: "flex",
-													flexDirection: "row",
-													alignItems: "center",
-													flexWrap: "wrap",
-													gap: 8,
-												}}
-											>
-												{safeLink(item.sourceUrl) && (
-													<a
-														href={safeLink(item.sourceUrl)}
-														target="_blank"
-														rel="noreferrer"
-													>
-														source
-													</a>
-												)}
-												{safeLink(item.destinationUrl) && (
-													<a
-														href={safeLink(item.destinationUrl)}
-														target="_blank"
-														rel="noreferrer"
-													>
-														destination
-													</a>
-												)}
-											</div>
-										</TableCell>
-										<TableCell>
-											<Badge
-												data-tone={
-													["changed", "unknown-baseline"].includes(
-														item.classification,
-													)
-														? "orange"
-														: "gray"
-												}
-												variant="secondary"
-											>
-												{item.classification}
-											</Badge>
-											<p style={{ fontSize: 12 }}>{item.reasons.join(" · ")}</p>
-										</TableCell>
-										<TableCell>
-											{["changed", "unknown-baseline"].includes(
-												item.classification,
-											) ? (
-												<ChoiceField
-													aria-label={`${t("Решение", "Decision")}: ${item.title}`}
-													placeholder={t("Выберите", "Choose")}
-													value={plan.decisions.decisions[item.id] ?? null}
-													description={
-														!item.trash.allowed ? item.trash.reason : undefined
-													}
-													disabled={plan.status === "applied" || decisionBusy}
-													options={[
-														{ value: "update", label: t("Обновить", "Update") },
-														{ value: "keep", label: t("Оставить", "Keep") },
-														{
-															value: "trash",
-															label: t("В корзину", "Trash"),
-															disabled: !item.trash.allowed,
-														},
-													]}
-													onValueChange={(v) => decide(item.id, v)}
-												/>
-											) : (
-												<p style={{ fontSize: 14 }}>
-													{item.classification === "add"
-														? t("Добавить", "Add")
-														: t("Без записи", "No body update")}
-												</p>
-											)}
-										</TableCell>
-									</TableRow>
-								))}
-							</TableBody>
-						</Table>
-					</div>
-					{plan.total > 50 && (
-						<PageControls
-							total={Math.ceil(plan.total / 50)}
-							value={page}
-							onValueChange={setPage}
-						/>
-					)}
-					<div
-						style={{
-							display: "flex",
-							flexDirection: "row",
-							gap: 8,
-							alignItems: "center",
-							flexWrap: "wrap",
-						}}
-					>
-						<p style={{ fontSize: 14 }}>
-							{t("Проверка входящих ссылок", "Inbound link audit")}:{" "}
-							{plan.references.pages} {t("страниц", "pages")}
-							{plan.references.comments > 0
-								? ` · ${plan.references.comments} comments`
-								: ""}
-							{plan.references.patches > 0
-								? ` · ${plan.references.patches} patches`
-								: ""}
-						</p>
-					</div>
-					<SyncLinkReview
-						root={root}
-						planId={planId}
-						revision={plan.revision}
-						t={t}
-						onError={onError}
-						onInspect={async (id) => {
-							try {
-								setDetail(
-									await api(
-										`${root}/sync/${planId}/detail?pageId=${encodeURIComponent(id)}`,
-									),
-								);
-							} catch (error) {
-								onError(error);
-							}
+						{t("Анализировать без записи", "Analyze without writes")}
+					</Button>
+				</div>
+			</FormSection>
+			<FormSection
+				title={t("2. Решения и применение", "2. Decisions and apply")}
+				description={t(
+					"Выберите сохранённый план. Запись доступна после решений по обязательным изменениям и проверки актуального preview.",
+					"Select a saved plan. Writes require decisions for mandatory changes and a current reviewed preview.",
+				)}
+			>
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "row",
+						gap: 8,
+						alignItems: "center",
+						flexWrap: "wrap",
+					}}
+				>
+					<ChoiceField
+						label={t("План синхронизации", "Synchronization plan")}
+						description={t(
+							"Продолжите прежний анализ или выберите новый результат задачи.",
+							"Continue an earlier analysis or select a new task result.",
+						)}
+						value={planId}
+						style={{ flex: 1 }}
+						searchable
+						options={plans.map((p) => ({
+							value: p.id,
+							label: `${p.createdAt} · ${p.status} · ${p.sourceUrl}`,
+						}))}
+						onValueChange={(v) => {
+							setPlanId(v ?? "");
+							setPage(1);
+							setConfirm(false);
+							setTrash(false);
 						}}
 					/>
-					{plan.missingDecisions > 0 && (
-						<Notice tone={"blue"}>
-							{t("Осталось выбрать решения", "Decisions remaining")}:{" "}
-							{plan.missingDecisions}
-						</Notice>
-					)}
-					{plan.status !== "applied" && (
-						<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-							<CheckboxField
-								checked={confirm}
-								disabled={decisionBusy}
-								label={t(
-									"Подтверждаю решения и показанные исправления ссылок. Изменения destination могут быть заменены source-версией.",
-									"Confirm decisions and disclosed link repairs. Destination edits may be replaced by the source version.",
-								)}
-								onCheckedChange={(e) => setConfirm(e)}
+					<Button
+						onClick={() => {
+							refresh().catch(onError);
+							load().catch(onError);
+						}}
+						variant="ghost"
+					>
+						{t("Обновить", "Refresh")}
+					</Button>
+				</div>
+				{plan && (
+					<>
+						{!plan.inventory.complete && (
+							<Notice tone={"orange"}>
+								{t(
+									"Inventory неполон. Применение запрещено; устраните причины и повторите анализ.",
+									"Inventory is incomplete. Resolve the failures and analyze again before applying.",
+								)}{" "}
+								{plan.inventory.failures
+									.map((f: any) => `${f.code}: ${f.message}`)
+									.join("; ")}
+							</Notice>
+						)}
+						<p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>
+							{t(
+								"Новые страницы добавляются. Изменившиеся и страницы без baseline требуют решения. Неизменённые сохраняют ID и тело.",
+								"New pages are added. Changed pages and unknown baselines require a decision. Unchanged pages retain their IDs and bodies.",
+							)}
+						</p>
+						{plan.references.unreadable?.length > 0 && (
+							<Notice tone={"yellow"}>
+								{t(
+									"Аудит входящих ссылок неполон. Обязательная ветка проверена; ссылки в этих непрочитанных объектах пока не исправляются. Корзина недоступна.",
+									"Inbound link audit is incomplete. Required dependencies were checked; links in these unreadable objects cannot be patched. Trash is unavailable.",
+								)}{" "}
+								{plan.references.unreadable
+									.map(
+										(failure: any) => `${failure.pageId}: ${failure.message}`,
+									)
+									.join("; ")}
+							</Notice>
+						)}
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "row",
+								gap: 8,
+								alignItems: "center",
+								flexWrap: "wrap",
+							}}
+						>
+							<InputField
+								aria-label={t("Поиск страниц", "Search pages")}
+								placeholder={t("Название или ID", "Title or ID")}
+								value={query}
+								onChange={(e) => {
+									setQuery(e.currentTarget.value);
+									setPage(1);
+								}}
+								style={{ flex: 1 }}
 							/>
-							{Object.values(plan.decisions.decisions).includes("trash") && (
+							<ChoiceField
+								aria-label={t("Фильтр изменений", "Change filter")}
+								value={filter}
+								options={[
+									"all",
+									"add",
+									"changed",
+									"unknown-baseline",
+									"unchanged",
+									"kept",
+									"excluded",
+								].map((value) => ({
+									value,
+									label: value === "all" ? t("Все", "All") : value,
+								}))}
+								onValueChange={(v) => {
+									setFilter(v ?? "all");
+									setPage(1);
+								}}
+							/>
+						</div>
+						<div className="table-scroll overflow-x-auto">
+							<Table>
+								<TableHeader>
+									<TableRow>
+										<TableHead>{t("Страница", "Page")}</TableHead>
+										<TableHead>{t("Изменение", "Change")}</TableHead>
+										<TableHead>{t("Решение", "Decision")}</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
+									{plan.items.map((item: any) => (
+										<TableRow key={item.id}>
+											<TableCell>
+												<Button
+													onClick={async () => {
+														try {
+															setDetail(
+																await api(
+																	`${root}/sync/${planId}/detail?pageId=${encodeURIComponent(item.id)}`,
+																),
+															);
+														} catch (error) {
+															onError(error);
+														}
+													}}
+													variant="ghost"
+												>
+													{item.title}
+												</Button>
+												<div
+													style={{
+														display: "flex",
+														flexDirection: "row",
+														alignItems: "center",
+														flexWrap: "wrap",
+														gap: 8,
+													}}
+												>
+													{safeLink(item.sourceUrl) && (
+														<a
+															href={safeLink(item.sourceUrl)}
+															target="_blank"
+															rel="noreferrer"
+														>
+															source
+														</a>
+													)}
+													{safeLink(item.destinationUrl) && (
+														<a
+															href={safeLink(item.destinationUrl)}
+															target="_blank"
+															rel="noreferrer"
+														>
+															destination
+														</a>
+													)}
+												</div>
+											</TableCell>
+											<TableCell>
+												<Badge
+													data-tone={
+														["changed", "unknown-baseline"].includes(
+															item.classification,
+														)
+															? "orange"
+															: "gray"
+													}
+													variant="secondary"
+												>
+													{item.classification}
+												</Badge>
+												<p style={{ fontSize: 12 }}>
+													{item.reasons.join(" · ")}
+												</p>
+											</TableCell>
+											<TableCell>
+												{["changed", "unknown-baseline"].includes(
+													item.classification,
+												) ? (
+													<ChoiceField
+														aria-label={`${t("Решение", "Decision")}: ${item.title}`}
+														placeholder={t("Выберите", "Choose")}
+														value={plan.decisions.decisions[item.id] ?? null}
+														description={
+															!item.trash.allowed
+																? item.trash.reason
+																: undefined
+														}
+														disabled={plan.status === "applied" || decisionBusy}
+														options={[
+															{
+																value: "update",
+																label: t("Обновить", "Update"),
+															},
+															{ value: "keep", label: t("Оставить", "Keep") },
+															{
+																value: "trash",
+																label: t("В корзину", "Trash"),
+																disabled: !item.trash.allowed,
+															},
+														]}
+														onValueChange={(v) => decide(item.id, v)}
+													/>
+												) : (
+													<p style={{ fontSize: 14 }}>
+														{item.classification === "add"
+															? t("Добавить", "Add")
+															: t("Без записи", "No body update")}
+													</p>
+												)}
+											</TableCell>
+										</TableRow>
+									))}
+								</TableBody>
+							</Table>
+						</div>
+						{plan.total > 50 && (
+							<PageControls
+								total={Math.ceil(plan.total / 50)}
+								value={page}
+								onValueChange={setPage}
+							/>
+						)}
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "row",
+								gap: 8,
+								alignItems: "center",
+								flexWrap: "wrap",
+							}}
+						>
+							<p style={{ fontSize: 14 }}>
+								{t("Проверка входящих ссылок", "Inbound link audit")}:{" "}
+								{plan.references.pages} {t("страниц", "pages")}
+								{plan.references.comments > 0
+									? ` · ${plan.references.comments} comments`
+									: ""}
+								{plan.references.patches > 0
+									? ` · ${plan.references.patches} patches`
+									: ""}
+							</p>
+						</div>
+						<SyncLinkReview
+							root={root}
+							planId={planId}
+							revision={plan.revision}
+							t={t}
+							onError={onError}
+							onInspect={async (id) => {
+								try {
+									setDetail(
+										await api(
+											`${root}/sync/${planId}/detail?pageId=${encodeURIComponent(id)}`,
+										),
+									);
+								} catch (error) {
+									onError(error);
+								}
+							}}
+						/>
+						{plan.missingDecisions > 0 && (
+							<Notice tone={"blue"}>
+								{t("Осталось выбрать решения", "Decisions remaining")}:{" "}
+								{plan.missingDecisions}
+							</Notice>
+						)}
+						{plan.status !== "applied" && (
+							<div
+								style={{ display: "flex", flexDirection: "column", gap: 12 }}
+							>
 								<CheckboxField
-									checked={trash}
+									checked={confirm}
 									disabled={decisionBusy}
 									label={t(
-										"Отдельно подтверждаю обратимое перемещение выбранных leaf-страниц в корзину.",
-										"Separately confirm reversible trash of the selected leaf pages.",
+										"Подтверждаю решения и показанные исправления ссылок. Изменения destination могут быть заменены source-версией.",
+										"Confirm decisions and disclosed link repairs. Destination edits may be replaced by the source version.",
 									)}
-									onCheckedChange={(e) => setTrash(e)}
+									onCheckedChange={(e) => setConfirm(e)}
 								/>
-							)}
-							<Button
-								disabled={
-									!confirm ||
-									!plan.inventory.complete ||
-									plan.missingDecisions > 0 ||
-									busy ||
-									decisionBusy ||
-									(Object.values(plan.decisions.decisions).includes("trash") &&
-										!trash)
-								}
-								onClick={() =>
-									task({
-										kind: "sync-apply",
-										planId,
-										revision: plan.revision,
-										confirmTrash: trash,
-									})
-								}
-							>
-								{t("Применить план", "Apply plan")}
-							</Button>
-						</div>
-					)}
-				</>
-			)}
+								{Object.values(plan.decisions.decisions).includes("trash") && (
+									<CheckboxField
+										checked={trash}
+										disabled={decisionBusy}
+										label={t(
+											"Отдельно подтверждаю обратимое перемещение выбранных leaf-страниц в корзину.",
+											"Separately confirm reversible trash of the selected leaf pages.",
+										)}
+										onCheckedChange={(e) => setTrash(e)}
+									/>
+								)}
+								<Button
+									disabled={
+										!confirm ||
+										!plan.inventory.complete ||
+										plan.missingDecisions > 0 ||
+										busy ||
+										decisionBusy ||
+										(Object.values(plan.decisions.decisions).includes(
+											"trash",
+										) &&
+											!trash)
+									}
+									onClick={() =>
+										task({
+											kind: "sync-apply",
+											planId,
+											revision: plan.revision,
+											confirmTrash: trash,
+										})
+									}
+								>
+									{t("Применить план", "Apply plan")}
+								</Button>
+							</div>
+						)}
+					</>
+				)}
+			</FormSection>
 			<AppDialog
 				title={detail?.item.title}
 				open={Boolean(detail)}
