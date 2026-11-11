@@ -115,6 +115,30 @@ describe('README contract', () => {
     );
   });
 
+  it('requires both personal-space directions with dry-run and live commands', async () => {
+    const readme = await readFile('README.md', 'utf8');
+    const withoutHeading = readme.replace('### Перенос личного пространства: Yandex Wiki ↔ Confluence', '### Перенос между провайдерами');
+    expect(validateReadmeContract(withoutHeading)).toContain(
+      'CLI personal-space workflow is missing: Перенос личного пространства: Yandex Wiki ↔ Confluence',
+    );
+
+    const withoutFirstDryRun = readme.replace('  --scope subtree \\\n  --dry-run', '  --scope subtree');
+    expect(validateReadmeContract(withoutFirstDryRun)).toContain(
+      'CLI personal-space example is missing: Yandex Wiki → Confluence dry-run',
+    );
+
+    const withoutConfluenceLive = readme.replace(
+      `ywtc migrate \\
+  --source "https://confluence.example.com/confluence/display/~alex" \\
+  --destination "https://wiki.example.com/users/alex/import" \\
+  --scope subtree\n`,
+      '',
+    );
+    expect(validateReadmeContract(withoutConfluenceLive)).toContain(
+      'CLI personal-space example is missing: Confluence → Yandex Wiki live',
+    );
+  });
+
   it('rejects a reordered information architecture', async () => {
     const readme = await readFile('README.md', 'utf8');
     const reordered = readme.replace('## Возможности', '## TEMP').replace('## Совместимость', '## Возможности').replace('## TEMP', '## Совместимость');

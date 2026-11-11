@@ -23,6 +23,45 @@ const requiredExampleLabels = [
   '# Повторить только исправимые проблемы выбранной миграции',
 ];
 
+const personalSpaceHeading = 'Перенос личного пространства: Yandex Wiki ↔ Confluence';
+
+const requiredPersonalSpaceExamples = [
+  {
+    label: 'Yandex Wiki → Confluence dry-run',
+    command: `# Проверить без записи в Confluence
+ywtc migrate \\
+  --source "https://wiki.example.com/users/alex/" \\
+  --destination "https://confluence.example.com/confluence/pages/viewpage.action?pageId=123" \\
+  --scope subtree \\
+  --dry-run`,
+  },
+  {
+    label: 'Yandex Wiki → Confluence live',
+    command: `# Выполнить перенос
+ywtc migrate \\
+  --source "https://wiki.example.com/users/alex/" \\
+  --destination "https://confluence.example.com/confluence/pages/viewpage.action?pageId=123" \\
+  --scope subtree`,
+  },
+  {
+    label: 'Confluence → Yandex Wiki dry-run',
+    command: `# Проверить без записи в Yandex Wiki
+ywtc migrate \\
+  --source "https://confluence.example.com/confluence/display/~alex" \\
+  --destination "https://wiki.example.com/users/alex/import" \\
+  --scope subtree \\
+  --dry-run`,
+  },
+  {
+    label: 'Confluence → Yandex Wiki live',
+    command: `# Выполнить перенос
+ywtc migrate \\
+  --source "https://confluence.example.com/confluence/display/~alex" \\
+  --destination "https://wiki.example.com/users/alex/import" \\
+  --scope subtree`,
+  },
+];
+
 const statusHeadings = [
   'Статусы задач',
   'Статусы страниц',
@@ -46,6 +85,15 @@ function h2Section(readme, heading) {
   const contentStart = start + marker.length;
   const next = readme.indexOf('\n## ', contentStart);
   return readme.slice(contentStart, next < 0 ? readme.length : next);
+}
+
+function h3Section(section, heading) {
+  const marker = `### ${heading}`;
+  const start = section.indexOf(marker);
+  if (start < 0) return '';
+  const contentStart = start + marker.length;
+  const next = section.indexOf('\n### ', contentStart);
+  return section.slice(contentStart, next < 0 ? section.length : next);
 }
 
 function statusSections(readme, heading) {
@@ -128,6 +176,12 @@ export function validateReadmeContract(readme) {
   const labelledExamples = cli.match(/^# (?:Перенести|Создать|Открыть|Повторить)/gm) ?? [];
   if (labelledExamples.length !== requiredExampleLabels.length) {
     findings.push(`CLI must contain exactly ${requiredExampleLabels.length} labelled common examples`);
+  }
+
+  const personalSpace = h3Section(cli, personalSpaceHeading);
+  if (!personalSpace) findings.push(`CLI personal-space workflow is missing: ${personalSpaceHeading}`);
+  for (const {label, command} of requiredPersonalSpaceExamples) {
+    if (!personalSpace.includes(command)) findings.push(`CLI personal-space example is missing: ${label}`);
   }
 
   return [...findings, ...validateStatusTables(readme)];

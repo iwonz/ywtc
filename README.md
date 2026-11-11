@@ -285,8 +285,8 @@ hashtags:
 
 ### Locators и выбор страниц
 
-- Yandex Wiki: полный URL, числовой page ID или slug вида `team/start`, включая личный раздел `/users/<login>/`.
-- Confluence: числовой page ID, URL с `pageId=<id>`, `/pages/<id>` или `/content/<id>`; Data Center также принимает `/display/<space>/<title>` с `+` вместо пробелов в title. Корень пространства: `/spaces/viewspace.action?key=~user`, `/display/~user`, Cloud `/wiki/spaces/~user[/overview]`.
+- Yandex Wiki: полный URL, числовой page ID или slug вида `team/start`.
+- Confluence: числовой page ID, URL с `pageId=<id>`, `/pages/<id>` или `/content/<id>`; Data Center также принимает `/display/<space>/<title>` с `+` вместо пробелов в title.
 - Полный URL выбирает профиль по нормализованному base URL. Для неоднозначного ID/slug укажите профиль явно.
 - Каталог считается destination только с `--format`.
 
@@ -296,9 +296,51 @@ hashtags:
 | `subtree` | Root и все доступные структурные descendants до последнего уровня; default |
 | `linked` | Детерминированный BFS по внутренним ссылкам и page/include references; циклы завершаются безопасно |
 
-Для Confluence URL пространства `subtree` выбирает все доступные страницы, в том числе вне дерева домашней. В destination создаётся раздел с названием пространства; внутри сохраняются домашняя страница и самостоятельные ветки. `page` переносит только домашнюю страницу, `linked` начинает обход от неё; без домашней страницы доступен только `subtree`. Пустое пространство допустимо. Настройки, права, профиль пользователя и блоги не копируются; скрытые от токена страницы API не раскрывает. Эти правила действуют и для `doctor`, мастера миграции и `mentions/hashtags export`.
-
 `--source-status all` включает все доступные descendants: в Yandex Wiki — `actual` и `obsolete`; `current` оставляет только `actual/current`. Confluence зависит от hierarchy API и может не возвращать archived, trashed и historical versions.
+
+### Перенос личного пространства: Yandex Wiki ↔ Confluence
+
+Один раз настройте оба подключения через `ywtc init --interactive`. В командах ниже source — корень личного пространства, а destination — существующая родительская страница: URL корня Confluence-пространства как destination не используется. Полные URL автоматически выбирают подходящие профили.
+
+#### Yandex Wiki → Confluence
+
+```bash
+# Проверить без записи в Confluence
+ywtc migrate \
+  --source "https://wiki.example.com/users/alex/" \
+  --destination "https://confluence.example.com/confluence/pages/viewpage.action?pageId=123" \
+  --scope subtree \
+  --dry-run
+
+# Выполнить перенос
+ywtc migrate \
+  --source "https://wiki.example.com/users/alex/" \
+  --destination "https://confluence.example.com/confluence/pages/viewpage.action?pageId=123" \
+  --scope subtree
+```
+
+`/users/alex/` и все доступные дочерние страницы будут созданы под указанной страницей Confluence.
+
+#### Confluence → Yandex Wiki
+
+```bash
+# Проверить без записи в Yandex Wiki
+ywtc migrate \
+  --source "https://confluence.example.com/confluence/display/~alex" \
+  --destination "https://wiki.example.com/users/alex/import" \
+  --scope subtree \
+  --dry-run
+
+# Выполнить перенос
+ywtc migrate \
+  --source "https://confluence.example.com/confluence/display/~alex" \
+  --destination "https://wiki.example.com/users/alex/import" \
+  --scope subtree
+```
+
+Для Confluence Data Center source также может иметь вид `/spaces/viewspace.action?key=~alex`, для Cloud — `https://example.atlassian.net/wiki/spaces/~accountId/overview`. `subtree` переносит все доступные страницы пространства, включая самостоятельные ветки, и создаёт под destination один раздел с названием пространства. `page` переносит только домашнюю страницу, `linked` начинает обход от неё; если домашней страницы нет, доступен только `subtree`. Пустое пространство допустимо.
+
+Переносятся только страницы, доступные токену через API. Настройки и права пространства, профиль пользователя и блоги не копируются. Те же source-формы и scope-правила действуют для `doctor`, интерактивного мастера и `mentions/hashtags export`.
 
 ### Примеры
 

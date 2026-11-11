@@ -466,11 +466,17 @@ Current specifications SHALL describe the current product, README SHALL own oper
 - **THEN** maintenance SHALL replace or consolidate it with the current general contract while retaining unique coverage and leaving archived changes and changelog history unchanged
 
 ### Requirement: Personal-source documentation and regressions
-Canonical documentation and package checks SHALL cover personal-page and space-root sources, scope differences, separate container accounting, stable identity and read-only inventory boundaries using neutral fixtures.
+Canonical documentation and package checks SHALL cover personal-page and space-root sources, scope differences, separate container accounting, stable identity and read-only inventory boundaries using neutral fixtures. The README SHALL provide a dedicated concise workflow for both remote-provider directions.
 
 #### Scenario: Operator reads source guidance
-- **WHEN** README source selection is inspected
-- **THEN** existing sections SHALL describe personal URL forms, full-space subtree, homepage page/linked scopes, generated section, API permission limits and excluded space settings without new flags or duplicate common examples
+- **WHEN** an operator opens the dedicated README personal-space subsection
+- **THEN** it SHALL distinguish the Yandex Wiki `/users/<login>/` page root from Confluence Data Center and Cloud personal-space roots
+- **AND** it SHALL identify the destination as an existing parent page rather than a space-root source locator
+- **AND** it SHALL describe full-space subtree selection, homepage page/linked scopes, generated destination structure, API permission limits and excluded space settings without new flags or duplicate general examples
+
+#### Scenario: Operator starts personal-space migration
+- **WHEN** an operator follows the dedicated README personal-space workflow
+- **THEN** it SHALL provide copyable dry-run and live `subtree` commands for Yandex Wiki → Confluence and Confluence → Yandex Wiki
 
 #### Scenario: Isolated package executes personal export
 - **WHEN** the packed CLI runs against a deterministic personal-space fixture
