@@ -1,4 +1,8 @@
-import {readFile} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {copyFile, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {
   compareSemanticVersions,
@@ -6,6 +10,8 @@ import {
   type ReleaseMetadata,
   validateReleaseTag,
 } from '../scripts/release-validation.js';
+
+const execFileAsync = promisify(execFile);
 
 const metadata: ReleaseMetadata = {
   packageVersion: '1.2.3',
@@ -64,6 +70,26 @@ describe('release validation', () => {
       ...completeReleaseEvidence,
       checksumText: `${releaseSha256}  /ci-staging/ywtc-release/iwonz-ywtc-5.4.7.tgz\n`,
     })).toMatchObject({tag: 'v5.4.7', sha256: releaseSha256});
+  });
+
+  it('runs the audited packer entry point outside the repository module boundary', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'ywtc-recovery-packer-'));
+    const packer = path.join(directory, 'pack-release.ts');
+    try {
+      await copyFile('scripts/pack-release.ts', packer);
+      await writeFile(
+        path.join(directory, 'release-package.ts'),
+        "export async function packRelease(): Promise<string> { return 'fixture-archive.tgz'; }\n",
+      );
+      const {stdout} = await execFileAsync(
+        process.execPath,
+        ['--import', 'tsx', packer, path.join(directory, 'output')],
+        {cwd: process.cwd(), encoding: 'utf8'},
+      );
+      expect(stdout).toBe('fixture-archive.tgz');
+    } finally {
+      await rm(directory, {recursive: true, force: true});
+    }
   });
 
   it.each([

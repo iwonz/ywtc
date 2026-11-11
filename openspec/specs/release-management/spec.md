@@ -174,7 +174,11 @@ Package smoke tests and publication SHALL construct artifacts through one checke
 
 #### Scenario: Authorized recovery loads shared packing tools
 - **WHEN** recovery validates an existing tag using current trusted tools
-- **THEN** helpers SHALL come from the same trusted revision, temporary source copies SHALL be restored or removed before packing, and the external packer SHALL operate on unchanged tagged source
+- **THEN** helpers SHALL come from the same trusted revision, temporary source copies SHALL be restored or removed before packing, and the external packer entry point SHALL execute outside the repository package module boundary while operating on unchanged tagged source
+
+#### Scenario: Recovery packer is materialized temporarily
+- **WHEN** the audited packer and its shared helper are copied together into a temporary directory outside the repository package boundary
+- **THEN** the packer SHALL execute successfully under a supported Node.js runtime without relying on the repository's nearest `package.json` module type
 
 ### Requirement: End-to-end release completion
 A release SHALL remain incomplete until one exact SemVer identity is verified across reviewed Release Please metadata, the Git tag and GitHub Release, attached archive and checksum, npm publication, and the committed Homebrew formula. Automatic and recovery workflows SHALL finish with the same read-only completion gate.
