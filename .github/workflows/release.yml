@@ -292,6 +292,7 @@ jobs:
           brew tap-new --no-git "$tap_name"
           tap_dir="$(brew --repository "$tap_name")"
           cp Formula/ywtc.rb "$tap_dir/Formula/ywtc.rb"
+          brew trust --tap "$tap_name"
           brew audit --strict "$tap_name/ywtc"
           brew install --formula "$tap_name/ywtc"
           brew test "$tap_name/ywtc"

@@ -208,6 +208,30 @@ describe('release validation', () => {
     expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN/);
   });
 
+  it('trusts only the staged Homebrew CI tap before loading its formula', async () => {
+    const workflow = await readFile('.github/workflows/release.yml', 'utf8');
+    const start = workflow.indexOf('      - name: Verify formula');
+    const end = workflow.indexOf('      - name: Commit formula to master', start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const verification = workflow.slice(start, end);
+    const commands = [
+      'brew tap-new --no-git "$tap_name"',
+      'cp Formula/ywtc.rb "$tap_dir/Formula/ywtc.rb"',
+      'brew trust --tap "$tap_name"',
+      'brew audit --strict "$tap_name/ywtc"',
+      'brew install --formula "$tap_name/ywtc"',
+      'brew test "$tap_name/ywtc"',
+      'ywtc --version',
+    ];
+    let previous = -1;
+    for (const command of commands) {
+      const current = verification.indexOf(command);
+      expect(current, command).toBeGreaterThan(previous);
+      previous = current;
+    }
+  });
+
   it('treats a release as complete only after the cross-channel terminal gate', async () => {
     const [workflow, readme, agents] = await Promise.all([
       readFile('.github/workflows/release.yml', 'utf8'),
