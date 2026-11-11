@@ -163,9 +163,11 @@ jobs:
           git show "${validator_commit}:scripts/package-validation.ts" > "$validator_dir/package-validation.ts"
           git show "${validator_commit}:scripts/release-package.ts" > "$validator_dir/release-package.ts"
           git show "${validator_commit}:scripts/pack-release.ts" > "$validator_dir/pack-release.ts"
+          git show "${validator_commit}:scripts/npm-registry-handoff.ts" > "$validator_dir/npm-registry-handoff.ts"
           echo "entry=$validator_dir/validate-release-tag.ts" >> "$GITHUB_OUTPUT"
           echo "package_verifier=$validator_dir/package-validation.ts" >> "$GITHUB_OUTPUT"
           echo "packer=$validator_dir/pack-release.ts" >> "$GITHUB_OUTPUT"
+          echo "registry_handoff=$validator_dir/npm-registry-handoff.ts" >> "$GITHUB_OUTPUT"
           echo "commit=$validator_commit" >> "$GITHUB_OUTPUT"
       - name: Set up Node.js and npm trusted publishing
         uses: actions/setup-node@v7
@@ -215,7 +217,6 @@ jobs:
           node --import tsx "${RECOVERY_PACKER:-scripts/pack-release.ts}" "$release_dir" > "$release_dir/pack.json"
           archive_name="$(node -e "const p=require(process.argv[1]); const values=Array.isArray(p)?p:Object.values(p); const result=values.length===1?values[0]:undefined; if(!result||typeof result.filename!=='string'||!result.filename) throw new Error('npm pack returned no single valid artifact'); process.stdout.write(result.filename)" "$release_dir/pack.json")"
           archive="$release_dir/$archive_name"
-          (cd "$release_dir" && shasum -a 256 "$archive_name" > "$archive.sha256")
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
           echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
       - name: Publish with OIDC provenance when absent
@@ -229,6 +230,16 @@ jobs:
             exit 0
           fi
           npm publish "$ARCHIVE" --access public --provenance
+      - name: Resolve exact registry artifact
+        env:
+          RELEASE_VERSION: ${{ steps.context.outputs.version }}
+          ARCHIVE: ${{ steps.pack.outputs.archive }}
+          RECOVERY_REGISTRY_HANDOFF: ${{ steps.recovery-tools.outputs.registry_handoff }}
+        shell: bash
+        run: |
+          node --import tsx "${RECOVERY_REGISTRY_HANDOFF:-scripts/npm-registry-handoff.ts}" "@iwonz/ywtc" "$RELEASE_VERSION" "$ARCHIVE"
+          archive_name="$(basename "$ARCHIVE")"
+          (cd "$(dirname "$ARCHIVE")" && shasum -a 256 "$archive_name" > "$ARCHIVE.sha256")
       - name: Attach verified artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

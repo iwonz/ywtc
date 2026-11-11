@@ -1,6 +1,8 @@
-import {access, mkdtemp, readFile} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {access, copyFile, mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {promisify} from 'node:util';
 import {describe, expect, it, vi} from 'vitest';
 import {
   downloadRegistryTarball,
@@ -13,8 +15,25 @@ import {
 const version = '2.0.3';
 const tarballUrl = 'https://registry.npmjs.org/@iwonz/ywtc/-/ywtc-2.0.3.tgz';
 const metadata = JSON.stringify([{version, 'dist.tarball': tarballUrl}]);
+const execFileAsync = promisify(execFile);
 
 describe('npm registry handoff', () => {
+  it('runs the command entry point outside the repository module boundary', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'ywtc-registry-handoff-entry-'));
+    const entry = path.join(directory, 'npm-registry-handoff.ts');
+    try {
+      await copyFile('scripts/npm-registry-handoff.ts', entry);
+      await expect(
+        execFileAsync(process.execPath, ['--import', 'tsx', entry], {cwd: process.cwd(), encoding: 'utf8'}),
+      ).rejects.toMatchObject({
+        code: 2,
+        stderr: expect.stringContaining('Usage: npm-registry-handoff.ts'),
+      });
+    } finally {
+      await rm(directory, {recursive: true, force: true});
+    }
+  });
+
   it('parses exact-version npm metadata in flat and nested forms', () => {
     expect(parseRegistryMetadata(metadata, version)).toEqual({version, tarballUrl});
     expect(parseRegistryMetadata(JSON.stringify({version, dist: {tarball: tarballUrl}}), version)).toEqual({

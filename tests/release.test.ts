@@ -232,6 +232,29 @@ describe('release validation', () => {
     }
   });
 
+  it('uploads the exact observable npm registry archive after publish or reuse', async () => {
+    const workflow = await readFile('.github/workflows/release.yml', 'utf8');
+    const start = workflow.indexOf('\n  publish-npm:');
+    const end = workflow.indexOf('\n  homebrew:', start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const publication = workflow.slice(start, end);
+    const commands = [
+      `git show "\${validator_commit}:scripts/npm-registry-handoff.ts" > "$validator_dir/npm-registry-handoff.ts"`,
+      `node --import tsx "\${RECOVERY_PACKER:-scripts/pack-release.ts}" "$release_dir"`,
+      'npm publish "$ARCHIVE" --access public --provenance',
+      `node --import tsx "\${RECOVERY_REGISTRY_HANDOFF:-scripts/npm-registry-handoff.ts}" "@iwonz/ywtc" "$RELEASE_VERSION" "$ARCHIVE"`,
+      '(cd "$(dirname "$ARCHIVE")" && shasum -a 256 "$archive_name" > "$ARCHIVE.sha256")',
+      'gh release upload "$RELEASE_TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber',
+    ];
+    let previous = -1;
+    for (const command of commands) {
+      const current = publication.indexOf(command);
+      expect(current, command).toBeGreaterThan(previous);
+      previous = current;
+    }
+  });
+
   it('treats a release as complete only after the cross-channel terminal gate', async () => {
     const [workflow, readme, agents] = await Promise.all([
       readFile('.github/workflows/release.yml', 'utf8'),
@@ -242,7 +265,7 @@ describe('release validation', () => {
     expect(workflow).toContain('name: Verify complete release');
     expect(workflow).toContain('needs: [publish-npm, homebrew]');
     expect(workflow).toContain('npm run release:verify -- "$RELEASE_TAG"');
-    expect(workflow).toContain('(cd "$release_dir" && shasum -a 256 "$archive_name" > "$archive.sha256")');
+    expect(workflow).toContain('(cd "$(dirname "$ARCHIVE")" && shasum -a 256 "$archive_name" > "$ARCHIVE.sha256")');
     expect(readme).toContain('Push исходного изменения и открытый release PR означают pending release, а не завершённый релиз.');
     expect(readme).toContain('`Verify complete release`');
     expect(agents).toContain('A requested release remains incomplete after the source push or creation of the Release Please pull request.');

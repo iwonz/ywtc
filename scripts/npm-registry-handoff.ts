@@ -172,18 +172,20 @@ export async function waitForRegistryArtifact(options: RegistryHandoffOptions): 
   );
 }
 
-if (process.argv[1]?.endsWith('npm-registry-handoff.ts')) {
+async function main(): Promise<void> {
   const [packageName, version, archivePath] = process.argv.slice(2);
   if (!packageName || !version || !archivePath) {
     console.error('Usage: npm-registry-handoff.ts <package-name> <version> <archive-path>');
     process.exitCode = 2;
-  } else {
-    try {
-      const artifact = await waitForRegistryArtifact({packageName, version, archivePath});
-      process.stdout.write(`${artifact.tarballUrl}\n`);
-    } catch (error) {
-      console.error(`::error::${conciseError(error)}`);
-      process.exitCode = 1;
-    }
+    return;
   }
+  const artifact = await waitForRegistryArtifact({packageName, version, archivePath});
+  process.stdout.write(`${artifact.tarballUrl}\n`);
+}
+
+if (process.argv[1]?.endsWith('npm-registry-handoff.ts')) {
+  main().catch((error: unknown) => {
+    console.error(`::error::${conciseError(error)}`);
+    process.exitCode = 1;
+  });
 }
