@@ -2,6 +2,20 @@
 
 Notable changes to `ywtc` are documented in this file. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [5.4.8](https://github.com/iwonz/ywtc/compare/v5.4.7...v5.4.8) (2026-11-11)
+
+
+### Bug Fixes
+
+* **release:** make recovery packer portable ([b377a08](https://github.com/iwonz/ywtc/commit/b377a08092bfcfed24feb92eaae82fbd59c8bdd7))
+* **release:** reuse exact registry archive ([55a2322](https://github.com/iwonz/ywtc/commit/55a2322f6bfd837ca303ee242a4b958f0bac581a))
+* **release:** trust isolated homebrew tap ([8034e0e](https://github.com/iwonz/ywtc/commit/8034e0efb9c56b8d069088b180d5d105f54b82ff))
+
+
+### Maintenance
+
+* **homebrew:** update formula to v5.4.7 ([72f5151](https://github.com/iwonz/ywtc/commit/72f5151fe7687ac87db5598c8eeccd5ab45980a6))
+
 ## [5.4.7](https://github.com/iwonz/ywtc/compare/v5.4.6...v5.4.7) (2026-11-11)
 
 
