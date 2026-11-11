@@ -36,6 +36,7 @@ When changing a public option, default, configuration field, status, retry rule,
 - Validate the full proposed message, including its body, with `npx commitlint` via stdin or `npx commitlint --edit <message-file>` before committing. Fix failed checks; do not bypass them with an empty recovery commit or a narrower commit range.
 - Complete and archive every underlying OpenSpec change before committing it. Do not mix substantive code, documentation, tooling, or specification changes into a generated Release Please pull request.
 - A Release Please pull request is publication metadata for already-audited changes. It may update only `CHANGELOG.md`, `package.json`, `package-lock.json`, and `.release-please-manifest.json`; review the calculated version before merging.
+- A requested release remains incomplete after the source push or creation of the Release Please pull request. Review and merge that pull request, then monitor the workflow through `Verify complete release`; report completion only after the gate confirms the GitHub tag/release assets and notes, npm package/tarball, and committed Homebrew formula. Keep a failed release active and recover it with `workflow_dispatch` for the existing tag.
 - Do not create or move release tags manually during normal development. The validated manual-tag workflow exists only for the initial `v1.0.0` bootstrap and explicit release recovery.
 - GitHub, npm, npx, and the repository's Homebrew tap are supported release channels. npm publication MUST use repository-bound trusted publishing after the documented one-time interactive bootstrap; never store a long-lived npm token.
 
@@ -51,3 +52,5 @@ When changing a public option, default, configuration field, status, retry rule,
 ## Definition of done
 
 A change is done only when its OpenSpec tasks are complete, `npm run check` passes, delta specs are synchronized, the change is archived, and strict validation passes against all OpenSpec content.
+
+When the user requests a release, definition of done additionally requires the merged Release Please pull request and a successful `Verify complete release` gate across GitHub, npm/npx, and Homebrew.

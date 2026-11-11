@@ -15,7 +15,68 @@ const metadata: ReleaseMetadata = {
   changelog: '# Changelog\n\n## [1.2.3] - 2026-10-14\n',
 };
 
+const releaseCompletionModule = '../scripts/release-completion.js';
+const releaseSha256 = 'a'.repeat(64);
+const completeReleaseEvidence = {
+  tag: 'v5.4.7',
+  local: {
+    packageVersion: '5.4.7',
+    lockfileVersion: '5.4.7',
+    lockfileRootVersion: '5.4.7',
+    manifestVersion: '5.4.7',
+    changelog: '# Changelog\n\n## [5.4.7](https://github.com/iwonz/ywtc/compare/v5.4.6...v5.4.7) (2026-11-11)\n',
+    formula: `class Ywtc < Formula\n  url "https://registry.npmjs.org/@iwonz/ywtc/-/ywtc-5.4.7.tgz"\n  sha256 "${releaseSha256}"\nend\n`,
+  },
+  github: {
+    tagName: 'v5.4.7',
+    targetCommitish: '7'.repeat(40),
+    draft: false,
+    prerelease: false,
+    body: '<!-- ywtc-installation -->\nnpm install -g @iwonz/ywtc@latest',
+    assets: [
+      {name: 'iwonz-ywtc-5.4.7.tgz', state: 'uploaded', digest: `sha256:${releaseSha256}`},
+      {name: 'iwonz-ywtc-5.4.7.tgz.sha256', state: 'uploaded'},
+    ],
+  },
+  npm: {
+    version: '5.4.7',
+    tarballUrl: 'https://registry.npmjs.org/@iwonz/ywtc/-/ywtc-5.4.7.tgz',
+    integrity: 'sha512-example',
+  },
+  tarballSha256: releaseSha256,
+  checksumText: `${releaseSha256}  iwonz-ywtc-5.4.7.tgz\n`,
+};
+
 describe('release validation', () => {
+  it('accepts one complete release identity across GitHub, npm, and Homebrew', async () => {
+    const {validateReleaseCompletion} = await import(releaseCompletionModule);
+    expect(validateReleaseCompletion(completeReleaseEvidence)).toEqual({
+      tag: 'v5.4.7',
+      version: '5.4.7',
+      tarballUrl: completeReleaseEvidence.npm.tarballUrl,
+      sha256: releaseSha256,
+    });
+  });
+
+  it('accepts a verified checksum whose filename includes the CI staging path', async () => {
+    const {validateReleaseCompletion} = await import(releaseCompletionModule);
+    expect(validateReleaseCompletion({
+      ...completeReleaseEvidence,
+      checksumText: `${releaseSha256}  /ci-staging/ywtc-release/iwonz-ywtc-5.4.7.tgz\n`,
+    })).toMatchObject({tag: 'v5.4.7', sha256: releaseSha256});
+  });
+
+  it.each([
+    ['local package metadata', {local: {...completeReleaseEvidence.local, packageVersion: '5.4.6'}}, /package\.json.*5\.4\.7/i],
+    ['GitHub archive asset', {github: {...completeReleaseEvidence.github, assets: completeReleaseEvidence.github.assets.slice(1)}}, /GitHub Release.*iwonz-ywtc-5\.4\.7\.tgz/i],
+    ['npm package version', {npm: {...completeReleaseEvidence.npm, version: '5.4.6'}}, /npm.*5\.4\.7/i],
+    ['published checksum', {checksumText: `${'b'.repeat(64)}  iwonz-ywtc-5.4.7.tgz\n`}, /checksum.*SHA-256/i],
+    ['Homebrew formula checksum', {local: {...completeReleaseEvidence.local, formula: completeReleaseEvidence.local.formula.replace(releaseSha256, 'c'.repeat(64))}}, /Homebrew.*SHA-256/i],
+  ])('rejects a mismatched %s', async (_label, override, expected) => {
+    const {validateReleaseCompletion} = await import(releaseCompletionModule);
+    expect(() => validateReleaseCompletion({...completeReleaseEvidence, ...override})).toThrow(expected as RegExp);
+  });
+
   it('tests supported stable Node majors without a floating prerelease alias', async () => {
     const workflow = await readFile('.github/workflows/release.yml', 'utf8');
     expect(workflow).toContain('node: [24, 26]');
@@ -119,6 +180,22 @@ describe('release validation', () => {
     expect(workflow).not.toContain('brew install --formula ./Formula/ywtc.rb');
     expect(workflow).toContain('chore(homebrew): update formula to v$RELEASE_VERSION');
     expect(workflow).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN/);
+  });
+
+  it('treats a release as complete only after the cross-channel terminal gate', async () => {
+    const [workflow, readme, agents] = await Promise.all([
+      readFile('.github/workflows/release.yml', 'utf8'),
+      readFile('README.md', 'utf8'),
+      readFile('AGENTS.md', 'utf8'),
+    ]);
+    expect(workflow).toContain('\n  release-complete:');
+    expect(workflow).toContain('name: Verify complete release');
+    expect(workflow).toContain('needs: [publish-npm, homebrew]');
+    expect(workflow).toContain('npm run release:verify -- "$RELEASE_TAG"');
+    expect(workflow).toContain('(cd "$release_dir" && shasum -a 256 "$archive_name" > "$archive.sha256")');
+    expect(readme).toContain('Push исходного изменения и открытый release PR означают pending release, а не завершённый релиз.');
+    expect(readme).toContain('`Verify complete release`');
+    expect(agents).toContain('A requested release remains incomplete after the source push or creation of the Release Please pull request.');
   });
 
   it('provisions Playwright Chromium before every complete CI quality gate', async () => {

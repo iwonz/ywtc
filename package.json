@@ -64,6 +64,7 @@
     "release:check": "node scripts/release-check.mjs",
     "release:bootstrap": "node --import tsx scripts/npm-bootstrap.ts",
     "release:validate": "node --import tsx scripts/validate-release-tag.ts",
+    "release:verify": "node --import tsx scripts/release-completion.ts",
     "security:audit": "npm audit --omit=dev --audit-level=high",
     "spec:validate": "openspec validate --all --strict --no-interactive",
     "pretest": "npm run build:report && npm run build:mentions",

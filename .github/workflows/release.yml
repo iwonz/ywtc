@@ -215,7 +215,7 @@ jobs:
           node --import tsx "${RECOVERY_PACKER:-scripts/pack-release.ts}" "$release_dir" > "$release_dir/pack.json"
           archive_name="$(node -e "const p=require(process.argv[1]); const values=Array.isArray(p)?p:Object.values(p); const result=values.length===1?values[0]:undefined; if(!result||typeof result.filename!=='string'||!result.filename) throw new Error('npm pack returned no single valid artifact'); process.stdout.write(result.filename)" "$release_dir/pack.json")"
           archive="$release_dir/$archive_name"
-          shasum -a 256 "$archive" > "$archive.sha256"
+          (cd "$release_dir" && shasum -a 256 "$archive_name" > "$archive.sha256")
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
           echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
       - name: Publish with OIDC provenance when absent
@@ -315,3 +315,31 @@ jobs:
           fi
           git commit -m "chore(homebrew): update formula to v$RELEASE_VERSION"
           git push origin HEAD:master
+
+  release-complete:
+    name: Verify complete release
+    needs: [publish-npm, homebrew]
+    if: >-
+      always() && needs.publish-npm.result == 'success' &&
+      needs.homebrew.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out current master
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify all release channels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.publish-npm.outputs.tag_name }}
+        run: npm run release:verify -- "$RELEASE_TAG"

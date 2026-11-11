@@ -608,4 +608,6 @@ npm run check
 
 Артефакт после сборки: `npm run package:pack -- /tmp/ywtc-release`. Этот же packer используется проверками и публикацией: он сохраняет аудированные зависимости с корректными версиями в отдельном staging, не меняя исходные файлы. Прямой `npm pack` несовместим с сочетанием root overrides и bundled dependencies в npm 12.
 
-Release Please рассчитывает SemVer из Conventional Commits. После merge release PR GitHub Actions публикует GitHub Release и npm-пакет с OIDC provenance, затем генерирует, устанавливает и тестирует Homebrew-формулу.
+Release Please рассчитывает SemVer из Conventional Commits. Push исходного изменения и открытый release PR означают pending release, а не завершённый релиз. Нужно проверить рассчитанную версию и merge release PR: только после этого GitHub Actions создаёт tag и GitHub Release, публикует npm-пакет с OIDC provenance, затем генерирует, устанавливает и тестирует Homebrew-формулу.
+
+Релиз завершён только после успешного job `Verify complete release`. Он сверяет одну версию и один архив во всех каналах: локальные release-метаданные и CHANGELOG, GitHub tag/release с архивом, checksum и installation notes, npm package/tarball, URL и SHA-256 в `Formula/ywtc.rb`. Ту же read-only проверку можно запустить вручную: `npm run release:verify -- vX.Y.Z`. При сбое релиз остаётся pending; его продолжают через `workflow_dispatch` с существующим tag, без ручного создания или перемещения tag.
