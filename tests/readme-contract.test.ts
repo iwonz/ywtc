@@ -146,4 +146,26 @@ describe('README contract', () => {
       expect.arrayContaining([expect.stringContaining('second-level headings must be exactly')]),
     );
   });
+
+  it('rejects a README above the word budget', async () => {
+    const readme = await readFile('README.md', 'utf8');
+    expect(validateReadmeContract(`${readme}\n${'word '.repeat(6501)}`)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^README must contain no more than 6500 words \(found \d+\)$/)]),
+    );
+  });
+
+  it('requires the common-scenario selector', async () => {
+    const readme = await readFile('README.md', 'utf8');
+    const withoutSelector = readme.replace('### Какой сценарий выбрать', '### Варианты запуска');
+    expect(validateReadmeContract(withoutSelector)).toEqual(
+      expect.arrayContaining([
+        'quick start scenario selector is missing: Какой сценарий выбрать',
+        'quick start scenario is missing: Первый перенос',
+        'quick start scenario is missing: Личное пространство Yandex Wiki → Confluence',
+        'quick start scenario is missing: Личное пространство Confluence → Yandex Wiki',
+        'quick start scenario is missing: Статический экспорт',
+        'quick start scenario is missing: Продолжить или исправить перенос',
+      ]),
+    );
+  });
 });

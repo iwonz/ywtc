@@ -4,7 +4,7 @@
 
 # ywtc
 
-`ywtc` — CLI для переноса страниц между Yandex Wiki и Confluence и экспорта в Markdown или автономный HTML. Он сохраняет иерархию и доступное содержимое, проверяет результат, продолжает прерванные операции и ничего не удаляет автоматически.
+`ywtc` переносит страницы между Yandex Wiki и Confluence и экспортирует их в Markdown или автономный HTML. Иерархия, доступное содержимое и прогресс сохраняются; автоматического удаления нет.
 
 Требуются Node.js `>=24` и npm `>=11.5.1`. Лицензия — [MIT](LICENSE).
 
@@ -16,9 +16,19 @@ ywtc init --interactive
 ywtc migrate --interactive
 ```
 
-Первый мастер создаёт рабочий каталог, настраивает Yandex Wiki и Confluence и проверяет соединения. Второй собирает параметры переноса и по умолчанию выполняет dry-run; live-запуск начинается только после подтверждения.
+`init` создаёт workspace, настраивает оба подключения и проверяет их. `migrate` собирает параметры, сначала выполняет dry-run и запускает live только после подтверждения.
 
-Другие способы запуска:
+### Какой сценарий выбрать
+
+| Сценарий | Минимальный путь |
+| --- | --- |
+| Первый перенос | Три команды выше: настройка → dry-run → подтверждённый live. |
+| Личное пространство Yandex Wiki → Confluence | Готовые dry-run/live [команды](#перенос-личного-пространства-yandex-wiki--confluence). |
+| Личное пространство Confluence → Yandex Wiki | Второй пример в [том же блоке](#перенос-личного-пространства-yandex-wiki--confluence). |
+| Статический экспорт | Передать каталог назначения и `--format markdown|html`; для ZIP добавить `--archive`. |
+| Продолжить или исправить перенос | `migrate` — resume, `retry <run-id>` — ошибки, `sync <run-id>` — изменения. |
+
+Для автоматизации укажите `--source`, `--destination` и сначала добавьте `--dry-run`. Остальные способы установки:
 
 ```bash
 # Без глобальной установки
@@ -30,42 +40,37 @@ brew trust --tap iwonz/ywtc
 brew install ywtc
 ```
 
-Обновление: `ywtc update` проверяет версию, `ywtc update --install` обновляет через обнаруженный канал, `--via npm|brew` выбирает канал явно.
-
-Для работы в браузере запустите `ywtc ui`: локальный центр позволяет подключить workspace, настроить профили, запустить dry-run/live, просмотреть отчёты и подготовить точечное восстановление. Адрес подключения печатается в терминале; секрет из URL используется однократно. Сервер доступен только на `127.0.0.1`, без внешних UI-ресурсов и телеметрии.
+`ywtc update` проверяет версию, `ywtc update --install` обновляет через найденный канал, `--via npm|brew` задаёт его явно. `ywtc ui` запускает локальный центр на `127.0.0.1`; одноразовый адрес печатается в терминале, внешних UI-ресурсов и телеметрии нет.
 
 ## Возможности
 
 | Материал | Результат |
 | --- | --- |
-| Страницы и структура | Обычные и личные страницы, Confluence-пространства; `page`, полное `subtree` или рекурсивный граф `linked`. Иерархия восстанавливается, циклы не создают повторов, пустая страница-раздел остаётся корректной пустой страницей. |
-| Текст и таблицы | Сохраняются заголовки, начертания и цвет, списки и задачи, цитаты, разделители, inline/preformatted code с языком и обычные таблицы. Destination получает нативную или семантически эквивалентную разметку. |
-| Секции и колонки | YFM `layout/block` и Confluence layouts преобразуются в нативные секции и колонки. HTML использует адаптивную сетку; Markdown сохраняет содержимое ячеек в исходном порядке. |
-| Ссылки и якоря | Ссылки внутри выбранного набора переписываются на destination; якоря сохраняются. Внешние ссылки и переходы за границу набора остаются исходными. |
-| Hashtags | Текстовые `#теги` в страницах и комментариях: сохранить, заменить готовым текстом или ссылкой по ручному mapping. Регистр различается; метки/labels страниц не изменяются. |
-| Упоминания | Yandex Wiki `@login`/`@{login}` и Confluence `ri:user`: сохранение исходного представления или обычная ссылка по ручному mapping. Email, URL, код и исходники диаграмм не затрагиваются. В архиве комментариев используются только безопасные текст и ссылки. |
-| Файлы и изображения | Доступные через API вложения передаются потоково с проверкой размера и SHA-256. Прерванная Yandex-загрузка продолжается с подтверждённой byte-range позиции; несовместимый ответ безопасно запускает её заново. Поддерживаются любые скачиваемые файлы, включая PNG/JPEG/GIF/WebP/SVG, PDF, ZIP, DOCX, XLSX и PPTX. Коллизии имён разрешаются стабильно. |
-| Диаграммы | Mermaid, PlantUML, D2 и Draw.io распознаются до общего YFM parser. Нативный синтаксис сохраняется при доказанной поддержке destination; иначе точный source остаётся управляемым вложением или code block, а доступное SVG-представление — изображением. Полная смена представления считается adaptation, а не потерей. |
-| Специальная разметка | Notes ↔ callout macros, cuts ↔ expand, tree ↔ children, задачи, code, anchors, page/attachment links и изображения получают ближайший эквивалент. Tabs становятся секциями, доступный через API Grid — проверяемой статической таблицей. |
-| Комментарии | По умолчанию footer/inline page comments архивируются с авторами, датами, статусами и иерархией ответов. Явно упомянутые вложения собираются в проверяемый ZIP с hash-prefixed именами и manifest. |
-| Надёжность содержимого | Новая страница сразу создаётся с полным source-derived body, а не placeholder. Ошибка отдельного ресурса не блокирует текст: остаётся source-ссылка и повторяемый outcome. Большой inline Draw.io извлекается в отдельный проверяемый ресурс без передачи base64 общему parser; неизвестный чрезмерный payload получает безопасный fallback и raw snapshot. После записи destination перечитывается и проверяется. |
-| Наблюдаемость | Для каждой фазы видны подтверждённые счётчики, очередь, активные объекты и время без завершений; при устойчивом темпе — скорость и ETA. Heartbeat и обработка остановки работают также во время больших CPU-batches. |
-| Различия платформ | Безопасная normalization и полная adaptation считаются `complete`. Если эквивалента нет, ywtc сохраняет читаемый fallback и при необходимости raw snapshot; недоказанная полнота становится degradation. |
+| Страницы и структура | Обычные и личные страницы, целые Confluence-пространства; `page`, структурное `subtree` или граф `linked`. Иерархия восстанавливается, циклы не дублируют страницы, пустые разделы остаются пустыми страницами. |
+| Текст и компоновка | Заголовки, форматирование и цвет, списки/задачи, цитаты, код с языком, таблицы, секции и колонки. Destination получает нативную либо семантически равную разметку; Markdown сохраняет порядок ячеек. |
+| Ссылки | Внутренние ссылки выбранного набора переписываются на destination, якоря сохраняются; внешние и выходящие за набор ссылки не меняются. |
+| Hashtags и упоминания | Текстовые теги и Yandex/Confluence mentions сохраняются либо заменяются готовым текстом/обычной ссылкой по ручному mapping. Код, URL, diagram source и page labels не затрагиваются; native notifications не создаются. |
+| Файлы и изображения | API-вложения передаются потоково с проверкой размера/SHA-256. Любой скачиваемый формат; стабильные имена, подтверждённая Yandex-загрузка продолжается с byte-range, несовместимая — безопасно перезапускается. |
+| Диаграммы | Mermaid, PlantUML, D2 и Draw.io остаются нативными при доказанной поддержке; иначе сохраняются точный source и доступное статическое представление. |
+| Специальная разметка | Notes/callouts, cuts/expand, tree/children, tabs, code, anchors, page/attachment links и изображения получают ближайший эквивалент. Доступный Grid становится проверяемой статической таблицей. |
+| Комментарии | Footer/inline comments архивируются с авторами, датами, статусами и ответами; упомянутые вложения входят в проверяемый ZIP с manifest. |
+| Надёжность | Страница сразу создаётся с полным body. Сбой ресурса оставляет source-ссылку и повторяемый outcome; чрезмерный inline payload получает fallback и raw snapshot. После записи destination перечитывается и проверяется. |
+| Наблюдаемость | Фазы показывают подтверждённые счётчики, очередь и активные объекты; при устойчивом темпе — скорость и ETA. Heartbeat и мягкая остановка работают и во время CPU-batches. |
+| Различия платформ | Полная normalization/adaptation остаётся `complete`. Если полнота не доказана, сохраняются читаемый fallback и при необходимости raw snapshot, а итог становится degradation. |
 
 ### Ограничения
 
 | Не переносится как исходная сущность | Что сохраняется |
 | --- | --- |
 | История версий | Текущее содержимое; последующие обновления destination образуют его обычную историю версий. |
-| Реакции; комментарии к attachments, blog posts и custom content | Только footer/inline comments страницы. |
-| Пользователи, watchers, права и ограничения доступа | Авторство комментариев остаётся в архивном тексте; новые объекты создаёт владелец токена и они наследуют права destination. |
-| Недоступные или не возвращённые API страницы | Известный отказ чтения фиксируется в state/отчёте; страницы, которые API вовсе не раскрывает, нельзя перечислить или включить в totals. |
-| Grid, содержимое которого source API не раскрывает | Явное объяснение и ссылка на оригинал; страница получает `partial`, а остальное дерево продолжает переноситься. Временный сбой payload повторяется отдельно командой `retry`. |
-| Сторонние Mermaid/D2/Draw.io macros в Confluence | Существующая известная macro-разметка сохраняется при Confluence → Confluence. В остальных направлениях ywtc не угадывает контракт установленного плагина: сохраняет diagram source и безопасное представление. |
-| Файл больше attachment limit destination | Проверенный cache и source-ссылка сохраняются; файл получает `failed`, страница с проверенным body — `partial`. Лимит считается постоянной причиной: после его увеличения повторите обычный `migrate`. Автоматическое разбиение файла не выполняется. |
-| Произвольный CSS, scripts и неизвестные интерактивные widgets/macros | Безопасное статическое представление, fallback или raw snapshot; тихой потери быть не должно. |
-| Неизвестный чрезмерный whitespace-free inline payload | Безопасный маркер в rendered body и полный неизменённый raw snapshot; страница получает `partial`, остальные страницы продолжают переноситься. |
-| Внешние файлы и изображения | Исходный абсолютный URL, alt и доступные размеры; внешние данные не скачиваются. Недоступный source-managed ресурс считается неполным переносом. |
+| Реакции; attachment/blog/custom-content comments | Только footer/inline comments страницы. |
+| Пользователи, watchers и права | Авторство остаётся в архивном тексте; объекты создаёт владелец токена и они наследуют права destination. |
+| Страницы, скрытые API | Известный отказ попадает в state/отчёт; полностью скрытое нельзя перечислить или включить в totals. |
+| Grid без доступного payload | Объяснение и ссылка на source, страница `partial`; временный сбой исправляется через `retry`. |
+| Сторонние diagram macros | Известная macro-разметка сохраняется только Confluence → Confluence; иначе сохраняются source и безопасное представление без угадывания plugin API. |
+| Файл выше лимита destination | Cache и source-ссылка сохраняются; файл `failed`, проверенная страница `partial`. После увеличения лимита повторите `migrate`; файл не разбивается. |
+| CSS, scripts, неизвестные widgets/macros или чрезмерный inline payload | Безопасный fallback/raw snapshot; страница `partial`, остальные продолжаются. |
+| Внешние файлы и изображения | Сохраняются URL, alt и размеры; внешние данные не скачиваются. Недоступный source-managed ресурс означает неполный перенос. |
 
 ## Совместимость
 
@@ -80,11 +85,11 @@ brew install ywtc
 | Confluence Data Center | 7.9+ без искусственной верхней границы | Bearer PAT |
 | Confluence Cloud | REST v2 для страниц, REST v1 для attachments | Email + API token |
 
-Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерживаются. Перед чтением страниц и записью `doctor`/`migrate` проверяет готовность REST API: startup/maintenance HTML и неполный JSON останавливают операцию без создания state или destination-объектов. После восстановления Confluence повторите команду; если сервер исправен, проверьте `baseUrl` и `deployment`. Контрактные тесты не заменяют live-сертификацию каждой patch-версии.
+Не поддерживаются Confluence Server, DC Basic Auth и OAuth app-flow. `doctor`/`migrate` проверяет REST readiness: maintenance HTML/неполный JSON останавливает запуск без state/destination writes. После восстановления повторите команду; затем проверьте `baseUrl`/`deployment`. Тесты не заменяют live-сертификацию patch-версий.
 
 ## Конфигурация
 
-Рабочий каталог выбирается в порядке `--workdir` → `ywtc.config.yaml` непосредственно в текущем каталоге → `~/.ywtc`. Родительские каталоги не просматриваются.
+Workspace выбирается так: `--workdir` → `ywtc.config.yaml` в текущем каталоге → `~/.ywtc`. Родительские каталоги не просматриваются.
 
 ```text
 ~/.ywtc/
@@ -92,11 +97,9 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 └── .states/           # state, cache, backups и отчёты
 ```
 
-`ywtc init --interactive` настраивает и проверяет оба провайдера; `ywtc init` создаёт пустой шаблон для автоматизации. У `init` свой выбор каталога: `--workdir` или `~/.ywtc`, независимо от config в текущем каталоге; мастер позволяет изменить путь. `migrate` создаёт отсутствующий workspace, но до API-запросов требует заполнить обязательные поля.
+`init -i` настраивает API/auth обоих провайдеров; `ywtc init` создаёт пустой шаблон. Его каталог — `--workdir` или `~/.ywtc`. Мастер проверяет подключения, не права конкретных страниц: их проверяют `doctor`/`migrate`. Строгий YAML не переопределяется environment, игнорируется Git, создаётся с mode `0600`; секреты маскируются. Шаблон: [`ywtc.config.example.yaml`](ywtc.config.example.yaml).
 
-Проверка мастера подтверждает API и авторизацию, но не права конкретных страниц: их проверяют `doctor` или `migrate`. Весь YAML проверяется по строгой схеме, секреты требуются у выбранных подключений; process environment конфигурацию не переопределяет. Локальный файл игнорируется Git, новый создаётся с mode `0600`, секреты маскируются в выводе. Полный шаблон: [`ywtc.config.example.yaml`](ywtc.config.example.yaml).
-
-Неполную или невалидную конфигурацию можно исправить в `ywtc ui` → «Подключения»: изменения собираются в черновик и применяются после проверки всего файла и подтверждения. Исходный YAML сохраняется приватно в `.states/backups/`; неподдерживаемые поля и комментарии остаются в этой копии. Сохранённые токены и email переиспользуются без показа в браузере. Если YAML не читается, подключения и секреты нужно ввести заново. До исправления запуск операций недоступен.
+Невалидный config исправляется в UI после полной проверки и подтверждения; исходник уходит в `.states/backups/`, токены/email не показываются. Нечитаемый YAML требует повторного ввода и до исправления блокирует операции.
 
 ### Поля `ywtc.config.yaml`
 
@@ -105,9 +108,9 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 | `defaults.timeoutMs` | общий | `1000..300000`; `30000` | Таймаут HTTP-запроса |
 | `defaults.concurrency` | общий | `1..64`; `4` | Общая параллельность операции |
 | `hashtags.mode` | общий | `off` (default), `mapping` | Сохранить текстовые теги или применить `skip/text/url` из JSON |
-| `hashtags.mappingFile` | `mapping` | обязательный путь | От каталога config; поддерживаются абсолютный путь и `~`. Source-bound файл фиксируется до API-запросов |
+| `hashtags.mappingFile` | `mapping` | обязательный путь | От config, абсолютный или `~`; source-bound snapshot до API |
 | `mentions.mode` | общий | `off` (default), `mapping` | Сохранить представление или применить явные решения из JSON; без поиска пользователей |
-| `mentions.mappingFile` | `mapping` | обязательный путь | От каталога `ywtc.config.yaml`; поддерживаются абсолютный путь и `~`. Файл проверяется до API-запросов и фиксируется на время запуска |
+| `mentions.mappingFile` | `mapping` | обязательный путь | От config, абсолютный или `~`; проверка/snapshot до API |
 | `connections.<name>` | общий | имя `[a-z0-9][a-z0-9._-]*` | Именованное подключение |
 | `type` | любой | `yandex-wiki` или `confluence` | Провайдер |
 | `token` | любой | непустой | OAuth, IAM, PAT или API token |
@@ -129,21 +132,19 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 
 #### Yandex Wiki
 
-1. Создайте приложение в [Яндекс OAuth](https://oauth.yandex.ru/) и выдайте ему [права Wiki](https://yandex.ru/support/wiki/ru/api-ref/access) на чтение, а для destination — на запись.
-2. Получите OAuth-токен пользователя с доступом к нужным страницам. Для федеративного пользователя Yandex Cloud допустим IAM-токен.
-3. Найдите ID в **Yandex Tracker → Администрирование → Организации** и выберите `organization.type: yandex360` либо `cloud`.
-4. Запишите значения в Yandex-профиль; для IAM используйте `authType: iam` и Cloud Organization.
+1. Создайте приложение в [Яндекс OAuth](https://oauth.yandex.ru/) с [правами Wiki](https://yandex.ru/support/wiki/ru/api-ref/access): чтение source, запись destination.
+2. Получите OAuth-токен пользователя; для федеративного пользователя Cloud допустим IAM.
+3. Возьмите ID в **Tracker → Администрирование → Организации**; задайте `organization.type: yandex360|cloud`, для IAM — `authType: iam` и Cloud Organization.
 
 #### Confluence Data Center
 
-1. Откройте **Avatar → Settings → Personal access tokens → Create token**; порядок действий описан в [документации Atlassian](https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html).
-2. Запишите PAT в профиль с `deployment: data-center` и `authType: pat`.
-3. Убедитесь, что пользователь может читать source и создавать страницы и attachments в destination.
+1. Создайте PAT: **Avatar → Settings → Personal access tokens → Create token** ([инструкция Atlassian](https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html)).
+2. Задайте `deployment: data-center`, `authType: pat`; нужны чтение source и запись destination.
 
 #### Confluence Cloud
 
 1. Создайте [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens).
-2. Используйте `deployment: cloud`, `authType: api-token`, `email` и `token`; аккаунту нужен доступ к исходному и целевому spaces.
+2. Задайте `deployment: cloud`, `authType: api-token`, `email`, `token`; нужен доступ к обоим spaces.
 
 ## CLI
 
@@ -151,47 +152,47 @@ Confluence Server, Data Center Basic Auth и OAuth app-flow не поддерж�
 
 | Команда | Назначение |
 | --- | --- |
-| `ywtc init [-i] [-w <path>]` | Создать workspace или настроить оба подключения в TTY-мастере |
-| `ywtc ui [-w <path>] [-p <port>] [--no-open]` | Локальный интерфейс на shadcn/ui, порт `3000`; занятый порт не освобождается автоматически |
-| `ywtc migrations [list --all] [-w <path>]` | Активные/ожидающие задачи либо вся история workspace |
-| `ywtc migrations show <job-id> [--json]` | Запрос, lifecycle, Run ID и подтверждённый результат задачи |
-| `ywtc migrations logs <job-id> [-f]` | Последовательный журнал; `--follow` ожидает новые события |
-| `ywtc migrations stop <job-id>` | Запросить мягкую остановку; не выполнять force-kill |
-| `ywtc doctor [options]` | Проверить workspace; с source и destination — выполнить read-only preflight |
-| `ywtc migrate -i` | Выбрать параметры, выполнить dry-run и при допустимом результате явно перейти к live |
+| `ywtc init [-i] [-w <path>]` | Создать workspace; `-i` настроит подключения |
+| `ywtc ui [-w <path>] [-p <port>] [--no-open]` | Локальный UI, порт `3000`; занятый порт не освобождается |
+| `ywtc migrations [list --all] [-w <path>]` | Текущие задачи или вся история |
+| `ywtc migrations show <job-id> [--json]` | Запрос, lifecycle, Run ID и результат |
+| `ywtc migrations logs <job-id> [-f]` | Журнал; `-f` ждёт новые события |
+| `ywtc migrations stop <job-id>` | Запросить мягкую остановку |
+| `ywtc doctor [options]` | Проверить workspace или read-only preflight locators |
+| `ywtc migrate -i` | Мастер: параметры → dry-run → подтверждённый live |
 | `ywtc migrate -s <locator> -d <locator\|directory> [options]` | Неинтерактивный перенос или экспорт |
-| `ywtc hashtags export -s <locator> -o <directory> [options]` | Выгрузить текстовые теги и автономный редактор решений без destination и migration state |
-| `ywtc mentions export -s <locator> -o <directory> [options]` | Выгрузить source-упоминания и автономный редактор решений без destination и migration state |
-| `ywtc retry <run-id> [options]` | Повторить только исправимые незавершённые объекты последней live-итерации цепочки |
-| `ywtc sync <run-id> [-s <subtree>] [-w <path>]` | Проанализировать существующий перенос, новые доступные страницы и входящие ссылки; сохранить план без destination-записей |
-| `ywtc sync apply <plan-id> [-w <path>] [--confirm-trash]` | Применить решения плана; корзина требует отдельного явного подтверждения |
+| `ywtc hashtags export -s <locator> -o <directory> [options]` | Source-only теги и автономный редактор |
+| `ywtc mentions export -s <locator> -o <directory> [options]` | Source-only упоминания и автономный редактор |
+| `ywtc retry <run-id> [options]` | Повторить исправимые объекты последней live-итерации |
+| `ywtc sync <run-id> [-s <subtree>] [-w <path>]` | Построить план новых/изменённых страниц и ссылок без записи |
+| `ywtc sync apply <plan-id> [-w <path>] [--confirm-trash]` | Применить план; trash подтверждается отдельно |
 | `ywtc reports list [-w <path>]` | Показать локальные отчёты от новых к старым |
 | `ywtc reports open [run-id\|last] [-w <path>]` | Открыть выбранный или последний корректный отчёт |
-| `ywtc update [-i] [-c npm\|brew]` | Проверить или установить обновление безопасным для текущего канала способом |
+| `ywtc update [-i] [-c npm\|brew]` | Проверить или установить обновление |
 
 ### Опции
 
 | Полная / short | Команды | Значения и назначение |
 | --- | --- | --- |
-| `--interactive`, `-i` | `init`, `migrate` | TTY-мастер; в `migrate` переданные опции становятся редактируемыми defaults |
-| `--workdir`, `-w` | `init`, `doctor`, `migrate`, `retry`, `sync`, `reports`, `mentions/hashtags export`, `ui`, `migrations` | Явный workspace; поддерживается `~/...` |
-| `--background`, `-b` | `migrate`, `retry`, `mentions/hashtags export` | Надёжно сохранить задачу и вернуть Job ID; совместим с dry-run, несовместим с `--interactive`/`--open-report` |
-| `--port`, `-p` / `--no-open` | `ui` | Loopback-порт `1..65535` (default `3000`) / не открывать браузер |
-| `--all` / `--json` / `--follow`, `-f` | `migrations list` / `show` / `logs` | История / JSON результата / наблюдение за журналом |
-| `--source`, `-s` | `doctor`, `migrate`, `mentions/hashtags export` | URL, page ID или Yandex slug; обязателен в неинтерактивном `migrate` |
-| `--output`, `-o` | `mentions/hashtags export` | Обязательный новый или действительно пустой каталог для `decisions.json` и `index.html` |
+| `--interactive`, `-i` | `init`, `migrate` | TTY-мастер; переданные опции — редактируемые defaults |
+| `--workdir`, `-w` | `init`, `doctor`, `migrate`, `retry`, `sync`, `reports`, `mentions/hashtags export`, `ui`, `migrations` | Workspace, включая `~/...` |
+| `--background`, `-b` | `migrate`, `retry`, `mentions/hashtags export` | Сохранить задачу, вернуть Job ID; dry-run допустим, не с `--interactive`/`--open-report` |
+| `--port`, `-p` / `--no-open` | `ui` | Loopback `1..65535` (`3000`) / не открывать браузер |
+| `--all` / `--json` / `--follow`, `-f` | `migrations list` / `show` / `logs` | История / JSON / следить за журналом |
+| `--source`, `-s` | `doctor`, `migrate`, `mentions/hashtags export` | URL, page ID или Yandex slug; обязателен без мастера |
+| `--output`, `-o` | `mentions/hashtags export` | Новый/пустой каталог для `decisions.json` и `index.html` |
 | `--destination`, `-d` | `doctor`, `migrate` | Родительская страница или каталог; обязателен в неинтерактивном `migrate` |
 | `--source-profile`, `-S` | `doctor`, `migrate`, `mentions/hashtags export` | Имя source-профиля при неоднозначном коротком locator |
-| `--destination-profile`, `-D` | `doctor`, `migrate` | Имя remote destination-профиля; запрещён для файлового экспорта |
+| `--destination-profile`, `-D` | `doctor`, `migrate` | Remote-профиль; запрещён для файлового экспорта |
 | `--scope`, `-m` | `doctor`, `migrate`, `mentions/hashtags export` | `page`, `subtree` (default), `linked` |
 | `--source-status`, `-t` | `doctor`, `migrate`, `mentions/hashtags export` | `all` (default) или `current`; root включается всегда |
-| `--comments`, `-C` / `--no-comments`, `-N` | `doctor`, `migrate`, `mentions/hashtags export` | Комментарии включены по умолчанию; `-N` исключает все comment API calls |
+| `--comments`, `-C` / `--no-comments`, `-N` | `doctor`, `migrate`, `mentions/hashtags export` | Default включены; `-N` исключает comment API |
 | `--format`, `-f` | `doctor`, `migrate` | `markdown` или `html`; делает destination файловым |
 | `--archive`, `-a` | `migrate` | Дополнительный ZIP для файлового экспорта |
-| `--dry-run`, `-n` | `migrate`, `retry` | Полный discovery/render или точный retry-план без destination writes |
-| `--fresh`, `-F` | `migrate` | Игнорировать mappings; существующий live-state сохранить как backup |
-| `--rewrite`, `-R` | `migrate`, `retry` | Заново собрать контент и записать новой версией в существующие remote-страницы, сохранив ID; нужны mappings, нельзя сочетать с `--fresh` или `--format` |
-| `--open-report`, `-o` | `migrate`, `retry` | Открыть итоговый HTML; ошибка opener не меняет outcome переноса |
+| `--dry-run`, `-n` | `migrate`, `retry` | Discovery/render или retry-план без записи |
+| `--fresh`, `-F` | `migrate` | Игнорировать mappings; live-state сохранить как backup |
+| `--rewrite`, `-R` | `migrate`, `retry` | Новая версия существующих IDs; нужны mappings, не с `--fresh`/`--format` |
+| `--open-report`, `-o` | `migrate`, `retry` | Открыть HTML; ошибка opener не меняет outcome |
 | `--concurrency`, `-j` | `migrate`, `retry`, `mentions/hashtags export` | `1..64`; иначе `defaults.concurrency` |
 | `--state`, `-r` | `migrate` | Явный state path внутри workspace |
 | `--install`, `-i` | `update` | Установить найденное обновление |
@@ -202,23 +203,16 @@ Short-алиасы локальны для команды: `migrate -i` запу
 
 ### Задачи и локальный центр
 
-Сначала выберите пространство в сайдбаре — локальную папку с конфигурацией и результатами, а не Confluence space. Затем идут подключения, миграции и отчёты, задачи, синхронизация, упоминания и хэштеги. Сайдбар сворачивается; иконки сохраняют подписи для доступности и подсказки, выбор развёрнутости запоминается локально.
+Workspace в UI — локальная папка с config и результатами, не Confluence space.
 
-Пустые разделы показывают тематическую иллюстрацию и следующий шаг. Загрузка, ошибка чтения и отсутствие совпадений в фильтре отображаются отдельно; пагинация пустых списков скрыта. У действий есть иконки слева, длинные подписи переносятся в пределах кнопки.
-
-Формы начинают с обязательных полей `*`, объясняют scope и отделяют дополнительные параметры от запуска. Изменение параметров сбрасывает live-подтверждение; после dry-run с error issues сначала требуется устранить причины и повторить анализ. Иконки информации доступны при наведении, фокусе и нажатии; справка в шапке поясняет порядок работы и различие lifecycle задачи, результата запуска и исходов объектов. Их полный контракт приведён в «Отчёты и статусы» ниже.
-
-Во вкладке «Синхронизация» можно проанализировать прежний Run ID, ограничить discovery подразделом, открыть diff и выбрать решения. Планы сохраняются в `.states/sync/`; списки выдаются постранично, тела доступны только в деталях выбранной страницы. Решения проверяются по revision: устаревшая вкладка не перезаписывает чужие правки.
-
-Обычный foreground CLI ожидает результат и сохраняет прежние exit codes. `--background` возвращает `0` после принятия задачи, а не после успешного переноса; итог смотрите в `migrations show`, UI или отчёте. Job ID относится к операции; Run ID появляется отдельно, когда операция создаёт migration report.
-
-В каждом workspace работает одна FIFO-очередь с одной активной операцией; разные workspace независимы. Закрытие браузера, UI или запускающего терминала не отменяет принятую фоновую задачу. Параметры и decisions фиксируются при постановке, токены читаются при старте; смена identity подключения требует новой подтверждённой операции. `Ctrl+C`/`SIGTERM` foreground запрашивают мягкую остановку своей задачи с кодом `130`/`143`.
-
-UI показывает состояния и mappings только для чтения, дерево отчёта с деталями по запросу и журнал с переподключением. Потеря heartbeat означает потерю наблюдения, а не доказанный failure. После падения worker/перезагрузки продолжение требует явного действия; подтверждённые checkpoints сохраняются.
-
-В «Упоминания и хэштеги» можно одним source-only обходом собрать mentions и hashtags, импортировать JSON, редактировать/удалять записи и скачать решения. Повторный анализ сохраняет прежние решения, новые получает `skip`, исчезнувшие записи остаются. Черновик, неизменяемая опубликованная версия и её подключение к workspace — отдельные действия. Конкурирующее сохранение требует перечитать текущую ревизию.
-
-Для выборочного retry UI сначала строит preview страниц, файлов/Grid и архивов комментариев. Terminal-ошибки требуют отдельного выбора; ownership ambiguity не обходится. Применение опубликованных decisions выбирает затронутые объекты, включая успешные, сохраняет второй тип mapping и использует существующие IDs без создания/перемещения страниц. Изменение baseline, source, destination или зависимостей требует нового preview; live всегда подтверждается отдельно.
+| Ситуация | Контракт |
+| --- | --- |
+| Очередь | В workspace одна FIFO-операция; workspace независимы. Закрытие UI/терминала не отменяет background job. |
+| Foreground/background | Foreground ждёт итог; background возвращает `0` после принятия. Итог — в `migrations show`/UI/report. Job ID — задача, Run ID — migration report. |
+| Параметры | Фиксируются при постановке, токены читаются при старте. Новая connection identity требует подтверждения; изменение формы сбрасывает live-confirmation. |
+| Остановка | `Ctrl+C`/`SIGTERM` мягко останавливают foreground (`130/143`). Потеря heartbeat — не failure; после падения worker продолжение явное, checkpoints остаются. |
+| Sync/retry | Plans — в `.states/sync/`, revision защищает от stale UI. Изменение baseline/source/destination/dependencies требует нового preview; ownership ambiguity не обходится, live подтверждается. |
+| Decisions | Source-only UI разделяет draft/published. Повторный анализ сохраняет решения, новым ставит `skip`; revision conflict требует перечитать данные. |
 
 ### Решения для упоминаний
 
@@ -226,11 +220,9 @@ UI показывает состояния и mappings только для чт�
 ywtc mentions export --source "https://wiki.example.com/team" --output "./mentions"
 ```
 
-Команда использует `subtree`, `all` и комментарии по умолчанию; доступны `-S/-w/-m/-t/-C/-N/-j`. Сканируются выбранные страницы, ответы и inline-контекст; ссылки комментариев не расширяют `linked`. Destination, Grid payloads и файлы не читаются. Настроенный mapping для экспорта не требуется. Неполное чтение сохраняет найденные записи и `inventory.issues`, возвращая `1`; полный экспорт — `0`, ошибки аргументов/config — `2`, SIGINT/SIGTERM — `130/143`.
+Defaults: `subtree`, `all`, comments; опции `-S/-w/-m/-t/-C/-N/-j`. Экспорт читает pages/comments, не destination/Grid/files. Exit: `0` полный, `1` неполный с находками, `2` input/config, `130/143` signal.
 
-Откройте напечатанный `file://` URL. Редактор работает без сервера и сети: поиск, Skip/URL, контексты, удаление с undo, светлая/тёмная тема. «Открыть JSON» явно загружает другой файл; «Сохранить JSON» скачивает текущие решения. Соседний файл автоматически не перечитывается. Невалидный импорт сохраняет прежний список; неполный inventory виден как предупреждение.
-
-После разметки укажите скачанный файл в конфигурации:
+Откройте напечатанный `file://` URL, выберите Skip/URL и скачайте JSON. Редактор не использует сервер или сеть; невалидный импорт не меняет текущие решения. Затем подключите файл:
 
 ```yaml
 mentions:
@@ -238,21 +230,18 @@ mentions:
   mappingFile: ./mentions/decisions.json
 ```
 
-Минимальный формат без версии схемы:
-
 ```json
 {
   "source": {"provider": "yandex-wiki", "instance": "https://wiki.example.com"},
   "entries": [
-    {"identity": {"username": "ivan"}, "mention": "@ivan", "decision": "skip"},
     {"identity": {"username": "maria"}, "mention": "@maria", "decision": "url", "url": "https://people.example.com/maria", "text": "@maria"}
   ]
 }
 ```
 
-Одна запись применяется ко всем вхождениям identity в страницах и комментариях. Приоритет ключа: `accountId → userKey → username → id`; username сравнивается без регистра, остальные ID — точно. Display name не объединяет пользователей. Отсутствующая, удалённая или `skip`-запись сохраняет исходное представление без warning. Для `url` нужен абсолютный HTTP(S) URL без credentials; текст по умолчанию — `@username`, без username — `mention`. Это готовые значения, не шаблоны. Пустой текст, повтор identity, неизвестные поля и `url/text` при `skip` запрещены.
+Запись действует для identity во всех страницах и комментариях. Ключ: `accountId → userKey → username → id`; только username сравнивается без регистра, display name пользователей не объединяет. Отсутствующая/удалённая/`skip` запись сохраняет исходное представление. `url` требует HTTP(S) без credentials; label по умолчанию — `@username` или `mention`. Значения буквальные, повторы/неизвестные поля запрещены.
 
-Mapping привязан к provider и каноническому instance source, но не к профилю/root/scope. Экспорт также может содержать справочные `occurrences` (page ID/title/URL, page/comment, comment ID и count) и `inventory` (complete, selectedPages, scannedPages, scannedComments, issues). Эти сведения и порядок JSON не влияют на обновления. Изменение эффективного решения обновляет затронутые страницы и архивы при обычном `migrate`, без `--fresh` и смены state ID. Проверка URL и user lookup не выполняются; новые native notifications не создаются. Файлы решений содержат пользовательские identity и source-контексты — храните их приватно, вне Git.
+Mapping привязан к provider/canonical instance, не к profile/root/scope. Новое решение применяется обычным `migrate` без `--fresh`; URL/users не проверяются. JSON содержит частные identity/source-контексты — храните вне Git.
 
 ### Решения для тегов
 
@@ -260,7 +249,7 @@ Mapping привязан к provider и каноническому instance sour
 ywtc hashtags export --source "https://wiki.example.com/team" --output "./hashtags"
 ```
 
-Параметры, source-only обход, inventory, защита каталога и exit codes совпадают с экспортом упоминаний выше. Сканируются текст страниц, комментарии, ответы и inline-контекст; Grid payloads и метки/labels страниц не читаются. Редактор использует тот же автономный интерфейс, но с решениями **Как есть / Текст / Ссылка**. Импорт JSON другого типа отклоняется.
+Параметры/exit codes те же. Сканируются pages/comments, не Grid или page labels. Редактор: **Как есть / Текст / Ссылка**; чужой JSON отклоняется.
 
 ```yaml
 hashtags:
@@ -272,16 +261,14 @@ hashtags:
 {
   "source": {"provider": "yandex-wiki", "instance": "https://wiki.example.com"},
   "entries": [
-    {"tag": "#исходный", "decision": "skip"},
-    {"tag": "#старый", "decision": "text", "text": "#новый"},
     {"tag": "#документация", "decision": "url", "url": "https://docs.example.com", "text": "Документация"}
   ]
 }
 ```
 
-Одна запись применяется ко всем вхождениям точного тега: `#Tag` и `#tag` различаются. Имя состоит из Unicode-букв, цифр, combining marks, `_` и `-` и содержит букву или цифру; распознаётся на границе текста, после пробела или открывающей пунктуации, в том числе внутри поддерживаемого форматирования. Код, diagrams, заголовочные маркеры, anchors, URL/fragments, escapes, атрибуты и параметры макросов не меняются. Если вся подпись ссылки — один тег, `text` заменяет всю ссылку текстом, `url` — её адрес и подпись; смешанные подписи не обрабатываются.
+Решение применяется к точному регистрозависимому тегу. Имя поддерживает Unicode-буквы/цифры/marks, `_` и `-`; код, diagram source, anchors, URL/fragments, escapes, атрибуты и macro-параметры не меняются. Если подпись ссылки состоит только из тега, `text` заменяет ссылку текстом, `url` — адрес и подпись; смешанная подпись остаётся исходной.
 
-`skip`, удалённая и отсутствующая запись сохраняют исходное представление без warning. `text` — непустой готовый текст без автоматически добавляемого `#`; `url` — HTTP(S) ссылка без credentials с исходным тегом как default-текстом. Значения не интерпретируются как разметка, новые mentions или шаблоны. Повторяющиеся теги, неизвестные поля и несовместимые с решением поля запрещены. Source binding, пути, metadata и обновление без `--fresh` действуют как для mentions; политики независимы. URL не проверяются по сети.
+`skip`, отсутствующая или удалённая запись сохраняет тег. `text` — буквальный непустой текст без добавления `#`; `url` — HTTP(S) без credentials с исходным тегом как default-label. Повторы и несовместимые поля запрещены. Source binding и обновление без `--fresh` работают как для mentions; политики независимы, URL по сети не проверяется.
 
 ### Locators и выбор страниц
 
@@ -300,7 +287,7 @@ hashtags:
 
 ### Перенос личного пространства: Yandex Wiki ↔ Confluence
 
-Один раз настройте оба подключения через `ywtc init --interactive`. В командах ниже source — корень личного пространства, а destination — существующая родительская страница: URL корня Confluence-пространства как destination не используется. Полные URL автоматически выбирают подходящие профили.
+Настройте подключения через `ywtc init --interactive`. Source ниже — корень личного пространства, destination — существующая родительская страница, не корень Confluence space. Полные URL выбирают профили.
 
 #### Yandex Wiki → Confluence
 
@@ -319,7 +306,7 @@ ywtc migrate \
   --scope subtree
 ```
 
-`/users/alex/` и все доступные дочерние страницы будут созданы под указанной страницей Confluence.
+Доступное поддерево `/users/alex/` появится под указанной Confluence-страницей.
 
 #### Confluence → Yandex Wiki
 
@@ -338,9 +325,9 @@ ywtc migrate \
   --scope subtree
 ```
 
-Для Confluence Data Center source также может иметь вид `/spaces/viewspace.action?key=~alex`, для Cloud — `https://example.atlassian.net/wiki/spaces/~accountId/overview`. `subtree` переносит все доступные страницы пространства, включая самостоятельные ветки, и создаёт под destination один раздел с названием пространства. `page` переносит только домашнюю страницу, `linked` начинает обход от неё; если домашней страницы нет, доступен только `subtree`. Пустое пространство допустимо.
+DC source также принимает `/spaces/viewspace.action?key=~alex`, Cloud — `/wiki/spaces/~accountId/overview`. `subtree` переносит доступные ветки в один раздел; `page` — home, `linked` — граф от home. Без home доступен только `subtree`; пустое space допустимо.
 
-Переносятся только страницы, доступные токену через API. Настройки и права пространства, профиль пользователя и блоги не копируются. Те же source-формы и scope-правила действуют для `doctor`, интерактивного мастера и `mentions/hashtags export`.
+Переносятся API-доступные pages, но не space settings/permissions, профиль или blogs. Те же locators/scopes работают в `doctor`, мастере и decisions export.
 
 ### Примеры
 
@@ -364,56 +351,38 @@ ywtc retry 870f6e43-e7c5-46f4-a858-4d67f4f50be4
 
 ## Файловый экспорт
 
-Markdown создаёт `index.md`, `pages/`, `attachments/` и `.ywtc-export.json`. HTML создаёт автономный адаптивный сайт с локальным CSS, который работает через `file://` и на static hosting без CDN или внешнего runtime. `_source/` появляется только для страниц, которым нужен raw snapshot.
+Markdown создаёт `index.md`, `pages/`, `attachments/`, `.ywtc-export.json`; HTML — автономный адаптивный сайт без CDN/runtime для `file://` и static hosting. `_source/` содержит только необходимые raw snapshots. Ссылки/resources становятся относительными, comments — раскрываемыми ветками; их файлы входят в ZIP с `manifest.json`. Для space индекс — навигация, реальные pages считаются отдельно.
 
-Внутренние ссылки и resources становятся относительными. Комментарии входят в страницу раскрываемыми ветками; явно связанные с ними файлы находятся в одном ZIP с `manifest.json`.
-
-При source-пространстве корневой индекс содержит навигацию, а реальные страницы учитываются отдельно от него в manifest.
-
-Экспорт строится в соседнем staging-каталоге. Можно указать отсутствующий или пустой каталог. Непустой каталог заменяется только при актуальном manifest с `tool: ywtc` и той же canonical identity; предыдущая версия сохраняется как timestamped backup. `--archive` оставляет каталог и создаёт новый ZIP, не перезаписывая существующий.
+Сборка идёт в соседнем staging. Разрешён отсутствующий/пустой каталог; непустой заменяется только с актуальным ywtc manifest той же identity, а прежний становится timestamped backup. `--archive` создаёт новый ZIP, не перезаписывая старый.
 
 ## State и повторные запуски
 
-Корень Confluence-пространства определяется immutable space ID, а не URL, названием или домашней страницей. Его mapping контейнера хранится отдельно: смена домашней страницы не создаёт дубликаты. Пространство и его отдельная домашняя страница — разные source roots; прежние state ID обычных страниц не меняются.
+State: `<workdir>/.states/<automatic-id>.json`; относительный `--state` остаётся внутри workspace. ID задают профили/immutable page IDs и формат экспорта, но не locator/scope/status. Confluence space определяется immutable ID; контейнер и home — разные roots/mappings, смена home не создаёт дубликат.
 
-State находится в `<workdir>/.states/<automatic-id>.json`. ID зависит от канонических профилей и page IDs, а для экспорта — ещё от формата; URL/ID/slug, `scope` и `source-status` его не меняют. Относительный `--state` разрешается только внутри workspace.
+| Задача | Действие и эффект |
+| --- | --- |
+| Продолжить или обновить | Повторить `migrate`: mappings, cache и checkpoints переиспользуются; изменённые mapped-страницы обновляются source-authoritative, unmapped/неоднозначные не перезаписываются. |
+| Расширить `current → all` | Запустить тот же перенос с `all`. Обратный выбор и удаление в source не удаляют прежние mappings или destination. |
+| Повторить исправимые ошибки | `retry <run-id>` выбирает незавершённые retryable-объекты и зависимости последней live-итерации; `--dry-run` только показывает план. Одни permanent-причины дают код `1`. |
+| Принудительно пересобрать body | `--rewrite` использует существующие IDs и прежний state, повторно читает source и переиспользует проверенные attachments. Отсутствующий/недоступный mapping даёт ошибку, не новый объект; страницы не удаляются. |
+| Начать без mappings | `--fresh` сохраняет старый live-state как backup и создаёт snapshot; destination может получить новые объекты. |
+| Сопоставить новые и изменившиеся данные | `sync <run-id>` строит проверяемый план и требует решений; это не обычный resume. |
 
-- Повтор одинакового направления подхватывает mappings, cache и незавершённые операции без дубликатов.
-- Для доказанной mapping source авторитетен: body, title и parent обновляются поверх текущей destination-версии, а прежнее содержимое остаётся в истории. Unmapped и неоднозначно принадлежащие объекты не перезаписываются.
-- Неверная иерархия исправляется сверху вниз; временные `404` повторяются, пропавшая mapped-страница восстанавливается под ожидаемым родителем без удаления старого объекта.
-- Файлы согласуются по immutable ID, размеру и SHA-256; проверенный cache переиспользуется, занятые имена получают стабильный суффикс. Незавершённые Yandex downloads хранятся как непубликуемые `.part` checkpoints и продолжаются только после проверки `Range`/validator.
-- Комментарии и их ZIP проверяются и переиспользуются. Confluence-архив обновляется версией, Yandex Wiki получает новую ревизию; исчезнувший source-архив сохраняется как stale.
-- Инвентаризация source сохраняется постранично в `.states/cache/inventory/`. При временном `429`/`5xx` ywtc повторяет только сбойные операции с пониженной параллельностью. Неизвестная иерархия, body или список ресурсов останавливают destination-записи. Если уже известен immutable ID отдельного Grid, недоступен только его payload: остальные страницы переносятся, Grid получает source fallback и исправляется через `retry` без повторной обработки успешных веток.
-- `current → all` расширяет тот же state; обратное переключение не удаляет прежние mappings. Удаление в source также не удаляет destination.
-- Snapshot сохраняется после dry-run, ошибки или прерывания и завершается после успешного live-run. `--fresh` начинает новый snapshot, игнорирует mappings и сохраняет прежний state как backup; destination при этом может получить новые объекты.
-
-`--rewrite` заново читает выбранные source-страницы, ресурсы и комментарии и принудительно обновляет body по существующим destination ID, даже если содержимое совпадает. Проверенные вложения переиспользуются, страницы и дочерние разделы не удаляются. Нужен прежний state: отсутствующий mapping, недоступная mapped-страница или невозможность переместить её без пересоздания дают ошибку, а не новую страницу. В `retry --rewrite` сохраняется точечный отбор проблемных объектов; ранее успешные страницы дополнительно не выбираются. Без флага обычный `migrate` уже обновляет изменённые mapped-страницы, пропуская семантически одинаковую запись.
-
-`ywtc retry <run-id>` восстанавливает исходные параметры и продолжает последнюю live-итерацию той же цепочки. Выбираются незавершённые объекты с исправимой причиной и их зависимости; подтверждённые ресурсы переиспользуются, предки читаются как контекст. Старые lookup warnings не выбирают успешную страницу для повторной обработки. `--dry-run` показывает план без записи. Если остались только постоянные причины, retry ничего не меняет и возвращает `1`. Для полного source-authoritative обновления используйте `migrate`; для расширения доступа и принятия решений по изменениям — `sync`.
+Snapshot сохраняется после dry-run, ошибки и сигнала. Файлы сверяются по immutable ID/размеру/SHA-256; cache и подтверждённые `.part` checkpoints переиспользуются. Неизвестный hierarchy/body/resource inventory блокирует запись; сбой известного Grid оставляет retryable fallback. Исчезнувший comment archive остаётся `stale`.
 
 ### Синхронизация существующего переноса
 
-`ywtc sync <run-id> [--source "<subtree-url>"]` восстанавливает исходную identity, профили и настройки, заново обнаруживает доступные страницы и сохраняет план без destination-записей. Подраздел ограничивает discovery, но не создаёт отдельный state. Тело/заголовок, иерархия, файлы, комментарии и эффективные mention/hashtag decisions сравниваются независимо; изменение только номера версии не считается изменением source. Недостаточный старый baseline требует решения.
+`sync` восстанавливает identity/settings полного отчёта и без записи сравнивает body/title, hierarchy, files, comments, decisions. `--source <subtree>` ограничивает discovery, не state. Provider/instance проверяются до API, roots используют immutable IDs. Неполный baseline/mapping coverage требует нового отчёта или решения.
 
-Отчёт должен покрывать текущие mappings. Если после него тот же state расширялся отдельным запуском, выберите последний полный отчёт: sync не угадывает отсутствующие исходы. Несовпадение provider/instance отклоняется до API-запросов; для page-root и remote destination используются сохранённые immutable IDs, а не устаревшие slug/title URL.
+Файлы сравниваются по потоковому SHA-256 и кэшируются приватно. Для изменённой страницы выберите `update`, `keep` или допустимый `trash`, затем выполните `sync apply <plan-id>`; новые страницы добавляются сверху вниз, неизменённые тела не пишутся. Изменение inventory, policy, destination или state после preview требует нового анализа. Входящие ссылки проверяются по всей миграции и исправляются минимально; неоднозначные остаются исходными. Недоступная выбранная страница/предок блокирует apply.
 
-Для проверки файлов анализ потоково читает выбранные source-вложения и вычисляет SHA-256: одинакового имени и размера недостаточно. Проверенные bytes сохраняются в приватном cache; применение повторно проверяет source и использует cache при переносе. На больших ветках это занимает время и трафик, но неизменённые destination-файлы не загружаются повторно.
+`trash` разрешён только для mapped published Confluence leaf, если API свежо подтвердил отсутствие детей, права и version. Нужны `--confirm-trash`/UI-confirmation и исправленные входящие ссылки. Source, attachments, comments, versions и trash не очищаются; mapping и exclusion сохраняются, восстановление — отдельное решение. Без доказательств provider действие недоступно.
 
-Изменившиеся страницы требуют `update`, `keep` или доступного `trash` в `decisions.json` либо UI. `update` применяет source новой версией по прежнему immutable ID. `keep` оставляет destination до следующего содержательного изменения source; отдельно показанные link-only patches допустимы. Новые страницы добавляются сверху вниз, неизменённые тела не записываются. Применение: `ywtc sync apply <plan-id>`. Если inventory, policies, destination или state изменились после preview, нужен новый анализ. Анализ и применение выполняются общей очередью задач; `Ctrl+C` запрашивает мягкую остановку, подтверждённые операции сохраняются.
-
-Входящие ссылки проверяются во всей исходной миграции, включая mapped-архивы комментариев. Новые mappings позволяют заменить прежние source-ссылки минимальными patches с сохранением подписи, fragment и готовых mention/hashtag URL. Неоднозначные ссылки остаются без изменения. Managed Markdown/HTML расширяется в staging с прежними путями; unmanaged либо изменившийся после preview каталог не перезаписывается.
-
-Недоступная выбранная страница или обязательный предок запрещают применение. Недоступный объект вне этой ветки сохраняется в диагностике аудита ссылок: проверенные добавления допустимы, но ссылки в непрочитанном объекте не считаются исправленными, а корзина недоступна. Восстановите доступ и повторите анализ `sync`.
-
-Корзина доступна только для mapped опубликованной Confluence-страницы, когда API явно подтвердил отсутствие детей, права и текущую версию. Пустого списка доступных детей недостаточно. Требуется отдельное `--confirm-trash` или подтверждение в UI; до перемещения проверяются исправления входящих ссылок. Source, файлы, комментарии, версии и содержимое корзины не удаляются. Mapping и явное исключение сохраняются сразу при подтверждённом намерении, чтобы прерывание не вызвало скрытого пересоздания через `migrate`/`retry`. Если provider не даёт необходимых доказательств, действие недоступно; восстановление исключённого объекта требует отдельного решения оператора.
-
-Live-run использует exclusive lock; доказанно stale lock восстанавливается. При SIGINT/SIGTERM новые задачи не запускаются, безопасные активные операции завершаются, state и отчёт сохраняются. Условия итогов и коды выхода приведены в разделе [«Отчёты и статусы»](#отчёты-и-статусы).
+Live-run держит exclusive lock; доказанно stale lock восстанавливается. При сигнале новые задачи не стартуют, безопасные операции завершаются, state/report сохраняются. Итоги и exit codes — ниже.
 
 ## Отчёты и статусы
 
-Отчёт run находится в `<workdir>/.states/reports/<run-id>/index.html`, рядом — очищенный `report.json`. CLI печатает URL и команду открытия. Используйте `--open-report`, `ywtc reports list` или `ywtc reports open [run-id|last]`; без selector `open` также выбирает последний корректный отчёт. Retry-отчёт показывает root/parent Run ID, номер попытки, выбранные страницы/files/comment archives, read-only context, переиспользованные outcomes и оставшиеся retryable/terminal проблемы.
-
-Sync-отчёт сохраняет результаты всей миграции и provenance переиспользованных объектов; отдельно показывает добавления, обновления, Keep, исключения и исправления ссылок. Завершённый анализ означает готовность плана, а не успешный перенос. План без операций не создаёт фиктивный live-run. Исходы оставленных объектов относятся к последнему проверенному переносу: новые изменения source по решению Keep не объявляются применёнными.
+Отчёт: `<workdir>/.states/reports/<run-id>/index.html`; рядом — очищенный `report.json`. Открытие: `--open-report`, `reports list`, `reports open [run-id|last]`. Retry показывает цепочку Run ID, попытку, отбор, переиспользованные outcomes и оставшиеся retryable/terminal проблемы. Sync показывает всю миграцию, provenance, добавления, обновления, Keep, исключения и ссылки. Завершённый анализ означает готовый план, не успешный перенос; Keep сохраняет последний проверенный outcome.
 
 ### Классификация плана sync
 
@@ -421,51 +390,51 @@ Sync-отчёт сохраняет результаты всей миграци�
 
 | Значение | Объекты и исчерпывающие условия назначения | Действие |
 | --- | --- | --- |
-| `add` | Source-страница: 1. Доступна в новом inventory и immutable destination mapping отсутствует. | Будет добавлена после подтверждения плана. |
-| `unchanged` | Mapped-страница: 1. Подтверждённые source body/hierarchy/resources/comments/effective decisions совпадают, и доступная проверка destination не выявила расхождений. | Тело не перезаписывается; link-only patches показаны отдельно. |
-| `changed` | Mapped-страница: 1. Отличается хотя бы один независимый source hash.<br>2. При совпавшем source baseline выявлено расхождение destination body, заголовка, родителя или mapped-файла. | Выбрать Update, Keep или допустимый Trash. |
-| `unknown-baseline` | Mapped-страница: 1. Нет достаточного подтверждённого source-снимка для полного сравнения. | Просмотреть diff и выбрать решение; отсутствие доказательств не считается неизменностью. |
-| `kept` | Mapped-страница: 1. Сохранённое Keep относится к текущему effective source hash. | Без обновления body; следующий source hash снова потребует решения. |
-| `excluded` | Source-страница: 1. Сохранено явное намерение `operator-trash` с immutable destination ID. | Не восстанавливается автоматически; проверить подтверждение корзины и отдельно решить восстановление. |
-| `blocked` | Зарезервировано контрактом плана; текущий анализатор не назначает. Ошибки inventory перечисляются отдельно и запрещают применение. | Устранить причины неполного inventory, повторить анализ. |
+| `add` | 1. Source доступен, immutable destination mapping отсутствует. | Добавить после подтверждения. |
+| `unchanged` | 1. Source body/hierarchy/resources/comments/decisions совпадают и проверка destination не нашла расхождений. | Не писать body; link patches отдельно. |
+| `changed` | 1. Изменён source hash.<br>2. При том же baseline расходятся destination body, title, parent или mapped-файл. | Выбрать Update, Keep или допустимый Trash. |
+| `unknown-baseline` | 1. Подтверждённого source-снимка недостаточно для сравнения. | Проверить diff; отсутствие доказательств не равно неизменности. |
+| `kept` | 1. Keep относится к текущему effective source hash. | Не писать body; новый hash снова потребует решения. |
+| `excluded` | 1. Сохранён `operator-trash` с immutable destination ID. | Не восстанавливать автоматически; восстановление решать отдельно. |
+| `blocked` | Зарезервирован; анализатор не назначает. Inventory errors запрещают apply. | Исправить inventory и повторить анализ. |
 
 ### Состояние плана sync
 
 | Значение | Объекты и исчерпывающие условия назначения | Действие |
 | --- | --- | --- |
-| `review` | План: 1. Обязательный inventory собран, решения ещё не применены.<br>2. После попытки осталась ошибка выбранного объекта, требующая продолжения. Неполный аудит сторонних ссылок указывается отдельно. | Проверить diff и решения; применить план либо продолжить после исправления причины. |
-| `partial` | План: 1. Обязательный source/destination/dependency inventory или preview неполон. | Применение запрещено; устранить причины и повторить анализ. |
-| `applied` | План: 1. Подтверждённое применение выбранных объектов завершилось без оставшейся выбранной ошибки.<br>2. Операций переноса не требовалось и Keep-решения сохранены. Остальные проблемы исходной миграции сохраняют прежние outcomes. | Открыть итог; статус всей миграции может оставаться `partial`. |
+| `review` | 1. Inventory готов, решения не применены.<br>2. После apply осталась ошибка выбранного объекта. Неполный внешний link audit отмечается отдельно. | Проверить решения; применить или продолжить после исправления. |
+| `partial` | 1. Source/destination/dependency inventory или preview неполон. | Исправить и повторить анализ; apply запрещён. |
+| `applied` | 1. Выбранные объекты применены без оставшейся ошибки.<br>2. Операций не было, Keep сохранён. Прочие старые outcomes не меняются. | Проверить итог; вся миграция может быть `partial`. |
 
-Автономный отчёт показывает только ненулевые показатели, канонические source/destination, исходную иерархию, исключённые страницы и проблемы. Обязательный inventory и независимые Grid payloads учитываются раздельно: видны переиспользованные checkpoints, recovery-попытки, точная API-операция и Grid outcome. Для найденных упоминаний появляются режим, page/comment totals, уникальные identities и актуальные outcomes `preserved` и `linked`; прежние значения читаются только из исторических отчётов/state; в деталях страницы вкладка выводится только при наличии данных. Дерево поддерживает поиск и фильтры; остальные детали содержат files и Grids, comments, side-by-side comparison и диагностику. RU/EN и system/light/dark переключаются иконками. `report.json` не содержит body страниц, тексты комментариев, скрытые email или preview HTML.
+Отчёт показывает ненулевые показатели, identity/иерархию, исключения, issues, checkpoints и независимые Grid outcomes; детали содержат files, comments и comparison. `report.json` не содержит body, тексты комментариев, скрытые email или preview HTML.
 
-Нумерованные пункты в условиях — альтернативные причины; совместные условия соединены словом «и». Статус описывает проверенный результат текущей операции: `failed`, `blocked` и `not-started` не означают, что прежнего содержимого или уже созданного bootstrap нет. Точная причина конкретного случая находится в деталях объекта и issues, а возможность автоматического повтора определяется отдельно полем `retryable`.
+В таблицах нумерованные пункты — альтернативные причины, «и» связывает совместные условия. `failed`/`blocked`/`not-started` текущей операции не доказывает отсутствия прежнего содержимого или bootstrap. Точная причина — в issues; автоматический повтор отдельно задаёт `retryable`.
 
 ### Статусы задач
 
-Lifecycle задачи не заменяет результат миграции или outcome её объектов. Данные очереди, журналов и revisions находятся в `.states/`; UI-индекс пересобираем, migration state остаётся источником mappings.
+Lifecycle задачи не заменяет результат run или outcome объектов. Очередь/журналы лежат в `.states/`; migration state остаётся источником mappings.
 
 | Статус | Условия назначения | Что делать |
 | --- | --- | --- |
-| `queued` | 1. Проверенный запрос надёжно сохранён и ожидает единственного worker workspace. | Дождаться запуска либо отменить. |
-| `running` | 1. Coordinator выделил задаче worker; финальный результат ещё не подтверждён. | Наблюдать progress/журнал; при необходимости запросить остановку. |
-| `stopping` | 1. Активной задаче передан запрос мягкой остановки, но worker ещё не подтвердил завершение. | Дождаться checkpoint/финала; статус не означает, что работа уже остановилась. |
-| `finished` | 1. Worker сохранил финальный результат и exit code, включая failure/cancellation.<br>2. Ожидающая задача отменена до запуска. | Проверить отдельные `result.status`, `exitCode` и отчёт; `finished` не означает успешную миграцию. |
-| `interrupted` | 1. Worker исчез до подтверждения результата.<br>2. Worker потерял coordinator и сохранил доступные checkpoints.<br>3. После перезагрузки подтверждённо отсутствует прежний worker. | Явно подготовить продолжение; автоматического повторения provider-записей нет. |
+| `queued` | 1. Проверенный запрос сохранён и ждёт worker workspace. | Дождаться или отменить. |
+| `running` | 1. Worker назначен, финал не подтверждён. | Следить за progress/log; при необходимости остановить. |
+| `stopping` | 1. Запрошена мягкая остановка, worker ещё не завершился. | Дождаться checkpoint/финала. |
+| `finished` | 1. Сохранены результат и exit code, включая failure/cancellation.<br>2. Ожидающая задача отменена. | Проверить `result.status`, `exitCode`, отчёт; это не признак успеха. |
+| `interrupted` | 1. Worker исчез до результата.<br>2. Потерял coordinator, сохранив checkpoints.<br>3. После restart прежний worker отсутствует. | Явно продолжить; автоматического повтора записей нет. |
 
 ### Статусы запуска
 
 | Статус | Условия назначения | Что делать |
 | --- | --- | --- |
-| `running` | 1. Run зарегистрирован и ещё не финализирован: live сохраняет его в state, dry-run держит в памяти. | Следить за текущей фазой и heartbeat. |
-| `completed` | 1. Pipeline дошёл до нормального финала, unresolved errors, warnings и degradations отсутствуют. Adaptations, normalizations и сохранённые внешние ссылки допустимы. | Проверить, был ли это dry-run; сам статус не означает live-запись. |
-| `completed-with-warnings` | 1. Pipeline дошёл до нормального финала без errors, но есть warnings или degradations. Возможны `partial`-страницы. | Посмотреть ненулевые исходы объектов и их причины. |
-| `partial` | 1. Pipeline дошёл до нормального финала, но остался хотя бы один unresolved error issue. Количество успешных страниц на выбор этого run-status не влияет. | Исправить root errors и выполнить предложенный `retry`. |
-| `failed` | 1. Не завершены обязательные discovery/inventory.<br>2. Pipeline аварийно завершился до нормального финала, включая ошибки экспорта или сохранения результата. Уже записанные объекты могут существовать. | Открыть отчёт, если он создан, и устранить причину; сохранённые mappings используются при продолжении. |
-| `cancelled` | 1. Выполняющийся pipeline получил AbortSignal, включая SIGINT или SIGTERM, и сохранил доступный финальный результат. | Продолжить по Run ID; код сигнала — `130` или `143`. |
-| `interrupted` | 1. При следующем чтении state найдена незавершённая запись `running`; она помечается прерванной. Старый HTML/JSON автоматически не переписывается. | Продолжить с существующим state; для точечного retry нужен доступный корректный report. |
+| `running` | 1. Run зарегистрирован, но не финализирован: live — в state, dry-run — в памяти. | Следить за фазой/heartbeat. |
+| `completed` | 1. Нормальный финал без errors, warnings и degradations; adaptations/normalizations/external links допустимы. | Проверить dry-run/live: статус не доказывает запись. |
+| `completed-with-warnings` | 1. Нормальный финал без errors, но с warnings/degradations; возможны `partial` pages. | Проверить ненулевые outcomes. |
+| `partial` | 1. Нормальный финал хотя бы с одним unresolved error; число успешных страниц не влияет. | Исправить root errors и выполнить `retry`. |
+| `failed` | 1. Обязательный discovery/inventory не завершён.<br>2. Pipeline аварийно закончился, включая export/result-save; записи могут существовать. | Устранить причину; mappings сохраняются. |
+| `cancelled` | 1. Pipeline получил AbortSignal/SIGINT/SIGTERM и сохранил доступный финал. | Продолжить по Run ID; код `130/143`. |
+| `interrupted` | 1. При чтении state незавершённый `running` помечен прерванным; старый отчёт не переписывается. | Продолжить state; retry требует корректный report. |
 
-Коды выхода `migrate`: `0` — нормальный финал без error issues, включая warnings/degradations; `1` — нормальный финал с error issues; `2` — ошибка аргументов/config/preflight или исключение pipeline, даже если failed-отчёт уже сохранён; `130`/`143` — обработанный SIGINT/SIGTERM. У `retry` также код `1`, если после попытки осталась retryable или terminal работа, даже при отсутствии новых errors; без оставшейся работы — `0`. Ранний отказ до создания run не обязан иметь Run ID или отчёт.
+Exit `migrate`: `0` — нормальный финал без errors (warnings допустимы); `1` — с errors; `2` — args/config/preflight/pipeline exception; `130/143` — SIGINT/SIGTERM. `retry` даёт `1`, пока остаётся retryable/terminal работа, иначе `0`. До создания run Run ID/report может отсутствовать.
 
 ### Статусы инвентаризации
 
@@ -604,10 +573,8 @@ npm run workspace:init
 npm run check
 ```
 
-`npm run check` запускает release hygiene и security audit, TypeScript, Biome, Knip, Vitest, Playwright, сборку, package smoke-test и строгую OpenSpec-валидацию. Любое изменение проходит цикл из [`AGENTS.md`](AGENTS.md).
+`npm run check` включает release/security checks, TypeScript, Biome, Knip, Vitest, Playwright, сборку, package smoke-test и OpenSpec. Процесс изменений: [`AGENTS.md`](AGENTS.md). Релизный архив: `npm run package:pack -- /tmp/ywtc-release`; прямой `npm pack` не поддерживает используемое сочетание overrides и bundled dependencies.
 
-Артефакт после сборки: `npm run package:pack -- /tmp/ywtc-release`. Этот же packer используется проверками и публикацией: он сохраняет аудированные зависимости с корректными версиями в отдельном staging, не меняя исходные файлы. Прямой `npm pack` несовместим с сочетанием root overrides и bundled dependencies в npm 12.
+Release Please рассчитывает SemVer из Conventional Commits. Push исходного изменения и открытый release PR означают pending release, а не завершённый релиз. Проверьте версию и влейте release PR: workflow создаст GitHub tag/release, опубликует npm с OIDC provenance и обновит Homebrew.
 
-Release Please рассчитывает SemVer из Conventional Commits. Push исходного изменения и открытый release PR означают pending release, а не завершённый релиз. Нужно проверить рассчитанную версию и merge release PR: только после этого GitHub Actions создаёт tag и GitHub Release, публикует npm-пакет с OIDC provenance, затем генерирует, устанавливает и тестирует Homebrew-формулу.
-
-Релиз завершён только после успешного job `Verify complete release`. Он сверяет одну версию и один архив во всех каналах: локальные release-метаданные и CHANGELOG, GitHub tag/release с архивом, checksum и installation notes, npm package/tarball, URL и SHA-256 в `Formula/ywtc.rb`. Ту же read-only проверку можно запустить вручную: `npm run release:verify -- vX.Y.Z`. При сбое релиз остаётся pending; его продолжают через `workflow_dispatch` с существующим tag, без ручного создания или перемещения tag.
+Релиз завершает только успешный `Verify complete release`: он сверяет metadata/CHANGELOG, GitHub assets/notes, npm tarball и `Formula/ywtc.rb`. Ручная read-only проверка: `npm run release:verify -- vX.Y.Z`. Сбой восстанавливают через `workflow_dispatch` для существующего tag; tag вручную не создают и не перемещают.

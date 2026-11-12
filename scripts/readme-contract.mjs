@@ -16,6 +16,16 @@ const requiredQuickStartCommands = [
   'ywtc migrate --interactive',
 ];
 
+const maximumReadmeWords = 6500;
+const scenarioSelectorHeading = 'Какой сценарий выбрать';
+const requiredScenarioLabels = [
+  'Первый перенос',
+  'Личное пространство Yandex Wiki → Confluence',
+  'Личное пространство Confluence → Yandex Wiki',
+  'Статический экспорт',
+  'Продолжить или исправить перенос',
+];
+
 const requiredExampleLabels = [
   '# Перенести структурное поддерево',
   '# Перенести рекурсивно связанные страницы',
@@ -159,6 +169,10 @@ function validateStatusTables(readme) {
 
 export function validateReadmeContract(readme) {
   const findings = [];
+  const wordCount = readme.trim().split(/\s+/u).filter(Boolean).length;
+  if (wordCount > maximumReadmeWords) {
+    findings.push(`README must contain no more than ${maximumReadmeWords} words (found ${wordCount})`);
+  }
   const headings = [...readme.matchAll(/^##[ \t]+(.+?)[ \t]*$/gm)].map((match) => match[1]);
   if (JSON.stringify(headings) !== JSON.stringify(expectedReadmeHeadings)) {
     findings.push(`second-level headings must be exactly: ${expectedReadmeHeadings.join(' → ')}`);
@@ -167,6 +181,11 @@ export function validateReadmeContract(readme) {
   const quickStart = h2Section(readme, 'Быстрый старт');
   for (const command of requiredQuickStartCommands) {
     if (!quickStart.includes(command)) findings.push(`quick start is missing: ${command}`);
+  }
+  const scenarioSelector = h3Section(quickStart, scenarioSelectorHeading);
+  if (!scenarioSelector) findings.push(`quick start scenario selector is missing: ${scenarioSelectorHeading}`);
+  for (const label of requiredScenarioLabels) {
+    if (!scenarioSelector.includes(label)) findings.push(`quick start scenario is missing: ${label}`);
   }
 
   const cli = h2Section(readme, 'CLI');
